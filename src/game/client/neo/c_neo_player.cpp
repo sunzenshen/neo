@@ -621,6 +621,24 @@ void C_NEO_Player::CheckLeanButtons()
 	}
 }
 
+bool C_NEO_Player::IsSpectatingBot() const
+{
+    // Get the local player and check if they are in "in-eye" mode.
+    auto localNeoPlayer = GetLocalNEOPlayer();
+    if (localNeoPlayer && localNeoPlayer->m_iObserverMode == OBS_MODE_IN_EYE)
+    {
+        // Get the entity the player is spectating.
+        auto targetNeoPlayer = static_cast<C_NEO_Player*>(localNeoPlayer->GetObserverTarget());
+
+        // Check if the target is a valid player and is a bot.
+        if (targetNeoPlayer && targetNeoPlayer->IsBot())
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
 int C_NEO_Player::GetAttackersScores(const int attackerIdx) const
 {
 	if (NEORules()->GetGameType() == NEO_GAME_TYPE_DM || NEORules()->GetGameType() == NEO_GAME_TYPE_TDM)

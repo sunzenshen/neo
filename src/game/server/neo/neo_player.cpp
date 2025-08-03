@@ -1748,6 +1748,11 @@ bool CNEO_Player::ClientCommand( const CCommand &args )
 
 		return true;
 	}
+    else if (FStrEq(args[0], "takeoverbot"))
+    {
+        TryTakeoverSpectatedBot();
+        return true;
+    }
 
 	return BaseClass::ClientCommand(args);
 }
@@ -3399,4 +3404,112 @@ extern ConVar sv_neo_wep_dmg_modifier;
 void CNEO_Player::ModifyFireBulletsDamage(CTakeDamageInfo* dmgInfo)
 {
 	dmgInfo->SetDamage(dmgInfo->GetDamage() * sv_neo_wep_dmg_modifier.GetFloat());
+}
+
+void CNEO_Player::TryTakeoverSpectatedBot()
+{
+    // Check if observing a bot
+    if (!IsObserver())
+        return;
+
+    CBaseEntity* pTarget = GetObserverTarget();
+    if (!pTarget)
+        return;
+
+    CNEO_Player* pBot = ToNEOPlayer(pTarget);
+    if (!pBot || !pBot->IsBot())
+        return;
+
+    // Copy over corporeal properties of bot to current player
+
+    // What is NOT copied:
+    // Preserve the player's XP. Do NOT transfer the bot's XP (m_iXP).
+    // Preserve the player's name and clantag.
+    // The player's identity is maintained; don't bother with:
+    // V_strcpy_s(m_szNeoName.GetForModify(), sizeof(m_szNeoName), pBot->m_szNeoName.Get());
+    // m_szNeoNameHasSet = pBot->m_szNeoNameHasSet;
+    // V_strcpy_s(m_szNeoClantag.GetForModify(), sizeof(m_szNeoClantag), pBot->m_szNeoClantag.Get());
+    
+    
+    // Teleport player to the bot's location and angles
+    SetAbsOrigin(pBot->GetAbsOrigin());
+    SetAbsAngles(pBot->GetAbsAngles());
+    
+    // Transfer core player properties
+    
+    // Copy the bot's health and armor.
+    SetHealth(pBot->GetHealth());
+    SetArmorValue(pBot->ArmorValue());
+    
+    // Copy the bot's class and skin.
+    m_iNeoClass = pBot->m_iNeoClass;
+    m_iNeoSkin = pBot->m_iNeoSkin;
+
+    // Copy the bot's weapon loadout choice.
+    m_iLoadoutWepChoice = pBot->m_iLoadoutWepChoice;
+
+    // Copy the bot's physical states (camo, lean, vision, etc.).
+    m_bInThermOpticCamo = pBot->m_bInThermOpticCamo;
+    m_HL2Local.m_cloakPower = pBot->m_HL2Local.m_cloakPower;
+    m_bInVision = pBot->m_bInVision;
+    m_bInLean = pBot->m_bInLean;
+    m_bInAim = pBot->m_bInAim;
+    
+    // Mimic weapon loadout
+    
+    // First, remove any items the player currently has.
+    RemoveAllItems(true);
+
+    // Give the player a new loadout based on the adopted class and weapon choice.
+    GiveDefaultItems();
+    GiveLoadoutWeapon();
+    
+    // NEO Jank: Bots currently don't use detpacks but this might add an extra detpack in the world
+	// TODO: Figure out how to check if a bot had a detpack
+	// Potential complexity with detonator logic.
+    if (m_iNeoClass == NEO_CLASS_RECON && m_iXP >= 4)
+    {
+        GiveDet(this);
+    }
+    
+    // Switch to the active weapon the bot was using.
+    CBaseCombatWeapon* pBotActiveWeapon = pBot->GetActiveWeapon();
+    if (pBotActiveWeapon)
+    {
+        CBaseCombatWeapon* pPlayerWeapon = Weapon_OwnsThisType(pBotActiveWeapon->GetClassname());
+        if (pPlayerWeapon)
+        {
+            Weapon_Switch(pPlayerWeapon);
+        }
+    }
+	// TODO: Need to also set the same Clip1() and Clip2() capacities of the bot and total ammo
+    
+    // Update the player model to reflect the new team and skin.
+    SetPlayerTeamModel();
+
+    // Reset per-life combat stats.
+    for (int i = 0; i < m_rfAttackersScores.Count(); ++i)
+    {
+        m_rfAttackersScores.Set(i, 0);
+        m_rfAttackersAccumlator.Set(i, 0.0f);
+        m_rfAttackersHits.Set(i, 0);
+    }
+
+    // Reset camera and view.
+    SetViewOffset(VEC_VIEW_NEOSCALE(this));
+    Weapon_SetZoom(false);
+    
+    // Re-initialize sprinting.
+    InitSprinting();
+
+    // Kill the bot to free up the slot.
+    CTakeDamageInfo info(this, this, 10000, DMG_GENERIC);
+    pBot->TakeDamage(info);
+
+    // Change player's team to the bot's team
+    ChangeTeam(pBot->GetTeamNumber());
+    
+    // Transition the player from spectator mode back to an active player.
+    State_Transition(STATE_ACTIVE);
+    StopObserverMode();
 }

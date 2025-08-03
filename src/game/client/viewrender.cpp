@@ -2516,6 +2516,22 @@ void CViewRender::Render2DEffectsPreHUD( const CViewSetup &viewRender )
 //-----------------------------------------------------------------------------
 void CViewRender::Render2DEffectsPostHUD( const CViewSetup &viewRender )
 {
+#ifdef NEO
+    // Player state needed to check spectate status
+    C_NEO_Player *pLocalPlayer = dynamic_cast<C_NEO_Player*>(C_BasePlayer::GetLocalPlayer());
+
+    // Check if the player is valid and is spectating a bot
+    if (pLocalPlayer && pLocalPlayer->IsSpectatingBot())
+    {
+        // Show hint about bot takeover mechanic
+        DrawTakeoverBotMessage();
+    }
+#endif
+}
+
+void CViewRender::DrawTakeoverBotMessage()
+{
+    engine->Con_NPrintf(1, "Press 'E' to take over bot");
 }
 
 

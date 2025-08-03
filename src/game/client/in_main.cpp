@@ -26,6 +26,10 @@
 #include <voice_status.h>
 #include "cam_thirdperson.h"
 
+#ifdef NEO
+#include "c_neo_player.h"
+#endif
+
 #ifdef SIXENSE
 #include "sixense/in_sixense.h"
 #endif
@@ -496,7 +500,24 @@ void IN_StrafeDown( const CCommand &args ) {KeyDown(&in_strafe, args[1] );}
 void IN_StrafeUp( const CCommand &args ) {KeyUp(&in_strafe, args[1] );}
 void IN_Attack2Down( const CCommand &args ) { KeyDown(&in_attack2, args[1] );}
 void IN_Attack2Up( const CCommand &args ) {KeyUp(&in_attack2, args[1] );}
+#ifdef NEO
+void IN_UseDown ( const CCommand &args )
+{
+    // Check if the current player is spectating a bot
+    C_NEO_Player *pLocalPlayer = dynamic_cast<C_NEO_Player*>(C_BasePlayer::GetLocalPlayer());
+    if (pLocalPlayer && pLocalPlayer->IsSpectatingBot())
+    {
+        // If they are, send the command to the server and exit early.
+        engine->ServerCmd("takeoverbot");
+        return; // Exit here to prevent the normal +use action.
+    }
+
+    // If the above conditions are not met, execute the default behavior.
+    KeyDown(&in_use, args[1]);
+}
+#else
 void IN_UseDown ( const CCommand &args ) {KeyDown(&in_use, args[1] );}
+#endif
 void IN_UseUp ( const CCommand &args ) {KeyUp(&in_use, args[1] );}
 void IN_JumpDown ( const CCommand &args ) {KeyDown(&in_jump, args[1] );}
 void IN_JumpUp ( const CCommand &args ) {KeyUp(&in_jump, args[1] );}

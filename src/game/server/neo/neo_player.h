@@ -245,6 +245,8 @@ private:
 		int *infoStrSize, bool *showMenu,
 		const CTakeDamageInfo *info) const;
 
+	void TryTakeoverSpectatedBot();
+
 public:
 	CNetworkVar(int, m_iNeoClass);
 	CNetworkVar(int, m_iNeoSkin);

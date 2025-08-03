@@ -158,6 +158,7 @@ public:
 	bool IsAirborne() const { return (!(GetFlags() & FL_ONGROUND)); }
 	bool IsInVision() const { return m_bInVision; }
 	bool IsInAim() const { return m_bInAim; }
+	bool IsSpectatingBot() const;
 
 	int GetAttackersScores(const int attackerIdx) const;
 	int GetAttackerHits(const int attackerIdx) const;
@@ -215,6 +216,7 @@ public:
 	CNetworkString(m_szNeoCrosshair, NEO_XHAIR_SEQMAX);
 	CNetworkVar(int, m_szNameDupePos);
 	CNetworkVar(bool, m_bClientWantNeoName);
+	CNetworkVar(bool, m_bIsSpectatingBot);
 
 	unsigned char m_NeoFlags;
 
