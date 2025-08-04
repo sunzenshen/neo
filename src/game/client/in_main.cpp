@@ -503,6 +503,16 @@ void IN_Attack2Up( const CCommand &args ) {KeyUp(&in_attack2, args[1] );}
 #ifdef NEO
 void IN_UseDown ( const CCommand &args )
 {
+    C_NEO_Player *pLocalPlayer = dynamic_cast<C_NEO_Player*>(C_BasePlayer::GetLocalPlayer());
+    if (pLocalPlayer && pLocalPlayer->IsSpectatingBot())
+    {
+        engine->ServerCmd("togglebotmimicry");
+        return;
+    }
+}
+#elif NEO_FULL_BOT_REPLACEMENT_APPROACH
+void IN_UseDown ( const CCommand &args )
+{
     // Check if the current player is spectating a bot
     C_NEO_Player *pLocalPlayer = dynamic_cast<C_NEO_Player*>(C_BasePlayer::GetLocalPlayer());
     if (pLocalPlayer && pLocalPlayer->IsSpectatingBot())

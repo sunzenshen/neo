@@ -217,6 +217,8 @@ public:
 	CNetworkVar(int, m_szNameDupePos);
 	CNetworkVar(bool, m_bClientWantNeoName);
 	CNetworkVar(bool, m_bIsSpectatingBot);
+	CNetworkHandle( CBasePlayer, m_hBotMimicTarget );
+
 
 	unsigned char m_NeoFlags;
 
