@@ -162,6 +162,7 @@ public:
 	int GetStar() const { return m_iNeoStar; }
 	bool IsInAim() const { return m_bInAim; }
 	int GetBotDetectableBleedingInjuryEvents() const { return m_iBotDetectableBleedingInjuryEvents; }
+    void ToggleBotMimicry();
 
 	bool IsAirborne() const { return (!(GetFlags() & FL_ONGROUND)); }
 
@@ -245,7 +246,9 @@ private:
 		int *infoStrSize, bool *showMenu,
 		const CTakeDamageInfo *info) const;
 
-	void TryTakeoverSpectatedBot();
+	void TryHardTakeoverSpectatedBot();
+	void SetBotMimicTarget( CBasePlayer *pPlayer );
+    CBasePlayer* GetBotMimicTarget() const;
 
 public:
 	CNetworkVar(int, m_iNeoClass);

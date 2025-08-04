@@ -1748,14 +1748,50 @@ bool CNEO_Player::ClientCommand( const CCommand &args )
 
 		return true;
 	}
-    else if (FStrEq(args[0], "takeoverbot"))
+    else if (FStrEq(args[0], "togglebotmimicry"))
     {
-        TryTakeoverSpectatedBot();
+        ToggleBotMimicry();
         return true;
     }
+/*
+    else if (FStrEq(args[0], "takeoverbot"))
+    {
+        TryHardTakeoverSpectatedBot();
+        return true;
+    }
+*/
 
 	return BaseClass::ClientCommand(args);
 }
+
+void CNEO_Player::ToggleBotMimicry()
+{
+    CBaseEntity* pTarget = GetObserverTarget();
+    CNEO_Player* pBot = ToNEOPlayer(pTarget);
+
+    if (!pBot || !pBot->IsBot())
+    {
+        return;
+    }
+
+ /*
+    // Check if we are already mimicking this bot
+    if (pBot->GetBotMimicTarget() == this)
+    {
+        // Stop mimicking
+        pBot->SetBotMimicTarget(nullptr);
+        Msg("Stopped mimicking bot %s\n", pBot->GetPlayerName());
+    }
+    else
+    {
+        // Start mimicking
+        pBot->SetBotMimicTarget(this);
+        Msg("Started mimicking bot %s\n", pBot->GetPlayerName());
+    }
+*/
+}
+
+
 
 void CNEO_Player::CreateViewModel( int index )
 {
@@ -3406,7 +3442,7 @@ void CNEO_Player::ModifyFireBulletsDamage(CTakeDamageInfo* dmgInfo)
 	dmgInfo->SetDamage(dmgInfo->GetDamage() * sv_neo_wep_dmg_modifier.GetFloat());
 }
 
-void CNEO_Player::TryTakeoverSpectatedBot()
+void CNEO_Player::TryHardTakeoverSpectatedBot()
 {
     // Check if observing a bot
     if (!IsObserver())
