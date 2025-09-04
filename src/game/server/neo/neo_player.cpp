@@ -550,6 +550,7 @@ void CNEO_Player::Spawn(void)
 
 	m_flRanOutSprintTime = 0.0f;
 	m_flNextPingTime = 0.0f;
+	m_hCommandingPlayer = NULL; // Reset commanding player on spawn
 
 	Weapon_SetZoom(false);
 
@@ -1886,6 +1887,22 @@ void CNEO_Player::AddPoints(int score, bool bAllowNegativeScore)
 
 void CNEO_Player::Event_Killed( const CTakeDamageInfo &info )
 {
+	// If this player was commanding any bots, reset their commanding player.
+	for ( int i = 1; i <= gpGlobals->maxClients; ++i )
+	{
+		CNEO_Player* pPlayer = static_cast<CNEO_Player*>(UTIL_PlayerByIndex(i));
+		if ( pPlayer && pPlayer->IsBot() && pPlayer->m_hCommandingPlayer.Get() == this )
+		{
+			pPlayer->m_hCommandingPlayer = NULL;
+		}
+	}
+
+	// If this player is a bot, reset its own commanding player.
+	if ( IsBot() )
+	{
+		m_hCommandingPlayer = NULL;
+	}
+
 	if (!m_bForceServerRagdoll && GetClass() != NEO_CLASS_JUGGERNAUT)
 	{
 		CreateRagdollEntity();
@@ -3001,6 +3018,73 @@ void CNEO_Player::SendTestMessage(const char *message)
 void CNEO_Player::SetTestMessageVisible(bool visible)
 {
 	m_bShowTestMessage = visible;
+}
+
+void CNEO_Player::ToggleFollowPlayer( CNEO_Player *pCommander )
+{
+	if ( !pCommander )
+	{
+		return;
+	}
+
+	if ( m_hCommandingPlayer.Get() == pCommander )
+	{
+		// Bot is already following this player, so toggle off.
+		m_hCommandingPlayer = NULL;
+	}
+	else
+	{
+		// Bot starts following this player.
+		m_hCommandingPlayer = pCommander;
+	}
+}
+
+void CNEO_Player::PlayerUse( void )
+{
+	// Call the base class implementation first to handle existing +use functionality.
+	// This will set 'usedSomething' if an entity was used.
+	BaseClass::PlayerUse();
+
+	// Check if the base class handled the +use action. If not, proceed with bot commanding logic.
+	// The 'usedSomething' variable is internal to BaseClass::PlayerUse, so we need to re-evaluate
+	// if the IN_USE button is still pressed and no entity was used by the base class.
+	// A more robust solution might involve modifying BaseClass::PlayerUse to return a bool
+	// indicating if the use was consumed, but for this research phase, we'll assume
+	// if IN_USE is still pressed and no entity was used, we can proceed.
+
+	// Re-check IN_USE button state after BaseClass::PlayerUse() call.
+	// If IN_USE was just pressed and no entity was used by the base class.
+	// This is a simplified check, assuming BaseClass::PlayerUse() doesn't clear m_afButtonPressed & IN_USE
+	// if it didn't find an entity to use.
+	if ( (m_afButtonPressed & IN_USE) && !FindUseEntity() )
+	{
+		// Phase 2: Trace to a player.
+		// Get player's eye position and direction.
+		Vector eyePos = EyePosition();
+		Vector forward;
+		EyeVectors( &forward );
+		Vector traceEnd = eyePos + forward * MAX_COORD_RANGE; // want to be able to hit players at long distances as long as they are visible
+
+		trace_t tr;
+		// Use MASK_SHOT to hit players/NPCs, similar to CommanderFindGoal.
+		// COLLISION_GROUP_NONE is used here as a default, consider a more specific filter if needed.
+		UTIL_TraceLine( eyePos, traceEnd, MASK_SHOT, this, COLLISION_GROUP_NONE, &tr );
+
+		// Phase 3: Identify if the hit entity is a bot.
+		if ( tr.DidHit() && tr.m_pEnt )
+		{
+			// Attempt to cast the hit entity to CNEO_Player.
+			CNEO_Player* pTargetPlayer = dynamic_cast<CNEO_Player*>(tr.m_pEnt);
+			if ( pTargetPlayer && pTargetPlayer->IsBot() )
+			{
+				// The hit entity is a bot! Now, toggle its follow state.
+				pTargetPlayer->ToggleFollowPlayer( this );
+			}
+		}
+	}
+
+	// The base class's PlayerUse() already handles playing the deny sound if nothing was used.
+	// So, no need to explicitly set m_bPlayUseDenySound here.
 }
 
 void CNEO_Player::StartAutoSprint(void)

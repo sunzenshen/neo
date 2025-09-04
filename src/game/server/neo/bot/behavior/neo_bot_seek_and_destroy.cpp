@@ -74,6 +74,10 @@ ActionResult< CNEOBot >	CNEOBotSeekAndDestroy::Update( CNEOBot *me, float interv
 	else
 	{
 		// Out of combat
+		if ( me->m_hCommandingPlayer.Get() != NULL )
+		{
+			RecomputeSeekPath( me );
+		}
 		me->DisableCloak();
 
 		// Reload when safe
@@ -310,12 +314,69 @@ private:
 };
 
 
+static ConVar neo_bot_follow_stop_distance("neo_bot_follow_stop_distance", "10000");
 //---------------------------------------------------------------------------------------------
 void CNEOBotSeekAndDestroy::RecomputeSeekPath( CNEOBot *me )
 {
 	if ( m_bOverrideApproach )
 	{
 		return;
+	}
+
+	// NEO: Phase 5: Set the bot's navigation target to be the player if they are associated with a player.
+	// Check if the bot is commanded to follow a player.
+	if ( me->m_hCommandingPlayer.Get() )
+	{
+		CNEO_Player* pCommander = me->m_hCommandingPlayer.Get();
+		if ( pCommander && pCommander->IsAlive() )
+		{
+			if (me->GetAbsOrigin().DistToSqr(pCommander->GetAbsOrigin()) < neo_bot_follow_stop_distance.GetFloat())
+			{
+                // Anti-stacking: look for any other bot in the same radius
+				for (int idx = 1; idx <= gpGlobals->maxClients; ++idx)
+				{
+					CNEO_Player* pOther = static_cast<CNEO_Player*>(UTIL_PlayerByIndex(idx));
+					if (!pOther || !pOther->IsBot() || pOther == me)
+						continue;
+
+					if (me->GetAbsOrigin().DistToSqr(pOther->GetAbsOrigin()) < neo_bot_follow_stop_distance.GetFloat() / 4)
+					{
+						// Randomly strafe left or right for a brief bump-out
+						if (me->TransientlyConsistentRandomValue(2.0f) < 1.0f)
+							me->PressLeftButton();
+						else
+							me->PressRightButton();
+						break;
+
+						// tend to back off more than not
+						if (me->TransientlyConsistentRandomValue(10.0f) < 9.0f)
+							me->PressBackwardButton();
+						else
+							me->PressForwardButton();
+						break;
+					}
+				}
+
+               m_hTargetEntity       = NULL;
+               m_bGoingToTargetEntity = false;
+               m_path.Invalidate();
+               return;
+			}
+
+			// Set the bot's goal to the commander's position.
+			m_vGoalPos = pCommander->GetAbsOrigin();
+			CNEOBotPathCost cost( me, SAFEST_ROUTE );
+			if ( m_path.Compute( me, m_vGoalPos, cost, 0.0f, true, true ) && m_path.IsValid() && m_path.GetResult() == Path::COMPLETE_PATH )
+			{
+				// Path to commander found, so return.
+				return;
+			}
+		}
+		else
+		{
+			// Commander is no longer valid or alive, stop following.
+			me->m_hCommandingPlayer = NULL;
+		}
 	}
 
 	m_hTargetEntity = NULL;
