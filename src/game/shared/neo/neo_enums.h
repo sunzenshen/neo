@@ -14,9 +14,10 @@ enum NeoClass {
 	NEO_CLASS_ASSAULT,
 	NEO_CLASS_SUPPORT,
 
-	// NOTENOTE: VIP *must* be last, because we are
+	// NOTENOTE: VIP and Juggernaut *must* be last, because we are
 	// using array offsets for recon/assault/support
 	NEO_CLASS_VIP,
+	NEO_CLASS_JUGGERNAUT,
 
 	NEO_CLASS__ENUM_COUNT
 };
@@ -46,4 +47,6 @@ enum ENeoRank
 	NEO_RANK__TOTAL, // rankless dog doesn't count within the arrays
 };
 static const constexpr int NEO_RANK_TOTAL = NEO_RANK__TOTAL;
+
+static const constexpr short NEO_ENVIRON_KILLED = -1;
 
