@@ -23,6 +23,35 @@ This document provides instructions for building NEOTOKYO Rebuild (NT;RE) using 
 6.  Select the desired configuration (e.g., `windows-debug`, `windows-release`) from the configuration dropdown.
 7.  Build the project using **Build > Build All** or by right-clicking the root CMake target and selecting **Build**.
 
+## Building with CLI (Linux)
+
+This project can be built on Linux using CMake and Ninja.
+
+### Prerequisites
+
+*   **Tools**: `gcc`, `g++`, `cmake`, `ninja-build`.
+*   **Git Tags**: The build system requires git tags to be present to generate version information. If you are working on a shallow clone or a fresh checkout without tags, you may need to create a tag (e.g., `git tag v99.0-test`) or fetch tags (`git fetch --tags`).
+
+### Build Steps
+
+1.  Navigate to the `src` directory:
+    ```bash
+    cd src
+    ```
+2.  Configure the build using the `linux-debug` preset:
+    ```bash
+    cmake --preset linux-debug
+    ```
+    *   If this fails with "Failed to get git tag", create a dummy tag: `git tag v99.0-test`.
+3.  Build the project:
+    ```bash
+    cmake --build --preset linux-debug --parallel $(nproc)
+    ```
+
+### Output
+
+The build output (shared libraries) will be placed in `game/neo/bin/linux64`.
+
 ## Debugging with Visual Studio 2022
 
 To debug the project, you need to configure the launch settings.
