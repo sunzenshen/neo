@@ -544,6 +544,9 @@ CNEOBot::CNEOBot()
 	m_maxVisionRangeOverride = -1.0f;
 	m_squadFormationError = 0.0f;
 
+	m_bWantsRespawn = false;
+	m_bRespawnCopyCorpse = false;
+
 	SetAutoJump(0.f, 0.f);
 
 	V_memcpy(&m_profile, &FIXED_DEFAULT_PROFILE, sizeof(CNEOBotProfile));
@@ -657,6 +660,9 @@ void CNEOBot::Spawn()
 
 	m_qPrevShouldAim = ANSWER_NO;
 	m_flLastShouldAimTime = 0.0f;
+
+	m_bWantsRespawn = false;
+	m_bRespawnCopyCorpse = false;
 }
 
 
@@ -681,9 +687,20 @@ void CNEOBot::SetMission(MissionType mission, bool resetBehaviorSystem)
 
 
 //-----------------------------------------------------------------------------------------------------
+extern void respawn(CBaseEntity* pEdict, bool fCopyCorpse);
 void CNEOBot::PhysicsSimulate(void)
 {
 	BaseClass::PhysicsSimulate();
+
+	if (m_bWantsRespawn)
+	{
+		m_bWantsRespawn = false;
+		respawn(this, m_bRespawnCopyCorpse);
+		// Note: respawn() triggers Reset(), which deletes the behavior.
+		// Since we are outside BaseClass::PhysicsSimulate() (which calls Update()),
+		// it is safe to delete the behavior now.
+		return;
+	}
 
 	if (m_spawnArea == NULL)
 	{
