@@ -1023,7 +1023,10 @@ void CNEOBot::DisableCloak(void)
 
 bool CNEOBot::IsDormantWhenDead(void) const
 {
-	return false;
+	// When a bot becomes an Observer (e.g., in Juggernaut mode after death without respawn), it should become dormant.
+	// This stops the NextBot update loop (INextBot::Update), preventing it from trying to run behaviors
+	// on a non-existent or spectator body, which causes crashes (use-after-free/dangling pointers).
+	return IsObserver();
 }
 
 
@@ -2491,10 +2494,10 @@ bool CNEOBot::IsEnemy(const CBaseEntity* them) const
 	}
 	else
 	{
-		if (them->GetTeamNumber() == TEAM_UNASSIGNED)
-			return true;
-
-		return false;
+		// Since we are now forcing bots into JINRAI/NSF teams even in DM to avoid the TEAM_UNASSIGNED crash,
+		// we must explicitly tell them to treat everyone as an enemy, otherwise they will treat their "teammates" as friends and not fight.
+		// In non-Teamplay modes (like DM), everyone else is an enemy.
+		return true;
 	}
 }
 
