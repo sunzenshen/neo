@@ -2310,16 +2310,11 @@ void OpenURL(const char *szBaseUrl, const char *szPath)
 		return;
 	}
 
-	static constexpr char CMD[] =
-#ifdef _WIN32
-		"start"
-#else
-		"xdg-open"
-#endif
-		;
-	char syscmd[512] = {};
-	V_sprintf_safe(syscmd, "%s %s%s", CMD, szBaseUrl, szPath);
-	system(syscmd);
+	char szFullUrl[512] = {};
+	V_sprintf_safe(szFullUrl, "%s%s", szBaseUrl, szPath);
+
+	// Sentinel: Use ShellExecute instead of system() to prevent command injection
+	vgui::system()->ShellExecute("open", szFullUrl);
 }
 
 const wchar_t *HintAlt(const wchar *wszKey, const wchar *wszController)
