@@ -120,15 +120,18 @@ COMPILE_TIME_ASSERT(NEO_RECON_CROUCH_SPEED > NEO_ASSAULT_CROUCH_SPEED);
 COMPILE_TIME_ASSERT(NEO_ASSAULT_CROUCH_SPEED == NEO_SUPPORT_CROUCH_SPEED);
 COMPILE_TIME_ASSERT(NEO_ASSAULT_CROUCH_SPEED == NEO_VIP_CROUCH_SPEED);
 
-// Jump heights derived from gamemovement.cpp:
-// Recon: sqrt(2 * 800 * 54) -> 54 units
-// Juggernaut: sqrt(2 * 800 * 50.4) -> 50.4 units
-// Assault/Support/VIP: sqrt(2 * 800 * 36) -> 36 units
-#define NEO_JUMP_HEIGHT_RECON 54.f
-#define NEO_JUMP_HEIGHT_JUGGERNAUT 51.f
-#define NEO_JUMP_HEIGHT_ASSAULT 36.f
-// Support and VIP share Assault height
-#define NEO_JUMP_HEIGHT_SUPPORT NEO_JUMP_HEIGHT_ASSAULT
+// Jump Heights
+// Calculated as: Physics Jump Height (based on velocity) + Crouch Lift (Standing Hull Max - Duck Hull Max).
+// We use a slightly conservative safety margin (~1-2 units) to ensure bots reliably clear obstacles.
+//
+// Recon:		54.0 (Phys) + 18.0 (Lift) = 72.0 -> 70.0f
+// Assault:		36.0 (Phys) + 17.0 (Lift) = 53.0 -> 52.0f
+// Support:		36.0 (Phys) + 11.0 (Lift) = 47.0 -> 46.0f
+// Juggernaut:	50.4 (Phys) + 13.0 (Lift) = 63.4 -> 62.0f
+#define NEO_JUMP_HEIGHT_RECON 70.f
+#define NEO_JUMP_HEIGHT_ASSAULT 52.f
+#define NEO_JUMP_HEIGHT_SUPPORT 46.f
+#define NEO_JUMP_HEIGHT_JUGGERNAUT 62.f
 #define NEO_JUMP_HEIGHT_VIP NEO_JUMP_HEIGHT_ASSAULT
 
 // END OF NEO MOVEMENT DEFINITIONS
