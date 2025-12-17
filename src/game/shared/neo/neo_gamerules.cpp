@@ -255,6 +255,7 @@ BEGIN_NETWORK_TABLE_NOBASE( CNEORules, DT_NEORules )
 	SendPropInt(SENDINFO(m_nGameTypeSelected), NumBitsForCount(NEO_GAME_TYPE__TOTAL), SPROP_UNSIGNED),
 	SendPropInt(SENDINFO(m_iRoundNumber)),
 	SendPropInt(SENDINFO(m_iHiddenHudElements)),
+	// NEO NOTE (Jules): Kept signed fields (ForcedTeam/Class/Skin) as default 32-bit to avoid overflow/sign issues.
 	SendPropInt(SENDINFO(m_iForcedTeam)),
 	SendPropInt(SENDINFO(m_iForcedClass)),
 	SendPropInt(SENDINFO(m_iForcedSkin)),
@@ -263,6 +264,7 @@ BEGIN_NETWORK_TABLE_NOBASE( CNEORules, DT_NEORules )
 	SendPropString(SENDINFO(m_szNeoJinraiClantag)),
 	SendPropString(SENDINFO(m_szNeoNSFClantag)),
 	SendPropInt(SENDINFO(m_iGhosterTeam), NumBitsForCount(TEAM__TOTAL), SPROP_UNSIGNED),
+	// NEO NOTE (Jules): Using MAX_PLAYERS + 1 because indices are 1-based (1-64). 6 bits only covers 0-63.
 	SendPropInt(SENDINFO(m_iGhosterPlayer), NumBitsForCount(MAX_PLAYERS + 1), SPROP_UNSIGNED),
 	SendPropInt(SENDINFO(m_iEscortingTeam)),
 	SendPropBool(SENDINFO(m_bGhostExists)),

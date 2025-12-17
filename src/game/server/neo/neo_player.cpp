@@ -45,6 +45,7 @@
 LINK_ENTITY_TO_CLASS(player, CNEO_Player);
 
 IMPLEMENT_SERVERCLASS_ST(CNEO_Player, DT_NEO_Player)
+// NEO NOTE (Jules): Kept signed fields (Class, XP) as default 32-bit to avoid overflow/sign issues with NumBitsForRange optimizations.
 SendPropInt(SENDINFO(m_iNeoClass)),
 SendPropInt(SENDINFO(m_iNeoSkin), NumBitsForCount(NEO_SKIN_ENUM_COUNT), SPROP_UNSIGNED),
 SendPropInt(SENDINFO(m_iNeoStar), NumBitsForCount(STAR__TOTAL), SPROP_UNSIGNED),

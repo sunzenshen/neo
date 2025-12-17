@@ -40,6 +40,7 @@ IMPLEMENT_SERVERCLASS_ST(CNEOGhostCapturePoint, DT_NEOGhostCapturePoint)
 	SendPropFloat(SENDINFO(m_flCapzoneRadius)),
 
 	SendPropInt(SENDINFO(m_iOwningTeam), NumBitsForCount(TEAM__TOTAL), SPROP_UNSIGNED),
+	// NEO NOTE (Jules): Using MAX_PLAYERS + 1 because indices are 1-based.
 	SendPropInt(SENDINFO(m_iSuccessfulCaptorClientIndex), NumBitsForCount(MAX_PLAYERS + 1), SPROP_UNSIGNED),
 
 	SendPropBool(SENDINFO(m_bGhostHasBeenCaptured)),
