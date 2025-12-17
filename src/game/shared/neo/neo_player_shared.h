@@ -121,13 +121,24 @@ COMPILE_TIME_ASSERT(NEO_ASSAULT_CROUCH_SPEED == NEO_SUPPORT_CROUCH_SPEED);
 COMPILE_TIME_ASSERT(NEO_ASSAULT_CROUCH_SPEED == NEO_VIP_CROUCH_SPEED);
 
 // Jump Heights
-// Calculated as: Physics Jump Height (based on velocity) + Crouch Lift (Standing Hull Max - Duck Hull Max).
+//
+// Historical Note:
+// The original recon crouch jump height was defined as 65.f (NEO_RECON_CROUCH_JUMP_HEIGHT).
+// This likely originated from calculating:
+//		Physics Jump (54.0) + Default Support Lift (11.0) = 65.0
+// However, Recon has a deeper crouch (lift 18.0), making 65.0 an underestimation of potential,
+// but safer than the overestimations used for other classes.
+//
+// New values are calculated as:
+//		Physics Jump Height (based on velocity) + Crouch Lift (Standing Hull Max - Duck Hull Max).
 // We use a slightly conservative safety margin (~1-2 units) to ensure bots reliably clear obstacles.
 //
 // Recon:		54.0 (Phys) + 18.0 (Lift) = 72.0 -> 70.0f
 // Assault:		36.0 (Phys) + 17.0 (Lift) = 53.0 -> 52.0f
 // Support:		36.0 (Phys) + 11.0 (Lift) = 47.0 -> 46.0f
 // Juggernaut:	50.4 (Phys) + 13.0 (Lift) = 63.4 -> 62.0f
+//
+// Note: Support was previously using 56.f, which was physically impossible (max 47), causing bots to get stuck.
 #define NEO_JUMP_HEIGHT_RECON 70.f
 #define NEO_JUMP_HEIGHT_ASSAULT 52.f
 #define NEO_JUMP_HEIGHT_SUPPORT 46.f
