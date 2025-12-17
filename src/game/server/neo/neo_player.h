@@ -328,7 +328,7 @@ private:
 	bool m_bSpectatorTakeoverPlayerPending{false};
 
 	// Cache for GetFogObscuredRatio for each player
-	mutable CUtlMap<int, CNEO_Player_FogCacheEntry> m_mapPlayerFogCache;
+	mutable CNEO_Player_FogCacheEntry m_PlayerFogCache[MAX_PLAYERS_ARRAY_SAFE];
 
 private:
 	CNEO_Player(const CNEO_Player&);
