@@ -42,15 +42,15 @@ inline float CNEOBotLocomotion::GetMaxJumpHeight( void ) const
 	switch (me->GetClass())
 	{
 		case NEO_CLASS_RECON:
-			return NEO_RECON_CROUCH_JUMP_HEIGHT;
+			return NEO_JUMP_HEIGHT_RECON;
 		case NEO_CLASS_ASSAULT:
-			[[fallthrough]];
+			return NEO_JUMP_HEIGHT_ASSAULT;
 		case NEO_CLASS_SUPPORT:
-			[[fallthrough]];
+			return NEO_JUMP_HEIGHT_SUPPORT;
 		case NEO_CLASS_VIP:
-			[[fallthrough]];
+			return NEO_JUMP_HEIGHT_VIP;
 		case NEO_CLASS_JUGGERNAUT:
-			return NEO_CROUCH_JUMP_HEIGHT;
+			return NEO_JUMP_HEIGHT_JUGGERNAUT;
 		default:
 			Assert(false);
 			return 0.f;

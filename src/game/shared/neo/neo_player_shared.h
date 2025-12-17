@@ -120,8 +120,16 @@ COMPILE_TIME_ASSERT(NEO_RECON_CROUCH_SPEED > NEO_ASSAULT_CROUCH_SPEED);
 COMPILE_TIME_ASSERT(NEO_ASSAULT_CROUCH_SPEED == NEO_SUPPORT_CROUCH_SPEED);
 COMPILE_TIME_ASSERT(NEO_ASSAULT_CROUCH_SPEED == NEO_VIP_CROUCH_SPEED);
 
-#define NEO_RECON_CROUCH_JUMP_HEIGHT 65.f
-#define NEO_CROUCH_JUMP_HEIGHT 56.f
+// Jump heights derived from gamemovement.cpp:
+// Recon: sqrt(2 * 800 * 54) -> 54 units
+// Juggernaut: sqrt(2 * 800 * 50.4) -> 50.4 units
+// Assault/Support/VIP: sqrt(2 * 800 * 36) -> 36 units
+#define NEO_JUMP_HEIGHT_RECON 54.f
+#define NEO_JUMP_HEIGHT_JUGGERNAUT 51.f
+#define NEO_JUMP_HEIGHT_ASSAULT 36.f
+// Support and VIP share Assault height
+#define NEO_JUMP_HEIGHT_SUPPORT NEO_JUMP_HEIGHT_ASSAULT
+#define NEO_JUMP_HEIGHT_VIP NEO_JUMP_HEIGHT_ASSAULT
 
 // END OF NEO MOVEMENT DEFINITIONS
 //////////////////////////////////////////////////////
