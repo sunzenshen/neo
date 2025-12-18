@@ -209,7 +209,13 @@ void CNEOHud_Ammo::DrawAmmo() const
 		}			
 	}
 
-	surface()->DrawSetTextColor(ammo_color);
+	Color drawColor = ammo_color;
+	if (magSizeMax > 0 && (float)magSizeCurrent / magSizeMax <= 0.25f)
+	{
+		drawColor = low_ammo_color;
+	}
+
+	surface()->DrawSetTextColor(drawColor);
 	if (digit_as_number && activeWep->UsesClipsForAmmo1())
 	{ // Draw bullets in magazine in number form
 		surface()->DrawSetTextFont(m_hBulletFont);
