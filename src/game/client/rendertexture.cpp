@@ -88,7 +88,21 @@ ITexture *GetFullFrameDepthTexture( void )
 {
 	if ( !s_pFullFrameDepthTexture )
 	{
+#ifdef NEO
+		// NEO: Jet Set Radio Rendering - Step 6: High-Precision R32F Render Target
+		// Use the high-precision R32F texture if available, otherwise fall back to standard depth
+		ITexture *pHighPrec = materials->FindTexture( "_rt_FullFrameDepth_Alt", TEXTURE_GROUP_RENDER_TARGET );
+		if ( pHighPrec && !IsErrorTexture( pHighPrec ) )
+		{
+			s_pFullFrameDepthTexture.Init( pHighPrec );
+		}
+		else
+		{
+			s_pFullFrameDepthTexture.Init( materials->FindTexture( "_rt_FullFrameDepth", TEXTURE_GROUP_RENDER_TARGET ) );
+		}
+#else
 		s_pFullFrameDepthTexture.Init( materials->FindTexture( "_rt_FullFrameDepth", TEXTURE_GROUP_RENDER_TARGET ) );
+#endif
 		Assert( !IsErrorTexture( s_pFullFrameDepthTexture ) );
 		AddReleaseFunc();
 	}

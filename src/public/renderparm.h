@@ -33,6 +33,12 @@ enum RenderParamVector_t
 };
 
 
+enum RenderParamFloat_t
+{
+	FLOAT_RENDERPARM_ZDELTA = 0,
+	// Add other float params here if needed
+};
+
 #define MAX_FLOAT_RENDER_PARMS 20
 
 enum RenderParamInt_t

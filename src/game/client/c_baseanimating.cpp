@@ -8,6 +8,8 @@
 #include "c_baseanimating.h"
 #include "c_sprite.h"
 #include "model_types.h"
+#include "materialsystem/itexture.h"
+#include "materialsystem/imaterialvar.h"
 #include "bone_setup.h"
 #include "ivrenderview.h"
 #include "r_efx.h"
@@ -70,6 +72,43 @@
 
 static ConVar cl_SetupAllBones( "cl_SetupAllBones", "0" );
 ConVar r_sequence_debug( "r_sequence_debug", "" );
+
+// NEO: Jet Set Radio Rendering
+static ConVar neo_cel_shading("neo_cel_shading", "0", FCVAR_ARCHIVE, "Enable Cel Shading Lightwarp");
+static ConVar neo_cel_shading_texture("neo_cel_shading_texture", "models/shading/cel_lightwarp", FCVAR_ARCHIVE);
+static ConVar neo_outline_enabled("neo_outline_enabled", "0", FCVAR_ARCHIVE, "Enable Outline Pass");
+
+static void ApplyCelShading( CStudioHdr *pStudioHdr, const model_t *model )
+{
+	if ( !neo_cel_shading.GetBool() ) return;
+	if ( !pStudioHdr ) return;
+
+	int count = modelinfo->GetModelMaterialCount( model );
+	if ( count > 0 )
+	{
+		IMaterial **ppMaterials = (IMaterial**)_alloca( count * sizeof(IMaterial*) );
+		modelinfo->GetModelMaterials( model, count, ppMaterials );
+		for ( int i=0; i<count; i++ )
+		{
+			IMaterial *pMat = ppMaterials[i];
+			if ( !pMat ) continue;
+
+			if ( Q_stricmp( pMat->GetShaderName(), "VertexLitGeneric" ) == 0 )
+			{
+				bool foundVar;
+				IMaterialVar *pLightWarpVar = pMat->FindVar( "$lightwarptexture", &foundVar, false );
+				if ( foundVar && pLightWarpVar )
+				{
+					ITexture *pTex = materials->FindTexture( neo_cel_shading_texture.GetString(), TEXTURE_GROUP_OTHER, false );
+					if ( pTex && !pTex->IsError() )
+					{
+						pLightWarpVar->SetTextureValue( pTex );
+					}
+				}
+			}
+		}
+	}
+}
 
 // If an NPC is moving faster than this, he should play the running footstep sound
 const float RUN_SPEED_ESTIMATE_SQR = 150.0f * 150.0f;
@@ -1222,6 +1261,10 @@ CStudioHdr *C_BaseAnimating::OnNewModel()
 	}
 
 	UpdateRelevantInterpolatedVars();
+
+#ifdef NEO
+	ApplyCelShading( hdr, GetModel() );
+#endif
 		
 	return hdr;
 }
@@ -3353,6 +3396,20 @@ int C_BaseAnimating::DrawModel( int flags )
 		if (isMoving || isHot)
 		{
 			modelrender->ForcedMaterialOverride(nullptr);
+		}
+
+		// Inverted Hull / Outline Pass
+		if ( neo_outline_enabled.GetBool() )
+		{
+			// Note: extraFlags is defined above in the scope. If not available, we should recalculate or omit.
+			// But here it is inside the same block where extraFlags is defined.
+			IMaterial* pOutlineMat = materials->FindMaterial( "neo/outline", TEXTURE_GROUP_MODEL );
+			if ( pOutlineMat && !IsErrorMaterial( pOutlineMat ) )
+			{
+				modelrender->ForcedMaterialOverride( pOutlineMat );
+				InternalDrawModel( flags | extraFlags );
+				modelrender->ForcedMaterialOverride( NULL );
+			}
 		}
 #endif // NEO
 	}

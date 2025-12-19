@@ -86,6 +86,10 @@
 // memdbgon must be the last include file in a .cpp file!!!
 #include "tier0/memdbgon.h"
 
+#ifdef NEO
+ConVar neo_enable_ssao("neo_enable_ssao", "1", FCVAR_ARCHIVE);
+#endif
+
 
 static void testfreezeframe_f( void )
 {
@@ -2787,6 +2791,14 @@ void CViewRender::DrawWorldAndEntities( bool bDrawSkybox, const CViewSetup &view
 	WaterRenderInfo_t info;
 	DetermineWaterRenderInfo( fogVolumeInfo, info );
 #endif
+
+	CMatRenderContextPtr pRenderContext( materials );
+
+	// Calculate the full depth range (zFar - zNear)
+	float flDepthRange = viewIn.zFar - viewIn.zNear;
+
+	// Pass this value to the shader system
+	pRenderContext->SetFloatRenderingParameter( FLOAT_RENDERPARM_ZDELTA, flDepthRange );
 
 #ifdef NEO
 	if ( m_waterInfo.m_bCheapWater )
@@ -5694,6 +5706,18 @@ void CBaseWorldView::DrawSetup( float waterHeight, int nSetupFlags, float waterZ
 	if ( savedViewID == VIEW_MAIN && bVisionOverride && pyro_dof.GetBool() )
 	{
 		SSAO_DepthPass();
+	}
+#endif
+
+#ifdef NEO
+	if ( savedViewID == VIEW_MAIN && neo_enable_ssao.GetBool() )
+	{
+		// CBaseWorldView::SSAO_DepthPass is a member of CBaseWorldView.
+		// Since we are inside CBaseWorldView::DrawSetup, we can call it directly.
+		if ( g_pMaterialSystemHardwareConfig->SupportsPixelShaders_2_b() )
+		{
+			SSAO_DepthPass();
+		}
 	}
 #endif
 

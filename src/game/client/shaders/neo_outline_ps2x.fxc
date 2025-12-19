@@ -1,0 +1,40 @@
+// neo_outline_ps2x.fxc
+// Post-process shader for Sobel edge detection using high-precision depth buffer
+
+#include "common_ps_fxc.h"
+
+sampler2D DepthTexture : register( s0 ); // Bound to _rt_FullFrameDepth_Alt
+float4 const0 : register( c0 ); // Contains (zFar - zNear) scale factor from FLOAT_RENDERPARM_ZDELTA
+
+struct PS_INPUT
+{
+    float2 uv : TEXCOORD0;
+};
+
+float GetLinearDepth( float2 uv )
+{
+    float rawDepth = tex2D( DepthTexture, uv ).r;
+    // Linearize based on the C++ passed Z-Delta (const0.x)
+    return rawDepth * const0.x;
+}
+
+float4 main( PS_INPUT i ) : COLOR
+{
+    float2 pixelSize = float2(1.0/1920.0, 1.0/1080.0); // Should be passed in via constant
+    float2 uv = i.uv;
+
+    float center = GetLinearDepth(uv);
+    float up     = GetLinearDepth(uv + float2(0, pixelSize.y));
+    float right  = GetLinearDepth(uv + float2(pixelSize.x, 0));
+
+    // Calculate simple derivative
+    float derivative = abs(center - up) + abs(center - right);
+
+    // Thresholding for outlines
+    float threshold = 10.0; // Depth difference threshold
+    if ( derivative > threshold ) {
+        return float4(0, 0, 0, 1); // Draw Black Line
+    }
+
+    return float4(0, 0, 0, 0); // Transparent
+}
