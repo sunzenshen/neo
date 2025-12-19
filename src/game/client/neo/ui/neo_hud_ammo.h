@@ -65,6 +65,8 @@ private:
 	CPanelAnimationVar(Color, ammo_text_color, "ammo_text_color", "255 255 255 100");
 	CPanelAnimationVar(Color, ammo_color, "ammo_color", "255 255 255 150");
 	CPanelAnimationVar(Color, emptied_ammo_color, "emptied_ammo_color", "255 255 255 50");
+	CPanelAnimationVar(Color, ammo_color_low, "ammo_color_low", "225 88 88 200");
+	CPanelAnimationVar(Color, ammo_color_empty, "ammo_color_empty", "255 0 0 200");
 
 	CPanelAnimationVarAliasType(int, heatbar_xpos, "heatbar_xpos", "45", "proportional_xpos");
 	CPanelAnimationVarAliasType(int, heatbar_ypos, "heatbar_ypos", "12", "proportional_ypos");
