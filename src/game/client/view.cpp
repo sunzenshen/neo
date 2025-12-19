@@ -349,7 +349,8 @@ void CViewRender::Init( void )
 	// NEO: Jet Set Radio Rendering - Step 6: High-Precision R32F Render Target
 	// We create a new texture for high-precision depth.
 	// IMAGE_FORMAT_R32F is 32-bit floating point, single channel.
-	// This is critical for Sobel edge detection on distant objects.
+	// This is critical for Sobel edge detection on distant objects to avoid "stair-stepping" artifacts.
+	// Reference: "Technical Implementation of Jet Set Radio-Style Non-Photorealistic Rendering..." Section 4.3
 	ITexture *pFullFrameDepthAlt = materials->CreateNamedRenderTargetTextureEx(
 		"_rt_FullFrameDepth_Alt",
 		iW, iH,

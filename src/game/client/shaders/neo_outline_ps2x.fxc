@@ -1,5 +1,7 @@
 // neo_outline_ps2x.fxc
 // Post-process shader for Sobel edge detection using high-precision depth buffer
+// Implementation based on "Technical Implementation of Jet Set Radio-Style Non-Photorealistic Rendering..."
+// Section 6.1: The Sobel Edge Detection Algorithm
 
 #include "common_ps_fxc.h"
 

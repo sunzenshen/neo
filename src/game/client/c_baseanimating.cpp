@@ -74,6 +74,8 @@ static ConVar cl_SetupAllBones( "cl_SetupAllBones", "0" );
 ConVar r_sequence_debug( "r_sequence_debug", "" );
 
 // NEO: Jet Set Radio Rendering
+// Implementation based on "Technical Implementation of Jet Set Radio-Style Non-Photorealistic Rendering and High-Precision Depth Buffering in Source Engine 2013"
+// See: Phase 1: The "Modest" Approach (Assets & Material System)
 static ConVar neo_cel_shading("neo_cel_shading", "0", FCVAR_ARCHIVE, "Enable Cel Shading Lightwarp");
 static ConVar neo_cel_shading_texture("neo_cel_shading_texture", "models/shading/cel_lightwarp", FCVAR_ARCHIVE);
 static ConVar neo_outline_enabled("neo_outline_enabled", "0", FCVAR_ARCHIVE, "Enable Outline Pass");
@@ -3399,6 +3401,8 @@ int C_BaseAnimating::DrawModel( int flags )
 		}
 
 		// Inverted Hull / Outline Pass
+		// Implementation based on "Technical Implementation of Jet Set Radio-Style Non-Photorealistic Rendering..."
+		// Technique A (Geometric): The "Inverted Hull" method.
 		if ( neo_outline_enabled.GetBool() )
 		{
 			// Note: extraFlags is defined above in the scope. If not available, we should recalculate or omit.

@@ -2798,6 +2798,7 @@ void CViewRender::DrawWorldAndEntities( bool bDrawSkybox, const CViewSetup &view
 	float flDepthRange = viewIn.zFar - viewIn.zNear;
 
 	// Pass this value to the shader system
+	// Required for linearizing depth in post-process shaders as per "Technical Implementation of Jet Set Radio-Style..."
 	pRenderContext->SetFloatRenderingParameter( FLOAT_RENDERPARM_ZDELTA, flDepthRange );
 
 #ifdef NEO
@@ -5714,6 +5715,8 @@ void CBaseWorldView::DrawSetup( float waterHeight, int nSetupFlags, float waterZ
 	{
 		// CBaseWorldView::SSAO_DepthPass is a member of CBaseWorldView.
 		// Since we are inside CBaseWorldView::DrawSetup, we can call it directly.
+		// Unlocking SSAO_DepthPass allows full-scene depth generation, bypassing the 192-unit limit.
+		// Reference: "Technical Implementation of Jet Set Radio-Style Non-Photorealistic Rendering..." Section 4.1
 		if ( g_pMaterialSystemHardwareConfig->SupportsPixelShaders_2_b() )
 		{
 			SSAO_DepthPass();
