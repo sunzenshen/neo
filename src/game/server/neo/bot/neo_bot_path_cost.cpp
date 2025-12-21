@@ -5,6 +5,7 @@
 #include "neo_bot_locomotion.h"
 #include "nav_mesh.h"
 #include "neo_bot_path_reservation.h"
+#include "neo_npc_targetsystem.h"
 
 extern ConVar neo_bot_path_reservation_enable;
 
@@ -115,6 +116,30 @@ float CNEOBotPathCost::operator()(CNavArea* baseArea, CNavArea* fromArea, const 
 		{
 			cost += CNEOBotPathReservations()->GetPredictedFriendlyPathCount(area->GetID(), m_me->GetTeamNumber()) * neo_bot_path_reservation_penalty.GetFloat();
 			cost += CNEOBotPathReservations()->GetAreaStuckPenalty(area->GetID());
+		}
+		
+		// Avoid the APC turret in ntre_rogue_ctg
+		if ( V_strcmp( STRING( gpGlobals->mapname ), "ntre_rogue_ctg" ) == 0 )
+		{
+			CNEO_NPCTargetSystem *pTurret = NULL;
+			while ( ( pTurret = (CNEO_NPCTargetSystem *)gEntList.FindEntityByClassname( pTurret, "neo_npc_targetsystem" ) ) != NULL )
+			{
+				// If the area is visible to the turret, apply a HUGE penalty
+				// Optimize: Check distance first
+				if ( ( area->GetCenter() - pTurret->GetAbsOrigin() ).LengthSqr() < Square( 1500.0f ) ) 
+				{
+					// We can't really do accurate LOS here without being too expensive
+					// But CNEO_NPCTargetSystem uses IsPotentiallyVisible which uses PVS.
+					// We can use the area's visibility to the turret.
+					CNavArea *turretArea = TheNavMesh->GetNavArea( pTurret->GetAbsOrigin() );
+					if ( turretArea && area->IsPotentiallyVisible( turretArea ) )
+					{
+						// Ideally we would do a trace, but that is too slow for pathfinding.
+						// PVS is a good approximation.
+						cost += 5000.0f;
+					}
+				}
+			}
 		}
 		// ------------------------------------------------------------------------------------------------
 

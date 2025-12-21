@@ -46,6 +46,11 @@ ActionResult< CNEOBot >	CNEOBotSeekAndDestroy::OnStart( CNEOBot *me, Action< CNE
 		return Done( "Disabled." );
 	}
 
+	if ( V_strcmp( STRING( gpGlobals->mapname ), "ntre_rogue_ctg" ) == 0 )
+	{
+		m_apcRepathTimer.Start( RandomFloat( 3.0f, 5.0f ) );
+	}
+
 	return Continue();
 }
 
@@ -156,6 +161,11 @@ ActionResult< CNEOBot > CNEOBotSeekAndDestroy::UpdateCommon( CNEOBot *me, float 
 		m_repathTimer.Start( 45.0f );
 
 		RecomputeSeekPath( me );
+	}
+	else if ( m_apcRepathTimer.HasStarted() && m_apcRepathTimer.IsElapsed() )
+	{
+		m_path.Invalidate();
+		m_apcRepathTimer.Start( RandomFloat( 3.0f, 5.0f ) );
 	}
 
 	return Continue();

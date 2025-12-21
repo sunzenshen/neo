@@ -1461,6 +1461,8 @@ target_sources_grouped(
     neo/bot/behavior/neo_bot_pause.h
     neo/bot/behavior/neo_bot_retreat_to_cover.cpp
     neo/bot/behavior/neo_bot_retreat_to_cover.h
+    neo/bot/behavior/neo_bot_retreat_from_apc.cpp
+    neo/bot/behavior/neo_bot_retreat_from_apc.h
     neo/bot/behavior/neo_bot_retreat_from_grenade.cpp
     neo/bot/behavior/neo_bot_retreat_from_grenade.h
     neo/bot/behavior/neo_bot_scenario_monitor.cpp
