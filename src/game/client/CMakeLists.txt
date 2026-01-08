@@ -1601,6 +1601,8 @@ target_sources_grouped(
     neo/ui/neo_hud_health_thermoptic_aux.h
     neo/ui/neo_hud_hint.cpp
     neo/ui/neo_hud_hint.h
+    neo/ui/neo_hud_hit_ping.cpp
+    neo/ui/neo_hud_hit_ping.h
     neo/ui/neo_hud_message.cpp
     neo/ui/neo_hud_message.h
     neo/ui/neo_hud_player_ping.cpp

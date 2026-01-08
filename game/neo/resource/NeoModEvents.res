@@ -90,6 +90,18 @@
 		"pingz"			"short"		// ping z position
 		"ghosterping"	"bool"		// the player is carrying the ghost
 	}
+
+	"hit_ping"
+	{
+		"userid"		"short"   	// userID of player who pinged (attacker)
+		"shotuserid" 	"short"		// the player shot an enemy (victim)
+		"playerteam" 	"short"		// attacker team
+		"pingx"			"short"		// ping x position
+		"pingy"			"short"		// ping y position
+		"pingz"			"short"		// ping z position
+		"deathping"		"bool"		// the player was killed
+		"damage"		"short"		// damage inflicted
+	}
 	
 	// inherited from NT
 	"game_round_start"

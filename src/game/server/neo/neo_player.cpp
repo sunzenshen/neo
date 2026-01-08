@@ -23,6 +23,7 @@
 #include "weapon_grenade.h"
 #include "weapon_smokegrenade.h"
 #include "weapon_tachi.h"
+#include "neo_smokelineofsightblocker.h"
 
 #include "shareddefs.h"
 #include "inetchannelinfo.h"
@@ -155,6 +156,7 @@ ConVar sv_neo_change_suicide_player("sv_neo_change_suicide_player", "0", FCVAR_R
 ConVar sv_neo_change_threshold_interval("sv_neo_change_threshold_interval", "0.25", FCVAR_REPLICATED, "The interval threshold limit in seconds before the player is allowed to change team.", true, 0.0f, true, 1000.0f);
 ConVar sv_neo_dm_max_class_dur("sv_neo_dm_max_class_dur", "10", FCVAR_REPLICATED, "The time in seconds when the player can change class on respawn during deathmatch.", true, 0.0f, true, 60.0f);
 ConVar sv_neo_warmup_godmode("sv_neo_warmup_godmode", "0", FCVAR_REPLICATED, "If enabled, everyone is invincible on idle and warmup.", true, 0.0f, true, 1.0f);
+ConVar sv_neo_ping_enemies_automatically("sv_neo_ping_enemies_automatically", "1", FCVAR_REPLICATED, "If enabled, the location of enemies are automatically reported as player pings.", true, 0.0f, true, 1.0f);
 
 ConVar bot_class("bot_class", "-1", 0, "Force all bots to spawn with the specified class number, or -1 to disable.", true, NEO_CLASS_RANDOM, true, NEO_CLASS_LOADOUTABLE_COUNT-1);
 static void BotChangeClassFn(const CCommand& args);
@@ -2024,6 +2026,21 @@ void CNEO_Player::Event_Killed( const CTakeDamageInfo &info )
 		StartShowDmgStats(&info);
 	}
 
+	IGameEvent* event = gameeventmanager->CreateEvent("hit_ping");
+	if (event)
+	{
+		const Vector& pos = info.GetDamagePosition();
+		event->SetInt("userid", GetUserID());
+		event->SetInt("playerteam", GetTeamNumber());
+		event->SetInt("pingx", pos.x);
+		event->SetInt("pingy", pos.y);
+		event->SetInt("pingz", pos.z);
+		event->SetInt("shotuserid", 0);
+		event->SetBool("deathping", true);
+		event->SetInt("damage", info.GetDamage());
+		gameeventmanager->FireEvent(event);
+	}
+
 	if (NEORules()->GetGameType() == NEO_GAME_TYPE_TDM)
 	{
 		GetGlobalTeam(NEORules()->GetOpposingTeam(this))->AddScore(1);
@@ -2958,6 +2975,35 @@ int	CNEO_Player::OnTakeDamage_Alive(const CTakeDamageInfo& info)
 
 				if (info.GetDamageType() & (DMG_BULLET | DMG_SLASH | DMG_BUCKSHOT)) {
 					++m_iBotDetectableBleedingInjuryEvents;
+				}
+
+				// Automatically place ping for attacker if accessibility convar enabled
+				if (sv_neo_ping_enemies_automatically.GetBool()
+					//&& !GetInThermOpticCamo()
+					&& (attacker->GetTeamNumber() != GetTeamNumber())
+					&& (info.GetDamageType() & (DMG_BULLET | DMG_BUCKSHOT)))
+				{
+					bool bAttackerCanSeeThroughSmoke = attacker->m_bInVision && (attacker->GetClass() == NEO_CLASS_SUPPORT);
+					ScopedSmokeLOS scopedSmoke(bAttackerCanSeeThroughSmoke);
+					if (FVisible(attacker, MASK_BLOCKLOS))
+					{
+					IGameEvent* evt = gameeventmanager->CreateEvent("hit_ping");
+
+					if (evt)
+					{
+						const Vector& pos = info.GetDamagePosition(); 
+						evt->SetInt("userid", attacker->GetUserID());
+						evt->SetInt("playerteam", attacker->GetTeamNumber());
+						evt->SetInt("pingx", pos.x);
+						evt->SetInt("pingy", pos.y);
+						evt->SetInt("pingz", pos.z);
+						evt->SetInt("shotuserid", GetUserID());
+						evt->SetBool("deathping", false);
+						evt->SetInt("damage", info.GetDamage());
+
+						gameeventmanager->FireEvent(evt);
+					}
+					}
 				}
 			}
 		}

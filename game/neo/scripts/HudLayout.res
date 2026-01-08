@@ -920,6 +920,10 @@
 		"box_color"		"200 200 200 40"
 		"health_monochrome"	"1"
 	}
+	NHudHitPing
+	{
+		"fieldName"		"NHudHitPing"
+	}
 	NHudPlayerPing
 	{
 		"fieldName"		"NHudPlayerPing"
