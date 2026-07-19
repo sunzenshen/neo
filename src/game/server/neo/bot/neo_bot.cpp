@@ -1315,35 +1315,24 @@ void CNEOBot::UpdateLookingAroundForIncomingPlayers(bool lookForEnemies)
     // ------------------------------------------------------------
     if (candidateAreas.Count() > 0)
     {
-        // Pick the one closest to forward (max dot product)
-        float bestDot = -1.0f;
-        CNavArea *bestArea = nullptr;
+		// Pick a random surviving candidate area
+		if (candidateAreas.Count() > 0)
+		{
+			int idx = RandomInt(0, candidateAreas.Count() - 1);
+			CNavArea *chosen = candidateAreas[idx];
 
-        for (int i = 0; i < candidateAreas.Count(); ++i)
-        {
-            CNavArea *area = candidateAreas[i];
-            Vector toArea = area->GetCenter() - myPos;
-            toArea.NormalizeInPlace();
-
-            float dot = DotProduct(forward, toArea);
-            if (dot > bestDot)
-            {
-                bestDot = dot;
-                bestArea = area;
-            }
-        }
-
-        if (bestArea)
-        {
-            Vector gazeSpot = bestArea->GetCenter() + Vector(0, 0, 0.75f * HumanHeight);
-            GetBodyInterface()->AimHeadTowards(
-                gazeSpot,
-                IBody::IMPORTANT,
-                0.3f,
-                nullptr,
-                "Teammate-aware scanning"
-            );
-        }
+			if (chosen)
+			{
+				Vector gazeSpot = chosen->GetCenter() + Vector(0, 0, 0.75f * HumanHeight);
+				GetBodyInterface()->AimHeadTowards(
+					gazeSpot,
+					IBody::IMPORTANT,
+					0.3f,
+					nullptr,
+					"Teammate-aware scanning"
+				);
+			}
+		}
     }
     // else: no candidate areas → fallback to natural forward/path view
 
