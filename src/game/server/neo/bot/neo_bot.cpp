@@ -1184,6 +1184,101 @@ void CNEOBot::UpdateLookingAroundForIncomingPlayers(bool lookForEnemies)
 	if (!m_lookAtEnemyInvasionAreasTimer.IsElapsed())
 		return;
 
+	CNavArea* myArea = GetLastKnownArea();
+	if (myArea)
+	{
+		class CCollectPotentiallyVisibleAreas
+		{
+		public:
+			CCollectPotentiallyVisibleAreas(CUtlVector<CNavArea*>* collection)
+			{
+				m_collection = collection;
+			}
+
+			bool operator() (CNavArea* baseArea)
+			{
+				m_collection->AddToTail(baseArea);
+				return true;
+			}
+
+			CUtlVector<CNavArea*>* m_collection;
+		};
+
+		CUtlVector<CNavArea*> visibleAreas;
+		CCollectPotentiallyVisibleAreas collect(&visibleAreas);
+		myArea->ForAllPotentiallyVisibleAreas(collect);
+
+		CUtlVector<CNEO_Player*> mates;
+		mates.AddToTail(this);
+
+		if (NEORules() && NEORules()->IsTeamplay())
+		{
+			CTeam* myTeam = GetGlobalTeam(GetTeamNumber());
+			if (myTeam)
+			{
+				for (int i = 0; i < myTeam->GetNumPlayers(); ++i)
+				{
+					CNEO_Player* mate = (CNEO_Player*)myTeam->GetPlayer(i);
+					if (mate && mate != this && mate->IsAlive() && mate->GetLastKnownArea())
+					{
+						mates.AddToTail(mate);
+					}
+				}
+			}
+		}
+
+		CUtlVector<CNavArea*> candidateAreas;
+		for (int i = 0; i < visibleAreas.Count(); ++i)
+		{
+			CNavArea* area = visibleAreas[i];
+			if (!area)
+				continue;
+
+			if (area == myArea)
+				continue;
+
+			bool isCovered = false;
+			for (int j = 0; j < mates.Count(); ++j)
+			{
+				CNEO_Player* mate = mates[j];
+				Vector mateEye, mateForward;
+				mate->EyePositionAndVectors(&mateEye, &mateForward, nullptr, nullptr);
+
+				Vector toArea = area->GetCenter() - mateEye;
+				toArea.NormalizeInPlace();
+
+				float dot = DotProduct(mateForward, toArea);
+				if (dot > 0.7f)
+				{
+					isCovered = true;
+					break;
+				}
+			}
+
+			if (!isCovered)
+			{
+				candidateAreas.AddToTail(area);
+			}
+		}
+
+		if (candidateAreas.Count() > 0)
+		{
+			int idx = RandomInt(0, candidateAreas.Count() - 1);
+			CNavArea* chosenArea = candidateAreas[idx];
+			if (chosenArea)
+			{
+				Vector gazeSpot = chosenArea->GetCenter() + Vector(0, 0, 0.75f * HumanHeight);
+				GetBodyInterface()->AimHeadTowards(
+					gazeSpot,
+					IBody::IMPORTANT,
+					1.0f,
+					nullptr,
+					"Teammate-aware scanning"
+				);
+			}
+		}
+	}
+
 	const float maxLookInterval = 1.0f;
 	m_lookAtEnemyInvasionAreasTimer.Start(RandomFloat(0.333f, maxLookInterval));
 }
