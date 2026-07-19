@@ -22,6 +22,7 @@
 #include "neo_weapon_loadout.h"
 #include "behavior/neo_bot_behavior.h"
 #include "neo_crosshair.h"
+#include "neo/bot/neo_bot_path_reservation.h"
 
 ConVar neo_bot_notice_gunfire_range("neo_bot_notice_gunfire_range", "3000", FCVAR_GAMEDLL);
 ConVar neo_bot_notice_quiet_gunfire_range("neo_bot_notice_quiet_gunfire_range", "500", FCVAR_GAMEDLL);
@@ -1183,11 +1184,207 @@ public:
 // Update our view to watch where members of the given team will be coming from
 void CNEOBot::UpdateLookingAroundForIncomingPlayers(bool lookForEnemies)
 {
-	if (!m_lookAtEnemyInvasionAreasTimer.IsElapsed())
-		return;
+    if (!lookForEnemies || !m_lookAtEnemyInvasionAreasTimer.IsElapsed())
+	{
+        return;
+	}
 
-	const float maxLookInterval = 1.0f;
-	m_lookAtEnemyInvasionAreasTimer.Start(RandomFloat(0.333f, maxLookInterval));
+    const CKnownEntity *threat = GetVisionInterface()->GetPrimaryKnownThreat(false);
+    if (threat)
+	{
+        return;
+	}
+
+    CNavArea *myArea = GetLastKnownArea();
+    if (!myArea)
+	{
+        return;
+	}
+
+    // ------------------------------------------------------------
+    // 1. Collect all potentially visible nav areas
+    // ------------------------------------------------------------
+    CUtlVector<CNavArea*> visibleAreas;
+    {
+        class CCollectPotentiallyVisibleAreas
+        {
+        public:
+            CCollectPotentiallyVisibleAreas(CUtlVector<CNavArea*> *out) : m_out(out) {}
+            bool operator()(CNavArea *area)
+            {
+                m_out->AddToTail(area);
+                return true;
+            }
+            CUtlVector<CNavArea*> *m_out;
+        };
+
+        CCollectPotentiallyVisibleAreas collector(&visibleAreas);
+        myArea->ForAllPotentiallyVisibleAreas(collector);
+    }
+
+    // ------------------------------------------------------------
+    // 2. Collect visible teammates (LOS + alive)
+    // ------------------------------------------------------------
+    CUtlVector<CNEO_Player*> mates;
+    mates.AddToTail(this); // include self for consistency
+
+    if (NEORules() && NEORules()->IsTeamplay())
+    {
+        if (CTeam *team = GetGlobalTeam(GetTeamNumber()))
+        {
+            for (int i = 0; i < team->GetNumPlayers(); ++i)
+            {
+                CNEO_Player *mate = static_cast<CNEO_Player*>(team->GetPlayer(i));
+                if (!mate || mate == this || !mate->IsAlive())
+                    continue;
+
+                // LOS check: cheap and already available
+                if (!IsLineOfSightClear(mate->GetAbsOrigin()))
+                    continue;
+
+                mates.AddToTail(mate);
+            }
+        }
+    }
+
+    // ------------------------------------------------------------
+    // 3. Build banned angle intervals (±15° around each teammate)
+    // ------------------------------------------------------------
+    struct AngleInterval { float minDeg, maxDeg; };
+    CUtlVector<AngleInterval> banned;
+
+    const Vector myPos = GetAbsOrigin();
+
+    // Bot forward direction
+    QAngle eyeAngles = EyeAngles();
+    Vector forward;
+    AngleVectors(eyeAngles, &forward, nullptr, nullptr);
+    forward.NormalizeInPlace();
+
+    float myYaw = UTIL_VecToYaw(forward);
+
+    for (int i = 0; i < mates.Count(); ++i)
+    {
+        CNEO_Player *mate = mates[i];
+        if (!mate || mate == this)
+            continue;
+
+        Vector toMate = mate->GetAbsOrigin() - myPos;
+        if (toMate.IsZero())
+            continue;
+
+        toMate.NormalizeInPlace();
+
+        float mateYaw = UTIL_VecToYaw(toMate);
+        float signedAngle = AngleNormalize(mateYaw - myYaw);
+
+        // ±15° banned cone
+        banned.AddToTail({ signedAngle - 15.0f, signedAngle + 15.0f });
+    }
+
+    // ------------------------------------------------------------
+    // 4. Filter candidate nav areas by angle
+    // ------------------------------------------------------------
+    CUtlVector<CNavArea*> candidateAreas;
+
+    for (int i = 0; i < visibleAreas.Count(); ++i)
+    {
+        CNavArea *area = visibleAreas[i];
+        if (!area || area == myArea)
+            continue;
+
+        Vector toArea = area->GetCenter() - myPos;
+        if (toArea.IsZero())
+            continue;
+
+        toArea.NormalizeInPlace();
+
+        float areaYaw = UTIL_VecToYaw(toArea);
+        float signedAngleArea = AngleNormalize(areaYaw - myYaw);
+
+        bool blocked = false;
+        for (int j = 0; j < banned.Count(); ++j)
+        {
+            const AngleInterval &iv = banned[j];
+            if (signedAngleArea >= iv.minDeg && signedAngleArea <= iv.maxDeg)
+            {
+                blocked = true;
+                break;
+            }
+        }
+
+        if (!blocked)
+            candidateAreas.AddToTail(area);
+    }
+
+    // ------------------------------------------------------------
+    // 5. Choose a candidate area to look at
+    // ------------------------------------------------------------
+    if (candidateAreas.Count() > 0)
+    {
+		float oldestTime = FLT_MAX;
+		CUtlVector<CNavArea*> oldestAreas;
+
+		for (int i = 0; i < candidateAreas.Count(); ++i)
+		{
+			CNavArea *area = candidateAreas[i];
+			if (!area)
+				continue;
+
+			float t = CNEOBotPathReservations()->GetLastObservedTime(area->GetID(), GetTeamNumber());
+			if (t < oldestTime)
+			{
+				oldestTime = t;
+				oldestAreas.RemoveAll();
+				oldestAreas.AddToTail(area);
+			}
+			else if (t == oldestTime)
+			{
+				oldestAreas.AddToTail(area);
+			}
+		}
+
+		CNavArea *chosen = nullptr;
+		if (oldestAreas.Count() > 0)
+		{
+			int idx = RandomInt(0, oldestAreas.Count() - 1);
+			chosen = oldestAreas[idx];
+		}
+
+		if (chosen)
+		{
+			Vector gazeSpot = chosen->GetCenter() + Vector(0, 0, 0.75f * HumanHeight);
+			GetBodyInterface()->AimHeadTowards(
+				gazeSpot,
+				IBody::IMPORTANT,
+				0.3f,
+				nullptr,
+				"Teammate-aware scanning"
+			);
+
+			// Compute yaw toward chosen area
+			Vector toChosen = chosen->GetCenter() - myPos;
+			float chosenYaw = UTIL_VecToYaw(toChosen);
+
+			// Always update the chosen area's timestamp first
+			CNEOBotPathReservations()->UpdateLastObservedTime(chosen->GetID(), GetTeamNumber(), gpGlobals->curtime);
+
+			// Update timestamps for all potentially visible areas in ±45° cone
+			CNEOBotPathReservations()->UpdateLastObservedTimeCone(
+				this,
+				visibleAreas,
+				chosenYaw,
+				45.0f
+			);
+		}
+    }
+    // else: no candidate areas → fallback to natural forward/path view
+
+    // ------------------------------------------------------------
+    // 6. Restart timer
+    // ------------------------------------------------------------
+    const float maxLookInterval = 1.0f;
+    m_lookAtEnemyInvasionAreasTimer.Start(RandomFloat(0.333f, maxLookInterval));
 }
 
 
