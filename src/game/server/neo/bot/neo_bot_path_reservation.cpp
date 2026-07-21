@@ -249,6 +249,7 @@ void CNEOBotPathReservationSystem::Clear()
     {
         m_Reservations[team].RemoveAll();
         m_AreaPathCounts[team].RemoveAll();
+        m_AreaTeammateLastObservedTime[team].RemoveAll();
     }
     m_BotReservedAreas.RemoveAll();
     m_AreaAvoidPenalties.RemoveAll();
@@ -342,3 +343,86 @@ float CNEOBotPathReservationSystem::GetAreaAvoidPenalty(unsigned int navAreaID) 
     }
     return 0.0f;
 }
+
+//-------------------------------------------------------------------------------------------------
+float CNEOBotPathReservationSystem::GetLastObservedTime(int areaID, int teamID) const
+{
+	if (teamID < 0 || teamID >= TEAM__TOTAL)
+	{
+		return 0.0f;
+	}
+
+	int idx = m_AreaTeammateLastObservedTime[teamID].Find(areaID);
+	if (idx == m_AreaTeammateLastObservedTime[teamID].InvalidIndex())
+	{
+		return 0.0f;
+	}
+
+	return m_AreaTeammateLastObservedTime[teamID][idx];
+}
+
+//-------------------------------------------------------------------------------------------------
+void CNEOBotPathReservationSystem::UpdateLastObservedTime(int areaID, int teamID, float time)
+{
+	if (teamID < 0 || teamID >= TEAM__TOTAL)
+	{
+		return;
+	}
+
+	int idx = m_AreaTeammateLastObservedTime[teamID].Find(areaID);
+	if (idx == m_AreaTeammateLastObservedTime[teamID].InvalidIndex())
+	{
+		m_AreaTeammateLastObservedTime[teamID].Insert(areaID, time);
+	}
+	else
+	{
+		m_AreaTeammateLastObservedTime[teamID][idx] = time;
+	}
+}
+
+//-------------------------------------------------------------------------------------------------
+void CNEOBotPathReservationSystem::UpdateLastObservedTimeCone(
+	CNEOBot *bot,
+	const CUtlVector<CNavArea*> &visibleAreas,
+	float gazeYaw,
+	float halfAngleDeg
+)
+{
+	if (!bot)
+	{
+		return;
+	}
+
+	int teamID = bot->GetTeamNumber();
+	if (teamID < 0 || teamID >= TEAM__TOTAL)
+	{
+		return;
+	}
+
+	const Vector &myPos = bot->GetAbsOrigin();
+
+	for (int i = 0; i < visibleAreas.Count(); ++i)
+	{
+		CNavArea *area = visibleAreas[i];
+		if (!area)
+		{
+			continue;
+		}
+
+		Vector toArea = area->GetCenter() - myPos;
+		if (toArea.IsZero())
+		{
+			UpdateLastObservedTime(area->GetID(), teamID, gpGlobals->curtime);
+			continue;
+		}
+
+		float areaYaw = UTIL_VecToYaw(toArea);
+		float delta = AngleNormalize(areaYaw - gazeYaw);
+
+		if (fabs(delta) <= halfAngleDeg)
+		{
+			UpdateLastObservedTime(area->GetID(), teamID, gpGlobals->curtime);
+		}
+	}
+}
+

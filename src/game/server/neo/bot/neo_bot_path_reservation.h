@@ -48,6 +48,7 @@ public:
         {
             m_Reservations[i].SetLessFunc(ReservationLessFunc);
             m_AreaPathCounts[i].SetLessFunc(ReservationLessFunc);
+            m_AreaTeammateLastObservedTime[i].SetLessFunc(ReservationLessFunc);
         }
     }
 
@@ -64,6 +65,15 @@ public:
     void IncrementAreaAvoidPenalty(unsigned int navAreaID, float penaltyAmount);
     float GetAreaAvoidPenalty(unsigned int navAreaID) const;
 
+    float GetLastObservedTime(int areaID, int teamID) const;
+    void UpdateLastObservedTime(int areaID, int teamID, float time);
+    void UpdateLastObservedTimeCone(
+        CNEOBot *bot,
+        const CUtlVector<CNavArea*> &visibleAreas,
+        float gazeYaw,
+        float halfAngleDeg
+    );
+
     // Allow the global accessor to access private members if needed, though constructor handles init now.
     friend CNEOBotPathReservationSystem* CNEOBotPathReservations();
 
@@ -71,6 +81,7 @@ private:
     CUtlMap<int, ReservationInfo> m_Reservations[TEAM__TOTAL];
     CUtlMap<EHANDLE, BotReservedAreas_t> m_BotReservedAreas;
     CUtlMap<int, int> m_AreaPathCounts[TEAM__TOTAL];
+    CUtlMap<int, float> m_AreaTeammateLastObservedTime[TEAM__TOTAL];
     CUtlMap<unsigned int, float> m_AreaAvoidPenalties;
 };
 

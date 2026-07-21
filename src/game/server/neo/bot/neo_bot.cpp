@@ -21,6 +21,7 @@
 #include "neo_weapon_loadout.h"
 #include "behavior/neo_bot_behavior.h"
 #include "neo_crosshair.h"
+#include "neo/bot/neo_bot_path_reservation.h"
 
 ConVar neo_bot_notice_gunfire_range("neo_bot_notice_gunfire_range", "3000", FCVAR_GAMEDLL);
 ConVar neo_bot_notice_quiet_gunfire_range("neo_bot_notice_quiet_gunfire_range", "500", FCVAR_GAMEDLL);
@@ -1181,18 +1182,22 @@ public:
 // Update our view to watch where members of the given team will be coming from
 void CNEOBot::UpdateLookingAroundForIncomingPlayers(bool lookForEnemies)
 {
-    // Only run periodically
-    if (!m_lookAtEnemyInvasionAreasTimer.IsElapsed())
+    if (!lookForEnemies || !m_lookAtEnemyInvasionAreasTimer.IsElapsed())
+	{
         return;
+	}
 
-    // If we have an active threat, do not run angle-coverage logic
     const CKnownEntity *threat = GetVisionInterface()->GetPrimaryKnownThreat(false);
     if (threat)
+	{
         return;
+	}
 
     CNavArea *myArea = GetLastKnownArea();
     if (!myArea)
+	{
         return;
+	}
 
     // ------------------------------------------------------------
     // 1. Collect all potentially visible nav areas
@@ -1315,23 +1320,60 @@ void CNEOBot::UpdateLookingAroundForIncomingPlayers(bool lookForEnemies)
     // ------------------------------------------------------------
     if (candidateAreas.Count() > 0)
     {
-		// Pick a random surviving candidate area
-		if (candidateAreas.Count() > 0)
-		{
-			int idx = RandomInt(0, candidateAreas.Count() - 1);
-			CNavArea *chosen = candidateAreas[idx];
+		float oldestTime = FLT_MAX;
+		CUtlVector<CNavArea*> oldestAreas;
 
-			if (chosen)
+		for (int i = 0; i < candidateAreas.Count(); ++i)
+		{
+			CNavArea *area = candidateAreas[i];
+			if (!area)
+				continue;
+
+			float t = CNEOBotPathReservations()->GetLastObservedTime(area->GetID(), GetTeamNumber());
+			if (t < oldestTime)
 			{
-				Vector gazeSpot = chosen->GetCenter() + Vector(0, 0, 0.75f * HumanHeight);
-				GetBodyInterface()->AimHeadTowards(
-					gazeSpot,
-					IBody::IMPORTANT,
-					0.3f,
-					nullptr,
-					"Teammate-aware scanning"
-				);
+				oldestTime = t;
+				oldestAreas.RemoveAll();
+				oldestAreas.AddToTail(area);
 			}
+			else if (t == oldestTime)
+			{
+				oldestAreas.AddToTail(area);
+			}
+		}
+
+		CNavArea *chosen = nullptr;
+		if (oldestAreas.Count() > 0)
+		{
+			int idx = RandomInt(0, oldestAreas.Count() - 1);
+			chosen = oldestAreas[idx];
+		}
+
+		if (chosen)
+		{
+			Vector gazeSpot = chosen->GetCenter() + Vector(0, 0, 0.75f * HumanHeight);
+			GetBodyInterface()->AimHeadTowards(
+				gazeSpot,
+				IBody::IMPORTANT,
+				0.3f,
+				nullptr,
+				"Teammate-aware scanning"
+			);
+
+			// Compute yaw toward chosen area
+			Vector toChosen = chosen->GetCenter() - myPos;
+			float chosenYaw = UTIL_VecToYaw(toChosen);
+
+			// Always update the chosen area's timestamp first
+			CNEOBotPathReservations()->UpdateLastObservedTime(chosen->GetID(), GetTeamNumber(), gpGlobals->curtime);
+
+			// Update timestamps for all potentially visible areas in ±45° cone
+			CNEOBotPathReservations()->UpdateLastObservedTimeCone(
+				this,
+				visibleAreas,
+				chosenYaw,
+				45.0f
+			);
 		}
     }
     // else: no candidate areas → fallback to natural forward/path view
