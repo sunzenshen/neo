@@ -4,19 +4,10 @@
 #include "bot/behavior/neo_bot_ctg_enemy_intercept_cap_path.h"
 #include "bot/behavior/neo_bot_ctg_enemy.h"
 #include "bot/behavior/neo_bot_ctg_enemy_chase.h"
-#include "bot/behavior/neo_bot_attack.h"
 #include "bot/neo_bot_path_compute.h"
 #include "neo_gamerules.h"
 #include "neo_player_shared.h"
 #include "vphysics_interface.h"
-
-ConVar sv_neo_bot_ctg_enemy_rush_on_sight( "sv_neo_bot_ctg_enemy_rush_on_sight", "1", FCVAR_CHEAT,
-	"CTG: 1 = a bot holding a cut-off gives it up and charges once the enemy ghost carrier is close "
-	"enough to see it through walls. 0 = hold the ground and make the carrier come through it." );
-
-ConVar sv_neo_bot_ctg_enemy_hold_from_cover( "sv_neo_bot_ctg_enemy_hold_from_cover", "0", FCVAR_CHEAT,
-	"CTG: 1 = a bot holding a cut-off against the enemy ghost carrier fights an approaching threat "
-	"through CNEOBotAttack, aimed at the cut-off, instead of standing on the spot and shooting." );
 
 ConVar sv_neo_bot_ctg_enemy_intercept_replan_seconds( "sv_neo_bot_ctg_enemy_intercept_replan_seconds", "5", FCVAR_CHEAT,
 	"CTG: seconds between an intercepting bot re-picking its cut-off on the enemy ghost carrier's route, to catch the carrier taking a line it did not predict.",
@@ -159,29 +150,10 @@ ActionResult< CNEOBot > CNEOBotCtgEnemyInterceptCapPath::Update( CNEOBot *me, fl
 	{
 		// The carrier sees every enemy within sv_neo_ghost_view_distance through walls, so once it
 		// is that close there is nothing left to ambush and waiting only invites being flanked.
-		//
-		// The counter-argument, and the reason this is a knob: the cut-off is ground the carrier
-		// has to cross, and giving it up to run at a carrier that is travelling with its escorts
-		// means meeting them in the open, on their terms, one defender at a time.
 		const float flGhostViewUnits = sv_neo_ghost_view_distance.GetFloat() / METERS_PER_INCH;
-		if ( sv_neo_bot_ctg_enemy_rush_on_sight.GetBool()
-			&& me->GetAbsOrigin().DistToSqr( pGhostCarrier->GetAbsOrigin() ) < Square( flGhostViewUnits ) )
+		if ( me->GetAbsOrigin().DistToSqr( pGhostCarrier->GetAbsOrigin() ) < Square( flGhostViewUnits ) )
 		{
 			return ChangeTo( new CNEOBotCtgEnemyChase, "Carrier is on top of the cut-off - chasing" );
-		}
-
-		// A holding bot still shoots - CNEOBotMainAction::FireWeaponAtEnemy runs whatever the leaf
-		// action is - but it shoots from wherever the cut-off area's centre happens to be, which is
-		// as often as not open ground, while the attackers coming at it advance under cover. With
-		// this on, a threat turns the hold into a fight for the same spot: CNEOBotAttack takes the
-		// cut-off as its goal, so it works towards cover *facing* the ground being held rather than
-		// abandoning it.
-		const CKnownEntity *threat = me->GetVisionInterface()->GetPrimaryKnownThreat( true );
-		if ( sv_neo_bot_ctg_enemy_hold_from_cover.GetBool()
-			&& threat && !threat->IsObsolete()
-			&& me->GetIntentionInterface()->ShouldAttack( me, threat ) )
-		{
-			return SuspendFor( new CNEOBotAttack( m_cutOff.vecPos ), "Fighting for the cut-off" );
 		}
 
 		// Hold the cut-off, watching the way the carrier has to come.
