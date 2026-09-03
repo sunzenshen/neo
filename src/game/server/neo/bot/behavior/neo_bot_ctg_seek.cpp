@@ -11,10 +11,6 @@
 #include "bot/neo_bot_path_compute.h"
 #include "weapon_ghost.h"
 
-ConVar sv_neo_bot_ctg_enemy_priority( "sv_neo_bot_ctg_enemy_priority", "0", FCVAR_CHEAT,
-	"CTG: 1 = while an enemy is carrying the ghost, a bot answers that before it answers a threat "
-	"it can see, instead of the other way round." );
-
 //---------------------------------------------------------------------------------------------
 ActionResult< CNEOBot > CNEOBotCtgSeek::Update( CNEOBot *me, float interval )
 {
@@ -33,7 +29,7 @@ ActionResult< CNEOBot > CNEOBotCtgSeek::Update( CNEOBot *me, float interval )
 	// the carrier the moment it sees a threat, and a bot holding a cut-off shoots what walks into
 	// it. What changes is that the fight is anchored to the carrier's route instead of to wherever
 	// the first escort happened to appear.
-	if ( sv_neo_bot_ctg_enemy_priority.GetBool() && NEORules()->GhostExists() )
+	if ( NEORules()->GhostExists() )
 	{
 		const int iGhosterPlayer = NEORules()->GetGhosterPlayer();
 		if ( iGhosterPlayer > 0 && iGhosterPlayer <= gpGlobals->maxClients )
@@ -68,22 +64,19 @@ ActionResult< CNEOBot > CNEOBotCtgSeek::Update( CNEOBot *me, float interval )
 		return SuspendFor( new CNEOBotCtgLoneWolf, "I'm the last one on my team!" );
 	}
 
+	// The enemy-carrier case is handled above, before the combat suspend; these two are the ones
+	// where the ghost is on our own side, and they stay below it deliberately. Raising the escort
+	// would do the *attacking* team the same favour, which is the opposite of the intent.
 	if (NEORules()->GhostExists())
 	{
 		int iGhosterPlayer = NEORules()->GetGhosterPlayer();
 		if (iGhosterPlayer > 0 && iGhosterPlayer <= gpGlobals->maxClients)
 		{
 			CNEO_Player* pGhostCarrier = ToNEOPlayer(UTIL_PlayerByIndex(iGhosterPlayer));
-			if (pGhostCarrier && pGhostCarrier != me)
+			if (pGhostCarrier && pGhostCarrier != me
+				&& pGhostCarrier->GetTeamNumber() == me->GetTeamNumber())
 			{
-				if (pGhostCarrier->GetTeamNumber() == me->GetTeamNumber())
-				{
-					return SuspendFor(new CNEOBotCtgEscort, "Protecting the ghost carrier!");
-				}
-				else
-				{
-					return SuspendFor(new CNEOBotCtgEnemy, "Stopping the ghost carrier!");
-				}
+				return SuspendFor(new CNEOBotCtgEscort, "Protecting the ghost carrier!");
 			}
 
 			// If I have the ghost, switch to ghost behavior

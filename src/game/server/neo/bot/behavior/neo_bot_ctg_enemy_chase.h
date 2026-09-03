@@ -35,6 +35,5 @@ public:
 private:
 	ChasePath m_chasePath;
 	CountdownTimer m_routeTypeTimer;		// throttles the FASTEST-vs-DEFAULT re-evaluation
-	CountdownTimer m_redecideTimer;			// throttles the look for a cut-off worth breaking off for
 	RouteType m_routeType = DEFAULT_ROUTE;
 };
