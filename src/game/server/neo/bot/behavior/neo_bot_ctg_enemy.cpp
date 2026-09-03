@@ -27,18 +27,18 @@ ConVar sv_neo_bot_ctg_enemy_force_chase( "sv_neo_bot_ctg_enemy_force_chase", "0"
 	"NEO harness debug: 1 = never intercept, always chase the enemy ghost carrier directly." );
 
 //---------------------------------------------------------------------------------------------
-// The cap zone the carrier is trying to reach: the active zone nearest it that its own team scores
-// in. This is the same test CNEOBotCtgCarrier::GetNearestCapPoint uses to pick its objective, run
-// from the outside on public information (the marker gives the carrier away, cap zones are fixed).
+// The active scoring zone nearest vecFrom that iTeam can capture into - either owned by iTeam, or
+// neutral (TEAM_ANY). A neutral zone is capturable by whichever team gets there first
+// (CNEOGhostCapturePoint::Think_CheckMyRadius's own eligibility check treats it identically), so
+// excluding it here would make a bot blind to a scoring option that is genuinely open to it - a
+// bug fixed 2026-09-03 in this function and in CNEOBotCtgCarrier::GetNearestCapPoint and
+// CNEOBotCtgEscort::UpdateGoalPosition, which had the same strict-equality mistake.
 //
 // Straight-line distance, deliberately. It is the naive guess a human defender makes from the
 // marker, and it happens to be exactly what the carrier bot does, so ranking by travel distance
 // instead would be a worse prediction dressed up as a better one.
-CNEOGhostCapturePoint *CNEOBotCtgEnemy::CarrierGoalCap( CNEO_Player *pGhostCarrier )
+CNEOGhostCapturePoint *CNEOBotCtgEnemy::NearestCapForTeam( int iTeam, const Vector &vecFrom )
 {
-	const int iCarrierTeam = pGhostCarrier->GetTeamNumber();
-	const Vector vecCarrier = pGhostCarrier->GetAbsOrigin();
-
 	CNEOGhostCapturePoint *pBest = nullptr;
 	float flBestDistSq = FLT_MAX;
 
@@ -46,12 +46,18 @@ CNEOGhostCapturePoint *CNEOBotCtgEnemy::CarrierGoalCap( CNEO_Player *pGhostCarri
 	{
 		CNEOGhostCapturePoint *pCap = dynamic_cast< CNEOGhostCapturePoint * >(
 			UTIL_EntityByIndex( NEORules()->m_pGhostCaps[i] ) );
-		if ( !pCap || !pCap->GetActive() || pCap->owningTeamAlternate() != iCarrierTeam )
+		if ( !pCap || !pCap->GetActive() )
 		{
 			continue;
 		}
 
-		const float flDistSq = vecCarrier.DistToSqr( pCap->GetAbsOrigin() );
+		const int iCapTeam = pCap->owningTeamAlternate();
+		if ( iCapTeam != iTeam && iCapTeam != TEAM_ANY )
+		{
+			continue;
+		}
+
+		const float flDistSq = vecFrom.DistToSqr( pCap->GetAbsOrigin() );
 		if ( flDistSq < flBestDistSq )
 		{
 			flBestDistSq = flDistSq;
@@ -60,6 +66,14 @@ CNEOGhostCapturePoint *CNEOBotCtgEnemy::CarrierGoalCap( CNEO_Player *pGhostCarri
 	}
 
 	return pBest;
+}
+
+//---------------------------------------------------------------------------------------------
+// The cap zone the carrier is trying to reach. Run from the outside on public information - the
+// ghost marker gives the carrier's position away, cap zones are fixed map geometry.
+CNEOGhostCapturePoint *CNEOBotCtgEnemy::CarrierGoalCap( CNEO_Player *pGhostCarrier )
+{
+	return NearestCapForTeam( pGhostCarrier->GetTeamNumber(), pGhostCarrier->GetAbsOrigin() );
 }
 
 //---------------------------------------------------------------------------------------------
