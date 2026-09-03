@@ -4682,6 +4682,21 @@ void CNEORules::SetRoundStatus(NeoRoundStatus status)
 			{
 				pEntGameCfg->m_OnRoundStart.FireOutput(nullptr, pEntGameCfg);
 			}
+
+			// NEO-HARNESS-TEMP: forensic reconstruction. Bots get added and auto-balanced onto a
+			// team incrementally as neo_bot_quota fills the roster, and each gets an initial spawn
+			// at whatever team it was placed on *before* the round's final attacker/defender spawn
+			// set is locked in - so the first several NEO_FORENSIC_POS samples in a match can show
+			// a player at one corner of the map, then jump to the other, well before any real kill
+			// or objective event. This line is the honest boundary: nothing before it, for this
+			// round, reflects the round actually being played. Position/kill samples earlier than
+			// this timestamp should be discarded by analysis, not just the ones before round 1 -
+			// the same bot-placement settling can happen at the start of any round, though round 1
+			// is where it is most visible because every player is joining at once.
+			if (sv_neo_forensic_log.GetBool())
+			{
+				Msg("NEO_FORENSIC_ROUND_LIVE: round=%d t=%.2f\n", roundNumber(), gpGlobals->curtime);
+			}
 		}
 #endif
 	}
