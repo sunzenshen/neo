@@ -4,18 +4,22 @@
 #include "Path/NextBotChasePath.h"
 #include "nav_pathfind.h"
 
-class CNEO_Player;
-
 //--------------------------------------------------------------------------------------------------------
 // Runs an enemy ghost carrier down directly. Terminal for the duration of the carry: it only ends
-// when the carrier stops being a valid enemy ghost holder (dies, drops the ghost, or caps), at
+// when the carrier stops being a valid enemy ghost holder (dies, drops the ghost, or captures), at
 // which point control returns to the seek dispatcher for a fresh decision.
 //
-// The route type is re-evaluated on a slow timer:
-//   - FASTEST_ROUTE while the carrier is closer to its cap than this bot is (we are behind and
-//     need to close the distance)
-//   - DEFAULT_ROUTE  otherwise (we are already ahead of the carrier relative to its cap, so the
-//     normal route keeps us between it and the goal)
+// The route type is re-evaluated on a slow timer, off whether a cut-off still exists - which is
+// the same question as whether this bot is ahead of the carrier or behind it:
+//   - FASTEST_ROUTE when there is no point on the carrier's route we can still beat it to. We are
+//     behind it and cannot afford a detour.
+//   - DEFAULT_ROUTE otherwise. That route type carries the friendly-reservation penalty and a
+//     per-bot route preference, so defenders who are already ahead of the carrier come at it by
+//     different lines instead of stacking into one file.
+//
+// The bot's view is deliberately left to CNEOBot::UpdateLookingAroundForEnemies. It already aims at
+// the carrier when it is visible and scans where it should appear when it is not, and it does so
+// through the vision system's recognition delay rather than around it.
 class CNEOBotCtgEnemyChase : public Action< CNEOBot >
 {
 public:
@@ -30,7 +34,7 @@ public:
 
 private:
 	ChasePath m_chasePath;
-	CountdownTimer m_carrierGlanceTimer;	// throttle the look-toward-carrier glance
-	CountdownTimer m_routeTypeTimer;		// throttle the FASTEST-vs-DEFAULT re-evaluation
+	CountdownTimer m_routeTypeTimer;		// throttles the FASTEST-vs-DEFAULT re-evaluation
+	CountdownTimer m_redecideTimer;			// throttles the look for a cut-off worth breaking off for
 	RouteType m_routeType = DEFAULT_ROUTE;
 };

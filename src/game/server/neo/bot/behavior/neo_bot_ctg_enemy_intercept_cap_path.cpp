@@ -4,39 +4,123 @@
 #include "bot/behavior/neo_bot_ctg_enemy_intercept_cap_path.h"
 #include "bot/behavior/neo_bot_ctg_enemy.h"
 #include "bot/behavior/neo_bot_ctg_enemy_chase.h"
+#include "bot/behavior/neo_bot_attack.h"
 #include "bot/neo_bot_path_compute.h"
 #include "neo_gamerules.h"
+#include "neo_player_shared.h"
+#include "vphysics_interface.h"
 
-ConVar sv_neo_bot_ctg_enemy_intercept_replan_seconds( "sv_neo_bot_ctg_enemy_intercept_replan_seconds", "15", FCVAR_CHEAT,
-	"CTG: seconds between an intercepting bot re-plotting the enemy ghost carrier's route to its cap, to catch it veering toward another.",
-	true, 1.0f, false, 0.0f );
+ConVar sv_neo_bot_ctg_enemy_rush_on_sight( "sv_neo_bot_ctg_enemy_rush_on_sight", "1", FCVAR_CHEAT,
+	"CTG: 1 = a bot holding a cut-off gives it up and charges once the enemy ghost carrier is close "
+	"enough to see it through walls. 0 = hold the ground and make the carrier come through it." );
+
+ConVar sv_neo_bot_ctg_enemy_hold_from_cover( "sv_neo_bot_ctg_enemy_hold_from_cover", "0", FCVAR_CHEAT,
+	"CTG: 1 = a bot holding a cut-off against the enemy ghost carrier fights an approaching threat "
+	"through CNEOBotAttack, aimed at the cut-off, instead of standing on the spot and shooting." );
+
+ConVar sv_neo_bot_ctg_enemy_intercept_replan_seconds( "sv_neo_bot_ctg_enemy_intercept_replan_seconds", "5", FCVAR_CHEAT,
+	"CTG: seconds between an intercepting bot re-picking its cut-off on the enemy ghost carrier's route, to catch the carrier taking a line it did not predict.",
+	true, 0.5f, false, 0.0f );
+
+// How close to the cut-off area's centre counts as being there. A nav area is wider than a player,
+// so standing anywhere in it is close enough to meet whoever comes through.
+static const float kCutOffArrivalTolerance = 64.0f;
+
+// How many nav areas back up the carrier's route to consider when picking a spot to watch.
+static const int kWatchAreaLimit = 12;
 
 //---------------------------------------------------------------------------------------------
-bool CNEOBotCtgEnemyInterceptCapPath::RecomputeCarrierRoute( CNEOBot *me )
+CNEOBotCtgEnemyInterceptCapPath::CNEOBotCtgEnemyInterceptCapPath( const CNEOBotCtgEnemy::CutOff &cutOff,
+	CNEOBotPredictedRoute &carrierRoute )
+	: m_cutOff( cutOff )
 {
-	CNEO_Player *pGhostCarrier = CNEOBotCtgEnemy::EnemyGhostCarrier( me );
-	if ( !pGhostCarrier )
+	m_carrierRoute.areas.Swap( carrierRoute.areas );
+	m_carrierRoute.travel.Swap( carrierRoute.travel );
+}
+
+//---------------------------------------------------------------------------------------------
+bool CNEOBotCtgEnemyInterceptCapPath::RepathToCutOff( CNEOBot *me )
+{
+	return CNEOBotPathCompute( me, m_path, m_cutOff.vecPos, FASTEST_ROUTE );
+}
+
+//---------------------------------------------------------------------------------------------
+// Re-pick the cut-off. Returns false when there is no longer one to head for, in which case the
+// caller drops to the chase rather than walking on with a plan it can no longer check.
+bool CNEOBotCtgEnemyInterceptCapPath::Replan( CNEOBot *me, CNEO_Player *pGhostCarrier )
+{
+	CNEOBotCtgEnemy::CutOff cutOff;
+	CNEOBotPredictedRoute carrierRoute;
+	if ( !CNEOBotCtgEnemy::FindCutOff( me, pGhostCarrier, cutOff, &carrierRoute ) )
 	{
 		return false;
 	}
 
-	float flRouteLength = 0.0f;
-	return CNEOBotCtgEnemy::CarrierRouteToGoal( me, pGhostCarrier, m_carrierRoute, flRouteLength, m_goalPos );
+	const bool bMoved = ( cutOff.pArea != m_cutOff.pArea );
+
+	m_cutOff = cutOff;
+	m_carrierRoute.areas.Swap( carrierRoute.areas );
+	m_carrierRoute.travel.Swap( carrierRoute.travel );
+
+	return !bMoved || RepathToCutOff( me );
+}
+
+//---------------------------------------------------------------------------------------------
+// Look back up the carrier's route, at the furthest point along it we still have a clear line to.
+// That is where the carrier should come into view, which beats staring at the wall its marker is
+// behind. Only ever called once the bot has arrived and stopped: a bot still travelling steers by
+// where it is looking, so forcing its view off the path would make it strafe there.
+void CNEOBotCtgEnemyInterceptCapPath::WatchForTheCarrier( CNEOBot *me )
+{
+	if ( !m_watchTimer.IsElapsed() )
+	{
+		return;
+	}
+	m_watchTimer.Start( 0.5f );
+
+	// Index 0 is the carrier's own area: there is nothing further back up the route to watch.
+	if ( m_cutOff.iCarrierRouteIndex <= 0 || m_cutOff.iCarrierRouteIndex >= m_carrierRoute.Count() )
+	{
+		return;
+	}
+
+	const Vector vecEyeOffset( 0, 0, HumanEyeHeight );
+	bool bFound = false;
+	Vector vecWatch = vec3_origin;
+
+	// One trace per area, so bound the walk: anything much further back than this is around a
+	// corner in practice, and the loop stops at the first area we cannot see anyway.
+	const int iStopAt = MAX( 0, m_cutOff.iCarrierRouteIndex - kWatchAreaLimit );
+	for ( int i = m_cutOff.iCarrierRouteIndex - 1; i >= iStopAt; --i )
+	{
+		const Vector vecSpot = m_carrierRoute.areas[i]->GetCenter() + vecEyeOffset;
+		if ( !me->GetVisionInterface()->IsLineOfSightClear( vecSpot ) )
+		{
+			break;
+		}
+
+		vecWatch = vecSpot;
+		bFound = true;
+	}
+
+	if ( bFound )
+	{
+		// IMPORTANT is the same weight the bot's own "look where a hidden threat might appear"
+		// scan uses, so this takes its turn with that scan instead of pinning the view.
+		me->GetBodyInterface()->AimHeadTowards( vecWatch, IBody::IMPORTANT, 1.0f, nullptr,
+			"Watching where the ghost carrier should appear" );
+	}
 }
 
 //---------------------------------------------------------------------------------------------
 ActionResult< CNEOBot > CNEOBotCtgEnemyInterceptCapPath::OnStart( CNEOBot *me, Action< CNEOBot > *priorAction )
 {
 	m_path.SetMinLookAheadDistance( me->GetDesiredPathLookAheadRange() );
+	m_watchTimer.Invalidate();
 
-	if ( !RecomputeCarrierRoute( me ) )
+	if ( !RepathToCutOff( me ) )
 	{
-		return ChangeTo( new CNEOBotCtgEnemyChase, "No carrier route to intercept" );
-	}
-
-	if ( !CNEOBotPathCompute( me, m_path, m_goalPos, FASTEST_ROUTE ) )
-	{
-		return ChangeTo( new CNEOBotCtgEnemyChase, "No path toward the carrier's cap" );
+		return ChangeTo( new CNEOBotCtgEnemyChase, "No path to the cut-off" );
 	}
 
 	m_replanTimer.Start( sv_neo_bot_ctg_enemy_intercept_replan_seconds.GetFloat() );
@@ -58,33 +142,80 @@ ActionResult< CNEOBot > CNEOBotCtgEnemyInterceptCapPath::Update( CNEOBot *me, fl
 		return Done( "No enemy ghost carrier" );
 	}
 
-	// The interception is complete the moment we are standing on the carrier's own predicted
-	// route: from here the direct chase is the right tool.
-	CNavArea *pMyArea = me->GetLastKnownArea();
-	if ( pMyArea && m_carrierRoute.HasElement( pMyArea ) )
-	{
-		return ChangeTo( new CNEOBotCtgEnemyChase, "Reached the carrier's route - chasing" );
-	}
-
-	// Slow re-plot: the carrier may have veered toward a different cap since we set out.
 	if ( m_replanTimer.IsElapsed() )
 	{
 		m_replanTimer.Start( sv_neo_bot_ctg_enemy_intercept_replan_seconds.GetFloat() );
 
-		if ( RecomputeCarrierRoute( me )
-			&& !CNEOBotPathCompute( me, m_path, m_goalPos, FASTEST_ROUTE ) )
+		if ( !Replan( me, pGhostCarrier ) )
 		{
-			return ChangeTo( new CNEOBotCtgEnemyChase, "Lost the path toward the carrier's cap" );
+			return ChangeTo( new CNEOBotCtgEnemyChase, "Lost the cut-off - chasing" );
 		}
+	}
+
+	const bool bArrived = ( me->GetLastKnownArea() == m_cutOff.pArea )
+		|| ( ( me->GetAbsOrigin() - m_cutOff.vecPos ).Length2DSqr() < Square( kCutOffArrivalTolerance ) );
+
+	if ( bArrived )
+	{
+		// The carrier sees every enemy within sv_neo_ghost_view_distance through walls, so once it
+		// is that close there is nothing left to ambush and waiting only invites being flanked.
+		//
+		// The counter-argument, and the reason this is a knob: the cut-off is ground the carrier
+		// has to cross, and giving it up to run at a carrier that is travelling with its escorts
+		// means meeting them in the open, on their terms, one defender at a time.
+		const float flGhostViewUnits = sv_neo_ghost_view_distance.GetFloat() / METERS_PER_INCH;
+		if ( sv_neo_bot_ctg_enemy_rush_on_sight.GetBool()
+			&& me->GetAbsOrigin().DistToSqr( pGhostCarrier->GetAbsOrigin() ) < Square( flGhostViewUnits ) )
+		{
+			return ChangeTo( new CNEOBotCtgEnemyChase, "Carrier is on top of the cut-off - chasing" );
+		}
+
+		// A holding bot still shoots - CNEOBotMainAction::FireWeaponAtEnemy runs whatever the leaf
+		// action is - but it shoots from wherever the cut-off area's centre happens to be, which is
+		// as often as not open ground, while the attackers coming at it advance under cover. With
+		// this on, a threat turns the hold into a fight for the same spot: CNEOBotAttack takes the
+		// cut-off as its goal, so it works towards cover *facing* the ground being held rather than
+		// abandoning it.
+		const CKnownEntity *threat = me->GetVisionInterface()->GetPrimaryKnownThreat( true );
+		if ( sv_neo_bot_ctg_enemy_hold_from_cover.GetBool()
+			&& threat && !threat->IsObsolete()
+			&& me->GetIntentionInterface()->ShouldAttack( me, threat ) )
+		{
+			return SuspendFor( new CNEOBotAttack( m_cutOff.vecPos ), "Fighting for the cut-off" );
+		}
+
+		// Hold the cut-off, watching the way the carrier has to come.
+		WatchForTheCarrier( me );
+		return Continue();
 	}
 
 	m_path.Update( me );
 	if ( !m_path.IsValid() )
 	{
-		// Reached the cap (or the path broke) without ever crossing the carrier's route -- it
-		// took a very different line. Fall back to the direct chase.
-		return ChangeTo( new CNEOBotCtgEnemyChase, "Arrived without intercepting - chasing" );
+		return ChangeTo( new CNEOBotCtgEnemyChase, "Lost the path to the cut-off - chasing" );
 	}
 
 	return Continue();
+}
+
+//---------------------------------------------------------------------------------------------
+EventDesiredResult< CNEOBot > CNEOBotCtgEnemyInterceptCapPath::OnStuck( CNEOBot *me )
+{
+	if ( !RepathToCutOff( me ) )
+	{
+		return TryChangeTo( new CNEOBotCtgEnemyChase, RESULT_TRY, "Stuck with no way to the cut-off - chasing" );
+	}
+
+	return TryContinue();
+}
+
+//---------------------------------------------------------------------------------------------
+EventDesiredResult< CNEOBot > CNEOBotCtgEnemyInterceptCapPath::OnMoveToFailure( CNEOBot *me, const Path *path, MoveToFailureType reason )
+{
+	if ( !RepathToCutOff( me ) )
+	{
+		return TryChangeTo( new CNEOBotCtgEnemyChase, RESULT_TRY, "Cannot reach the cut-off - chasing" );
+	}
+
+	return TryContinue();
 }

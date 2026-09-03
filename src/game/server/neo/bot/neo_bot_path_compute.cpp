@@ -39,17 +39,14 @@ static void CNEOBotReservePath(CNEOBot* me, PathFollower& path)
 	}
 }
 
-static bool CNEOBotPathComputeInternal(CNEOBot* bot, PathFollower& path, const Vector& goal, RouteType route, float maxPathLength, bool includeGoalIfPathFails, bool requireGoalArea, bool bReserve)
+bool CNEOBotPathCompute(CNEOBot* bot, PathFollower& path, const Vector& goal, RouteType route, float maxPathLength, bool includeGoalIfPathFails, bool requireGoalArea)
 {
 	Assert(goal.IsValid());
 
 	CNEOBotPathCost cost_with_reservations(bot, route);
 	if (path.Compute(bot, goal, cost_with_reservations, maxPathLength, includeGoalIfPathFails, requireGoalArea) && path.IsValid())
 	{
-		if (bReserve)
-		{
-			CNEOBotReservePath(bot, path);
-		}
+		CNEOBotReservePath(bot, path);
 		return true;
 	}
 
@@ -57,24 +54,11 @@ static bool CNEOBotPathComputeInternal(CNEOBot* bot, PathFollower& path, const V
 	cost_without_reservations.m_bIgnoreReservations = true;
 	if (path.Compute(bot, goal, cost_without_reservations, maxPathLength, includeGoalIfPathFails, requireGoalArea) && path.IsValid())
 	{
-		if (bReserve)
-		{
-			CNEOBotReservePath(bot, path);
-		}
+		CNEOBotReservePath(bot, path);
 		return true;
 	}
 
 	return false;
-}
-
-bool CNEOBotPathCompute(CNEOBot* bot, PathFollower& path, const Vector& goal, RouteType route, float maxPathLength, bool includeGoalIfPathFails, bool requireGoalArea)
-{
-	return CNEOBotPathComputeInternal(bot, path, goal, route, maxPathLength, includeGoalIfPathFails, requireGoalArea, /*bReserve=*/true);
-}
-
-bool CNEOBotPathPreview(CNEOBot* bot, PathFollower& path, const Vector& goal, RouteType route, float maxPathLength, bool includeGoalIfPathFails, bool requireGoalArea)
-{
-	return CNEOBotPathComputeInternal(bot, path, goal, route, maxPathLength, includeGoalIfPathFails, requireGoalArea, /*bReserve=*/false);
 }
 
 bool CNEOBotPathUpdateChase(CNEOBot* bot, ChasePath& path, CBaseEntity* subject, RouteType route, Vector* pPredictedSubjectPos)

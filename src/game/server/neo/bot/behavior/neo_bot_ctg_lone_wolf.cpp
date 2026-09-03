@@ -14,6 +14,10 @@
 #include "weapon_detpack.h"
 #include "weapon_ghost.h"
 
+ConVar sv_neo_bot_ctg_enemy_lone_wolf( "sv_neo_bot_ctg_enemy_lone_wolf", "0", FCVAR_CHEAT,
+	"CTG: 1 = the last bot alive on its team runs the same chase-or-cut-off decision against an "
+	"enemy ghost carrier as the rest of the team, instead of pathing straight at the ghost." );
+
 
 //---------------------------------------------------------------------------------------------
 ActionResult< CNEOBot >	CNEOBotCtgLoneWolf::OnStart( CNEOBot *me, Action< CNEOBot > *priorAction )
@@ -104,6 +108,16 @@ ActionResult< CNEOBot > CNEOBotCtgLoneWolf::ConsiderGhostInterception( CNEOBot *
 	{
 		me->EnableCloak( 3.0f );
 		return SuspendFor( new CNEOBotAttack, "Attacking the ghost carrier!" );
+	}
+
+	// The last bot alive on its team is the one the enemy carrier has to get past, and the one
+	// whose death decides whether the round ends in a capture at all - but the plain path below
+	// runs at where the carrier *is*, which from behind is a tail chase it cannot win. Hand the
+	// objective to the same decider the rest of the team uses, and take up the lone-wolf tools
+	// again when the carry is over.
+	if ( sv_neo_bot_ctg_enemy_lone_wolf.GetBool() )
+	{
+		return SuspendFor( new CNEOBotCtgEnemy, "Last one alive - cutting the carrier off" );
 	}
 
 	const Vector& vecInterceptGoal = NEORules()->GetGhostPos();

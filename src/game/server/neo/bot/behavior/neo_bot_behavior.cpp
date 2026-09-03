@@ -18,6 +18,10 @@
 #include "weapons/weapon_balc.h"
 
 ConVar neo_bot_path_lookahead_range( "neo_bot_path_lookahead_range", "300" );
+
+ConVar sv_neo_bot_ctg_target_carrier( "sv_neo_bot_ctg_target_carrier", "0", FCVAR_CHEAT,
+	"CTG: 1 = when a bot can see both the enemy ghost carrier and another enemy, it shoots the "
+	"carrier. Killing the carrier drops the ghost, so it is the dangerous one by definition." );
 ConVar neo_bot_sniper_aim_error( "neo_bot_sniper_aim_error", "0.01", FCVAR_CHEAT );
 ConVar neo_bot_sniper_aim_steady_rate( "neo_bot_sniper_aim_steady_rate", "10", FCVAR_CHEAT );
 ConVar neo_bot_debug_sniper( "neo_bot_debug_sniper", "0", FCVAR_CHEAT );
@@ -602,7 +606,26 @@ const CKnownEntity *CNEOBotMainAction::SelectMoreDangerousThreatInternal( const 
 	{
 		return threat2;
 	}
-	else if ( !isImmediateThreat1 && !isImmediateThreat2 )
+
+	// The two threats are equally immediate, so the tie is about to be settled on range alone. In
+	// CTG there is a better answer: killing the enemy carrying the ghost drops it, which ends the
+	// round's whole threat, and letting it through pays its entire team a rank-up. Which enemy is
+	// carrying is public - the ghost marker shows it to everyone - so this prioritises a target the
+	// bot can already see rather than reading the other team's intent. Deliberately placed after
+	// the immediacy test: an enemy about to kill this bot still outranks the objective.
+	if ( sv_neo_bot_ctg_target_carrier.GetBool() && NEORules()->GhostExists() )
+	{
+		const int iGhoster = NEORules()->GetGhosterPlayer();
+		const bool bCarrier1 = ( threat1->GetEntity() && threat1->GetEntity()->entindex() == iGhoster );
+		const bool bCarrier2 = ( threat2->GetEntity() && threat2->GetEntity()->entindex() == iGhoster );
+
+		if ( bCarrier1 != bCarrier2 )
+		{
+			return bCarrier1 ? threat1 : threat2;
+		}
+	}
+
+	if ( !isImmediateThreat1 && !isImmediateThreat2 )
 	{
 		// neither threat is immediately dangerous - use closest
 		return closerThreat;
