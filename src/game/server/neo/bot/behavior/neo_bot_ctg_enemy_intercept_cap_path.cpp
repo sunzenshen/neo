@@ -32,7 +32,12 @@ CNEOBotCtgEnemyInterceptCapPath::CNEOBotCtgEnemyInterceptCapPath( const CNEOBotC
 //---------------------------------------------------------------------------------------------
 bool CNEOBotCtgEnemyInterceptCapPath::RepathToCutOff( CNEOBot *me )
 {
-	return CNEOBotPathCompute( me, m_path, m_cutOff.vecPos, FASTEST_ROUTE );
+	// This walk ends in holding a spot, not passing through it. A one-way drop on the way is bad
+	// ground for that: if the next replan moves the cut-off, or the hold gets abandoned to chase,
+	// getting back means detouring around instead of retracing the same steps. Preferred against,
+	// not banned - see CNEOBotPathCompute's parameter of the same name.
+	return CNEOBotPathCompute( me, m_path, m_cutOff.vecPos, FASTEST_ROUTE,
+		PATH_NO_LENGTH_LIMIT, PATH_TRUNCATE_INCOMPLETE_PATH, false, true );
 }
 
 //---------------------------------------------------------------------------------------------
