@@ -14,10 +14,6 @@ ConVar sv_neo_bot_ctg_enemy_intercept_lead( "sv_neo_bot_ctg_enemy_intercept_lead
 	"most this fraction of the carrier's. Below 1 it needs a head start; above 1 it will try marginal cut-offs.",
 	true, 0.1f, true, 2.0f );
 
-ConVar sv_neo_bot_ctg_enemy_split_caps( "sv_neo_bot_ctg_enemy_split_caps", "0", FCVAR_CHEAT,
-	"CTG: 1 = half the defenders cover the carrier's second-nearest scoring zone instead of the "
-	"nearest, so a wrong guess about which zone it is heading for does not leave the other open." );
-
 // NEO-HARNESS-TEMP: positive control for measuring the interception. When set, the decider always
 // picks the direct chase, which is what CNEOBotCtgEnemy did before this branch. Never part of the
 // PR -- see harness/patches/README.md.
@@ -32,59 +28,32 @@ ConVar sv_neo_bot_ctg_enemy_force_chase( "sv_neo_bot_ctg_enemy_force_chase", "0"
 // Straight-line distance, deliberately. It is the naive guess a human defender makes from the
 // marker, and it happens to be exactly what the carrier bot does, so ranking by travel distance
 // instead would be a worse prediction dressed up as a better one.
-CNEOGhostCapturePoint *CNEOBotCtgEnemy::CarrierGoalCap( CNEO_Player *pGhostCarrier, int iRank )
+CNEOGhostCapturePoint *CNEOBotCtgEnemy::CarrierGoalCap( CNEO_Player *pGhostCarrier )
 {
 	const int iCarrierTeam = pGhostCarrier->GetTeamNumber();
 	const Vector vecCarrier = pGhostCarrier->GetAbsOrigin();
 
-	iRank = clamp( iRank, 0, kMaxCapRank - 1 );
-	CNEOGhostCapturePoint *pPicked[ kMaxCapRank ] = {};
+	CNEOGhostCapturePoint *pBest = nullptr;
+	float flBestDistSq = FLT_MAX;
 
-	// Selection sort, stopping as soon as the requested rank is filled. There are a handful of cap
-	// zones on a map, so this is cheaper than building and sorting a list.
-	for ( int r = 0; r <= iRank; ++r )
+	for ( int i = 0; i < NEORules()->m_pGhostCaps.Count(); ++i )
 	{
-		CNEOGhostCapturePoint *pBest = nullptr;
-		float flBestDistSq = FLT_MAX;
-
-		for ( int i = 0; i < NEORules()->m_pGhostCaps.Count(); ++i )
+		CNEOGhostCapturePoint *pCap = dynamic_cast< CNEOGhostCapturePoint * >(
+			UTIL_EntityByIndex( NEORules()->m_pGhostCaps[i] ) );
+		if ( !pCap || !pCap->GetActive() || pCap->owningTeamAlternate() != iCarrierTeam )
 		{
-			CNEOGhostCapturePoint *pCap = dynamic_cast< CNEOGhostCapturePoint * >(
-				UTIL_EntityByIndex( NEORules()->m_pGhostCaps[i] ) );
-			if ( !pCap || !pCap->GetActive() || pCap->owningTeamAlternate() != iCarrierTeam )
-			{
-				continue;
-			}
-
-			bool bAlreadyTaken = false;
-			for ( int k = 0; k < r && !bAlreadyTaken; ++k )
-			{
-				bAlreadyTaken = ( pPicked[k] == pCap );
-			}
-			if ( bAlreadyTaken )
-			{
-				continue;
-			}
-
-			const float flDistSq = vecCarrier.DistToSqr( pCap->GetAbsOrigin() );
-			if ( flDistSq < flBestDistSq )
-			{
-				flBestDistSq = flDistSq;
-				pBest = pCap;
-			}
+			continue;
 		}
 
-		if ( !pBest )
+		const float flDistSq = vecCarrier.DistToSqr( pCap->GetAbsOrigin() );
+		if ( flDistSq < flBestDistSq )
 		{
-			// The map has fewer scoring zones than the rank asked for. Cover the nearest instead
-			// of covering nothing.
-			return ( r > 0 ) ? pPicked[0] : nullptr;
+			flBestDistSq = flDistSq;
+			pBest = pCap;
 		}
-
-		pPicked[r] = pBest;
 	}
 
-	return pPicked[ iRank ];
+	return pBest;
 }
 
 //---------------------------------------------------------------------------------------------
@@ -205,12 +174,7 @@ bool CNEOBotCtgEnemy::FindCutOff( CNEOBot *me, CNEO_Player *pGhostCarrier, CutOf
 		return false;
 	}
 
-	// Splitting the defence across two scoring zones costs half the defenders their shot at the
-	// zone the carrier is actually heading for, and buys cover on the one it might switch to. The
-	// entity index is an arbitrary but stable partition, so a bot does not flip sides mid-round.
-	const int iCapRank = ( sv_neo_bot_ctg_enemy_split_caps.GetBool() && ( me->entindex() & 1 ) ) ? 1 : 0;
-
-	CNEOGhostCapturePoint *pGoalCap = CarrierGoalCap( pGhostCarrier, iCapRank );
+	CNEOGhostCapturePoint *pGoalCap = CarrierGoalCap( pGhostCarrier );
 	if ( !pGoalCap )
 	{
 		return false;
