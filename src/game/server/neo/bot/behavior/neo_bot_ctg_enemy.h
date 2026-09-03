@@ -65,6 +65,12 @@ public:
 	static bool FindCutOff( CNEOBot *me, CNEO_Player *pGhostCarrier, CutOff &cutOff,
 		CNEOBotPredictedRoute *pOutCarrierRoute = nullptr );
 
+	// The active scoring zone nearest vecFrom that iTeam can capture into - owned by iTeam, or
+	// neutral. Public: this is the one piece of CNEORules()->m_pGhostCaps knowledge every CTG
+	// behaviour that reasons about "which zone" needs, and only CNEOBotCtgEnemy is a friend of
+	// CNEORules for it.
+	static CNEOGhostCapturePoint *NearestCapForTeam( int iTeam, const Vector &vecFrom );
+
 private:
 	// Reaches NEORules()->m_pGhostCaps, so it has to be a member: that list is only open to the
 	// CTG bot behaviours named as friends of CNEORules.
