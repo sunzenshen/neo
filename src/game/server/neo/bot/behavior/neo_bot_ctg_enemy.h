@@ -68,7 +68,13 @@ public:
 private:
 	// Reaches NEORules()->m_pGhostCaps, so it has to be a member: that list is only open to the
 	// CTG bot behaviours named as friends of CNEORules.
-	static CNEOGhostCapturePoint *CarrierGoalCap( CNEO_Player *pGhostCarrier );
+	//
+	// iRank selects among the carrier's scoring zones by straight-line distance from it: 0 is the
+	// nearest (the zone the carrier itself is heading for). Higher ranks exist so a defence can
+	// cover a second zone instead of every defender guessing the same one; a rank the map cannot
+	// supply falls back to the nearest.
+	static const int kMaxCapRank = 4;
+	static CNEOGhostCapturePoint *CarrierGoalCap( CNEO_Player *pGhostCarrier, int iRank = 0 );
 };
 
 #endif // NEO_BOT_CTG_ENEMY_H
