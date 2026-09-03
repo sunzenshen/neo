@@ -8,6 +8,9 @@
 #include "neo_gamerules.h"
 #include "neo_player_shared.h"
 #include "vphysics_interface.h"
+#include "bot/neo_bot_path_reservation.h"
+
+extern ConVar sv_neo_bot_ctg_enemy_distinct_cutoffs;
 
 ConVar sv_neo_bot_ctg_enemy_intercept_replan_seconds( "sv_neo_bot_ctg_enemy_intercept_replan_seconds", "5", FCVAR_CHEAT,
 	"CTG: seconds between an intercepting bot re-picking its cut-off on the enemy ghost carrier's route, to catch the carrier taking a line it did not predict.",
@@ -32,6 +35,18 @@ CNEOBotCtgEnemyInterceptCapPath::CNEOBotCtgEnemyInterceptCapPath( const CNEOBotC
 //---------------------------------------------------------------------------------------------
 bool CNEOBotCtgEnemyInterceptCapPath::RepathToCutOff( CNEOBot *me )
 {
+	// Claim the area for sv_neo_bot_ctg_enemy_distinct_cutoffs: every place this function is
+	// called (OnStart, a replan that moved, OnStuck, OnMoveToFailure) is a moment this bot is
+	// committing or recommitting to m_cutOff, so this is the one place that needs to say so. The
+	// duration is the replan interval plus a margin, so a bot that stops re-confirming - it moved
+	// on to chasing, or died - lets the claim lapse on its own rather than needing an explicit
+	// release.
+	if ( sv_neo_bot_ctg_enemy_distinct_cutoffs.GetBool() && m_cutOff.pArea )
+	{
+		CNEOBotPathReservations()->ReserveArea( m_cutOff.pArea, me,
+			sv_neo_bot_ctg_enemy_intercept_replan_seconds.GetFloat() + 2.0f );
+	}
+
 	// This walk ends in holding a spot, not passing through it. A one-way drop on the way is bad
 	// ground for that: if the next replan moves the cut-off, or the hold gets abandoned to chase,
 	// getting back means detouring around instead of retracing the same steps. Preferred against,

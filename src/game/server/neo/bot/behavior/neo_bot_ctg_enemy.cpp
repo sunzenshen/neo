@@ -8,6 +8,12 @@
 #include "neo_ghost_cap_point.h"
 #include "nav_mesh.h"
 #include "nav_pathfind.h"
+#include "bot/neo_bot_path_reservation.h"
+
+ConVar sv_neo_bot_ctg_enemy_distinct_cutoffs( "sv_neo_bot_ctg_enemy_distinct_cutoffs", "0", FCVAR_CHEAT,
+	"CTG: 1 = a defender skips a cut-off area a teammate already holds and takes the next winnable "
+	"one instead, so the team covers more of the carrier's route rather than stacking on the same "
+	"earliest spot. Never asks a bot to reach further than it can win the race to on its own." );
 
 ConVar sv_neo_bot_ctg_enemy_intercept_lead( "sv_neo_bot_ctg_enemy_intercept_lead", "1.0", FCVAR_CHEAT,
 	"CTG: a bot claims a point on the enemy ghost carrier's route only when its own travel there is at "
@@ -214,15 +220,43 @@ bool CNEOBotCtgEnemy::FindCutOff( CNEOBot *me, CNEO_Player *pGhostCarrier, CutOf
 	// team on one area - measured worse, and for the same reason each time: it makes the bot claim
 	// ground it cannot actually be standing on in time, so it spends the walk and arrives nowhere.
 	// The evidence is in notes/ctg-defence-arms.md.
+	//
+	// sv_neo_bot_ctg_enemy_distinct_cutoffs is a narrower version of that same idea, aimed at a
+	// different failure: every defender runs this same search independently and, absent a reason
+	// not to, lands on the same earliest area - so the carrier only has to beat one bot, not the
+	// team. This does not ask any bot to reach further than it honestly can (unlike _team_cutoff,
+	// which converged everyone on the *lead* defender's area regardless of whether a trailing bot
+	// could actually get there): each defender still only ever considers areas *it itself* can win
+	// the race to, and only skips one that a teammate already holds, via the existing path
+	// reservation system. If every winnable area is already claimed, it falls back to the earliest
+	// one anyway - doubling up is better than picking nothing.
 	int iChosen = -1;
+	int iEarliestWinnable = -1;
+	const bool bDistinct = sv_neo_bot_ctg_enemy_distinct_cutoffs.GetBool();
 
 	for ( int i = 0; i < carrierRoute.Count(); ++i )
 	{
-		if ( myTravel[i] >= 0.0f && myTravel[i] <= carrierRoute.travel[i] * flLead )
+		if ( myTravel[i] < 0.0f || myTravel[i] > carrierRoute.travel[i] * flLead )
+		{
+			continue;
+		}
+
+		if ( iEarliestWinnable < 0 )
+		{
+			iEarliestWinnable = i;
+		}
+
+		if ( !bDistinct
+			|| !CNEOBotPathReservations()->IsAreaReservedByTeammate( carrierRoute.areas[i], me ) )
 		{
 			iChosen = i;
 			break;
 		}
+	}
+
+	if ( iChosen < 0 )
+	{
+		iChosen = iEarliestWinnable;
 	}
 
 	if ( iChosen < 0 )
