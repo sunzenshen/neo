@@ -11,12 +11,29 @@
 #include "bot/neo_bot_path_compute.h"
 #include "weapon_ghost.h"
 
+// NEO-HARNESS-TEMP: positive control for re-measuring the pre-fix dispatch order at a larger
+// sample than the original baseline arm (P0, n=24) had. When set, the enemy-carrier check moves
+// back below UpdateCommon, exactly where it sat before this branch. Never part of the PR -- see
+// harness/patches/README.md.
+ConVar sv_neo_bot_ctg_enemy_priority_off( "sv_neo_bot_ctg_enemy_priority_off", "0", FCVAR_CHEAT,
+	"NEO harness debug: 1 = restore the pre-fix dispatch order (combat suspend before the ghost "
+	"decision), for re-measuring the baseline at higher n." );
+
 //---------------------------------------------------------------------------------------------
 ActionResult< CNEOBot > CNEOBotCtgSeek::Update( CNEOBot *me, float interval )
 {
 	if (NEORules()->GetGameType() != NEO_GAME_TYPE_CTG)
 	{
 		return Done( "Game mode is no longer CTG" );
+	}
+
+	if ( sv_neo_bot_ctg_enemy_priority_off.GetBool() )
+	{
+		ActionResult< CNEOBot > result = UpdateCommon( me, interval );
+		if ( result.IsRequestingChange() || result.IsDone() )
+		{
+			return result;
+		}
 	}
 
 	// The objective outranks the shooting when the *enemy* has the ghost. UpdateCommon suspends for
@@ -43,10 +60,15 @@ ActionResult< CNEOBot > CNEOBotCtgSeek::Update( CNEOBot *me, float interval )
 		}
 	}
 
-	ActionResult< CNEOBot > result = UpdateCommon( me, interval );
-	if ( result.IsRequestingChange() || result.IsDone() )
+	// Already ran once above when the control cvar restores the pre-fix order; running it again
+	// here would call it twice a tick for that arm, which the shipping order never does.
+	if ( !sv_neo_bot_ctg_enemy_priority_off.GetBool() )
 	{
-		return result;
+		ActionResult< CNEOBot > result = UpdateCommon( me, interval );
+		if ( result.IsRequestingChange() || result.IsDone() )
+		{
+			return result;
+		}
 	}
 
 	int team_members = 0;
