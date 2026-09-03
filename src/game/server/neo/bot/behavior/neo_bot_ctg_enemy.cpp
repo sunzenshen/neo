@@ -20,6 +20,11 @@ ConVar sv_neo_bot_ctg_enemy_cutoff_min_travel( "sv_neo_bot_ctg_enemy_cutoff_min_
 	"one it can already see and route around. 0 = always take the earliest.",
 	true, 0.0f, false, 0.0f );
 
+ConVar sv_neo_bot_ctg_enemy_team_cutoff( "sv_neo_bot_ctg_enemy_team_cutoff", "0", FCVAR_CHEAT,
+	"CTG: 1 = every defender claims the cut-off the team's most forward member can win, instead of "
+	"the one it can win itself. They then arrive at the same place together rather than reaching "
+	"their own separate spots one at a time." );
+
 ConVar sv_neo_bot_ctg_enemy_choke_window( "sv_neo_bot_ctg_enemy_choke_window", "0", FCVAR_CHEAT,
 	"CTG: how much further along the enemy ghost carrier's route, in Hammer units, to look for a "
 	"narrower place to stand than the first one available. The route is a guess; a spot with few "
@@ -181,6 +186,38 @@ static int DefenderRank( CNEOBot *me )
 }
 
 //---------------------------------------------------------------------------------------------
+// The living teammate closest to the zone the carrier is running for: the defence's most forward
+// member, and the one whose cut-off is worth backing up. Every defender computes this from the
+// same public state - where its own team is standing - so they agree without any shared
+// bookkeeping. Returns null if nobody has a nav area, in which case the caller falls back to
+// planning for itself.
+static CNavArea *LeadDefenderArea( CNEOBot *me, const Vector &vecGoal )
+{
+	CNavArea *pBest = nullptr;
+	float flBestDistSq = FLT_MAX;
+
+	for ( int i = 1; i <= gpGlobals->maxClients; ++i )
+	{
+		CNEO_Player *pTeammate = ToNEOPlayer( UTIL_PlayerByIndex( i ) );
+		if ( !pTeammate || !pTeammate->IsAlive()
+			|| pTeammate->GetTeamNumber() != me->GetTeamNumber()
+			|| !pTeammate->GetLastKnownArea() )
+		{
+			continue;
+		}
+
+		const float flDistSq = pTeammate->GetAbsOrigin().DistToSqr( vecGoal );
+		if ( flDistSq < flBestDistSq )
+		{
+			flBestDistSq = flDistSq;
+			pBest = pTeammate->GetLastKnownArea();
+		}
+	}
+
+	return pBest;
+}
+
+//---------------------------------------------------------------------------------------------
 CNEO_Player *CNEOBotCtgEnemy::EnemyGhostCarrier( CNEOBot *me )
 {
 	if ( !NEORules()->GhostExists() )
@@ -288,9 +325,23 @@ bool CNEOBotCtgEnemy::FindCutOff( CNEOBot *me, CNEO_Player *pGhostCarrier, CutOf
 	// NavAreaBuildPath work through the nav areas' shared search state.
 	const float flLead = sv_neo_bot_ctg_enemy_intercept_lead.GetFloat();
 
+	// Whose travel to price. Normally our own; with sv_neo_bot_ctg_enemy_team_cutoff, the team's
+	// most forward defender's, so that every defender picks the same area and they converge on it
+	// instead of each holding whatever it could reach alone. Losing fights one bot at a time is
+	// what the instrumented arms show the defence actually dying of.
+	CNavArea *pPlanFrom = me->GetLastKnownArea();
+	if ( sv_neo_bot_ctg_enemy_team_cutoff.GetBool() )
+	{
+		CNavArea *pLead = LeadDefenderArea( me, vecGoal );
+		if ( pLead )
+		{
+			pPlanFrom = pLead;
+		}
+	}
+
 	CUtlVector< float > myTravel;
 	CNEOBotRouteTravelCost search( me, carrierRoute, myTravel );
-	SearchSurroundingAreas( me->GetLastKnownArea(), search, carrierRoute.Length() * flLead );
+	SearchSurroundingAreas( pPlanFrom, search, carrierRoute.Length() * flLead );
 
 	// Walk the carrier's route outward from the carrier and take the first area we beat it to.
 	// Earliest wins: that is the point furthest from the carrier's cap where we can still be

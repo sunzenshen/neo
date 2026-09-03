@@ -11,12 +11,40 @@
 #include "bot/neo_bot_path_compute.h"
 #include "weapon_ghost.h"
 
+ConVar sv_neo_bot_ctg_enemy_priority( "sv_neo_bot_ctg_enemy_priority", "0", FCVAR_CHEAT,
+	"CTG: 1 = while an enemy is carrying the ghost, a bot answers that before it answers a threat "
+	"it can see, instead of the other way round." );
+
 //---------------------------------------------------------------------------------------------
 ActionResult< CNEOBot > CNEOBotCtgSeek::Update( CNEOBot *me, float interval )
 {
 	if (NEORules()->GetGameType() != NEO_GAME_TYPE_CTG)
 	{
 		return Done( "Game mode is no longer CTG" );
+	}
+
+	// The objective outranks the shooting when the *enemy* has the ghost. UpdateCommon suspends for
+	// CNEOBotAttack on any visible threat and runs first, so a defender that can see an escort
+	// never reaches the ghost decision below - measured over a 24-round arm, only 1.7 of 5
+	// defenders per round ever entered CNEOBotCtgEnemy at all, while the ghost was walked in. The
+	// escorts screen the carrier and the defence spends the round fighting the screen.
+	//
+	// This does not stop the bot fighting: CNEOBotCtgEnemyChase suspends for CNEOBotAttack aimed at
+	// the carrier the moment it sees a threat, and a bot holding a cut-off shoots what walks into
+	// it. What changes is that the fight is anchored to the carrier's route instead of to wherever
+	// the first escort happened to appear.
+	if ( sv_neo_bot_ctg_enemy_priority.GetBool() && NEORules()->GhostExists() )
+	{
+		const int iGhosterPlayer = NEORules()->GetGhosterPlayer();
+		if ( iGhosterPlayer > 0 && iGhosterPlayer <= gpGlobals->maxClients )
+		{
+			CNEO_Player *pGhostCarrier = ToNEOPlayer( UTIL_PlayerByIndex( iGhosterPlayer ) );
+			if ( pGhostCarrier && pGhostCarrier != me && pGhostCarrier->IsAlive()
+				&& pGhostCarrier->GetTeamNumber() != me->GetTeamNumber() )
+			{
+				return SuspendFor( new CNEOBotCtgEnemy, "Stopping the ghost carrier!" );
+			}
+		}
 	}
 
 	ActionResult< CNEOBot > result = UpdateCommon( me, interval );
