@@ -699,3 +699,10 @@ FodyWeavers.xsd
 
 # Selected Background
 /game/neo/scripts/[Cc]hapter[Bb]ackgrounds.txt
+
+# Multi-instance harness scaffolding (harness/run_match.ps1 -Slot): generated per slot at match
+# start and overwritten every run, never meant to be committed.
+/game/neo/cfg/harness_client_s*.cfg
+/game/neo/cfg/harness_extra*.cfg
+/game/neo/cfg/harness_poll_s*.cfg
+/game/neo/cfg/harness_server.cfg
