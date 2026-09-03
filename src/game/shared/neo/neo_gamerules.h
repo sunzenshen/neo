@@ -502,6 +502,7 @@ private:
 	
 	// For looking up capture zone locations
 	friend class CNEOBotCtgCarrier;
+	friend class CNEOBotCtgEnemy;
 	friend class CNEOBotCtgEscort;
 	friend class CNEOBotCtgLoneWolf;
 	friend class CNEOBotCtgLoneWolfAmbush;
