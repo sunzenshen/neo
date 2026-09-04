@@ -68,14 +68,6 @@ public:
 	static bool FindCutOff( CNEOBot *me, CutOff &cutOff,
 		CNEOBotPredictedRoute *pOutGhostRoute = nullptr );
 
-	// Like FindCutOff, but returns a hold point flDepth units back from the enemy's nearest cap
-	// along the predicted ghost->cap route - a last-line "goalie" spot on the cap's approach
-	// throat, rather than the earliest winnable area. Used from freezetime by the slow class to
-	// pre-cover a threatened wing cap. Returns false only when there is no route to a scorable
-	// enemy cap at all.
-	static bool FindGoalieHold( CNEOBot *me, float flDepth, CutOff &holdOut,
-		CNEOBotPredictedRoute *pOutGhostRoute = nullptr );
-
 	// The active scoring zone nearest vecFrom that iTeam can capture into - owned by iTeam, or
 	// neutral. Public: this is the one piece of CNEORules()->m_pGhostCaps knowledge every CTG
 	// behaviour that reasons about "which zone" needs, and only CNEOBotCtgEnemy is a friend of
@@ -89,8 +81,7 @@ private:
 	static CNEOGhostCapturePoint *GhostGoalCap( CNEOBot *me );
 
 	// Plots the naive shortest route from the ghost's current area to vecGoalOut (GhostGoalCap's
-	// origin). Shared by FindCutOff and FindGoalieHold. Returns false when there is no scorable
-	// enemy cap or no route to it.
+	// origin). Returns false when there is no scorable enemy cap or no route to it.
 	static bool BuildGhostRoute( CNEOBot *me, CNEOBotPredictedRoute &routeOut, Vector &vecGoalOut );
 };
 

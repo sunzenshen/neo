@@ -231,8 +231,7 @@ bool CNEOBotCtgEnemy::FindCutOff( CNEOBot *me, CutOff &cutOff,
 	// carrier's through-wall vision, to space the defence out in depth, or to converge the whole
 	// team on one area - measured worse, and for the same reason each time: it makes the bot claim
 	// ground it cannot actually be standing on in time, so it spends the walk and arrives nowhere.
-	// The evidence is in notes/ctg-defence-arms.md. The freezetime goalie (FindGoalieHold) is the
-	// one deliberate exception, and only for the slow class.
+	// The evidence is in notes/ctg-defence-arms.md.
 	int iChosen = -1;
 	for ( int i = 0; i < ghostRoute.Count(); ++i )
 	{
@@ -260,59 +259,6 @@ bool CNEOBotCtgEnemy::FindCutOff( CNEOBot *me, CutOff &cutOff,
 	cutOff.pArea = ghostRoute.areas[ iChosen ];
 	cutOff.vecPos = cutOff.pArea->GetCenter();
 	cutOff.iCarrierRouteIndex = iChosen;
-
-	if ( pOutGhostRoute )
-	{
-		pOutGhostRoute->areas.Swap( ghostRoute.areas );
-		pOutGhostRoute->travel.Swap( ghostRoute.travel );
-	}
-
-	return true;
-}
-
-//---------------------------------------------------------------------------------------------
-bool CNEOBotCtgEnemy::FindGoalieHold( CNEOBot *me, float flDepth, CutOff &holdOut,
-	CNEOBotPredictedRoute *pOutGhostRoute )
-{
-	holdOut = CutOff();
-	if ( pOutGhostRoute )
-	{
-		pOutGhostRoute->Reset();
-	}
-
-	Vector vecGoal;
-	CNEOBotPredictedRoute ghostRoute;
-	if ( !BuildGhostRoute( me, ghostRoute, vecGoal ) || ghostRoute.Count() == 0 )
-	{
-		return false;
-	}
-
-	// Walk back from the cap along the route until we are flDepth units short of it (or reach the
-	// route's start). That area is the cap's approach throat: far enough out not to be standing
-	// idle in the zone, close enough to be the last line the carry has to pass. The routes to a
-	// given cap all funnel through the same final corridor, so this lands on the same handful of
-	// areas regardless of which ghost spawn came up - see knowledge/maps/ntre_ballistrade_ctg.
-	const float flTarget = MAX( 0.0f, ghostRoute.Length() - flDepth );
-	int iHold = ghostRoute.Count() - 1;
-	for ( int i = 0; i < ghostRoute.Count(); ++i )
-	{
-		if ( ghostRoute.travel[i] >= flTarget )
-		{
-			iHold = i;
-			break;
-		}
-	}
-
-	if ( sv_neo_forensic_log.GetBool() )
-	{
-		Msg( "NEO_FORENSIC_CUTOFF t=%.2f p=%d area=%d idx=%d routelen=%d\n",
-			gpGlobals->curtime, me->entindex(), ghostRoute.areas[ iHold ]->GetID(), iHold,
-			ghostRoute.Count() );
-	}
-
-	holdOut.pArea = ghostRoute.areas[ iHold ];
-	holdOut.vecPos = holdOut.pArea->GetCenter();
-	holdOut.iCarrierRouteIndex = iHold;
 
 	if ( pOutGhostRoute )
 	{

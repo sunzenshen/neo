@@ -10,58 +10,41 @@
 #include "bot/behavior/neo_bot_ctg_carrier.h"
 #include "bot/behavior/neo_bot_ctg_capture.h"
 #include "bot/neo_bot_path_compute.h"
-#include "neo_enums.h"
 #include "weapon_ghost.h"
 
-ConVar sv_neo_bot_ctg_goalie_depth( "sv_neo_bot_ctg_goalie_depth", "600", FCVAR_CHEAT,
-	"CTG: how far (units) back from the threatened enemy cap, along the predicted ghost->cap route, "
-	"a freezetime Support-class 'goalie' holds. 0 disables the freezetime goalie entirely.",
-	true, 0.0f, false, 0.0f );
-
-ConVar sv_neo_bot_ctg_assault_intercept( "sv_neo_bot_ctg_assault_intercept", "0", FCVAR_CHEAT,
-	"CTG: when 1, Assault-class defenders also pre-plan a ghost cut-off during freezetime instead of "
-	"racing for the loose ghost. Recon always races; Support always goalies (sv_neo_bot_ctg_goalie_depth)." );
+ConVar sv_neo_bot_ctg_freezetime_intercept( "sv_neo_bot_ctg_freezetime_intercept", "0", FCVAR_CHEAT,
+	"CTG: when 1, every defender plans a ghost cut-off during freezetime (CNEOBotCtgEnemy::FindCutOff, "
+	"read from the ghost's ground position) and heads there instead of racing straight for the loose "
+	"ghost. Arriving with the ghost still uncollected hands over to the chase, which falls back to "
+	"normal seeking on its own - see CNEOBotCtgEnemyInterceptCapPath. 0 leaves freezetime as plain seek." );
 
 //---------------------------------------------------------------------------------------------
-// During freezetime, before anyone holds the ghost, split the defence by class:
-//   - Recon (fastest) races the loose ghost, as before - fall through, no suspend here.
-//   - Support (slowest) sets up as a goalie on the threatened wing cap's approach throat.
-//   - Assault joins the goalie's forward cut-off only when sv_neo_bot_ctg_assault_intercept is on.
+// During freezetime, before anyone holds the ghost, every defender plans the same cut-off it would
+// reactively pick once an enemy is confirmed carrying the ghost - FindCutOff already reads the
+// ghost's position, not a carrier entity, so the plan is meaningful before any pickup. Whichever
+// team actually gets the ghost has its bots peel off to escort/carrier the moment that happens
+// (CNEOBotCtgEnemyInterceptCapPath::Update's "a teammate has the ghost" exit); the other team is
+// already moving toward where the carry would go.
+//
 // Returns a non-Continue result when it has taken over, Continue() to let the caller carry on.
 ActionResult< CNEOBot > CNEOBotCtgSeek::ConsiderFreezetimeIntercept( CNEOBot *me )
 {
+	if ( !sv_neo_bot_ctg_freezetime_intercept.GetBool() )
+	{
+		return Continue();
+	}
+
 	if ( NEORules()->GetRemainingPreRoundFreezeTime( true ) <= 0.0f || !NEORules()->GhostExists() )
 	{
 		return Continue();
 	}
 
-	const int iClass = me->GetClass();
-
-	if ( iClass == NEO_CLASS_SUPPORT )
+	CNEOBotCtgEnemy::CutOff cutOff;
+	CNEOBotPredictedRoute route;
+	if ( CNEOBotCtgEnemy::FindCutOff( me, cutOff, &route ) && cutOff.pArea != me->GetLastKnownArea() )
 	{
-		const float flDepth = sv_neo_bot_ctg_goalie_depth.GetFloat();
-		if ( flDepth <= 0.0f )
-		{
-			return Continue();
-		}
-
-		CNEOBotCtgEnemy::CutOff hold;
-		CNEOBotPredictedRoute route;
-		if ( CNEOBotCtgEnemy::FindGoalieHold( me, flDepth, hold, &route ) )
-		{
-			return SuspendFor( new CNEOBotCtgEnemyInterceptCapPath( hold, route, true, flDepth ),
-				"Freezetime: setting up as goalie on the threatened cap" );
-		}
-	}
-	else if ( iClass == NEO_CLASS_ASSAULT && sv_neo_bot_ctg_assault_intercept.GetBool() )
-	{
-		CNEOBotCtgEnemy::CutOff cutOff;
-		CNEOBotPredictedRoute route;
-		if ( CNEOBotCtgEnemy::FindCutOff( me, cutOff, &route ) && cutOff.pArea != me->GetLastKnownArea() )
-		{
-			return SuspendFor( new CNEOBotCtgEnemyInterceptCapPath( cutOff, route ),
-				"Freezetime: pre-planning a ghost cut-off" );
-		}
+		return SuspendFor( new CNEOBotCtgEnemyInterceptCapPath( cutOff, route ),
+			"Freezetime: heading to a ghost cut-off" );
 	}
 
 	return Continue();

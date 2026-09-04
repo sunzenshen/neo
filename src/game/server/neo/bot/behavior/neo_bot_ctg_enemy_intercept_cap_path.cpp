@@ -17,16 +17,16 @@ ConVar sv_neo_bot_ctg_enemy_intercept_replan_seconds( "sv_neo_bot_ctg_enemy_inte
 // so standing anywhere in it is close enough to meet whoever comes through.
 static const float CTG_ENEMY_CUTOFF_ARRIVAL_TOLERANCE = 64.0f;
 
-// How many nav areas back up the carrier's route to consider when picking a spot to watch.
+// How many nav areas back up the ghost's route to consider when picking a spot to watch.
 static const int CTG_ENEMY_WATCH_AREA_LIMIT = 12;
 
 //---------------------------------------------------------------------------------------------
 CNEOBotCtgEnemyInterceptCapPath::CNEOBotCtgEnemyInterceptCapPath( const CNEOBotCtgEnemy::CutOff &cutOff,
-	CNEOBotPredictedRoute &carrierRoute, bool bGoalie, float flGoalieDepth )
-	: m_cutOff( cutOff ), m_bGoalie( bGoalie ), m_flGoalieDepth( flGoalieDepth )
+	CNEOBotPredictedRoute &ghostRoute )
+	: m_cutOff( cutOff )
 {
-	m_carrierRoute.areas.Swap( carrierRoute.areas );
-	m_carrierRoute.travel.Swap( carrierRoute.travel );
+	m_ghostRoute.areas.Swap( ghostRoute.areas );
+	m_ghostRoute.travel.Swap( ghostRoute.travel );
 }
 
 //---------------------------------------------------------------------------------------------
@@ -47,20 +47,11 @@ bool CNEOBotCtgEnemyInterceptCapPath::RepathToCutOff( CNEOBot *me )
 //---------------------------------------------------------------------------------------------
 // Re-pick the cut-off. Returns false when there is no longer one to head for, in which case the
 // caller drops to the chase rather than walking on with a plan it can no longer check.
-//
-// Goalie mode holds its fixed depth off the cap only while the ghost is loose; the moment an
-// enemy is actually carrying it, this falls through to the ordinary earliest-cut-off search so
-// the bot stops camping the throat and races the live carrier instead.
 bool CNEOBotCtgEnemyInterceptCapPath::Replan( CNEOBot *me )
 {
-	const bool bGoalieNow = m_bGoalie && ( CNEOBotCtgEnemy::EnemyGhostCarrier( me ) == nullptr );
-
 	CNEOBotCtgEnemy::CutOff cutOff;
-	CNEOBotPredictedRoute carrierRoute;
-	const bool bFound = bGoalieNow
-		? CNEOBotCtgEnemy::FindGoalieHold( me, m_flGoalieDepth, cutOff, &carrierRoute )
-		: CNEOBotCtgEnemy::FindCutOff( me, cutOff, &carrierRoute );
-	if ( !bFound )
+	CNEOBotPredictedRoute ghostRoute;
+	if ( !CNEOBotCtgEnemy::FindCutOff( me, cutOff, &ghostRoute ) )
 	{
 		return false;
 	}
@@ -68,14 +59,14 @@ bool CNEOBotCtgEnemyInterceptCapPath::Replan( CNEOBot *me )
 	const bool bMoved = ( cutOff.pArea != m_cutOff.pArea );
 
 	m_cutOff = cutOff;
-	m_carrierRoute.areas.Swap( carrierRoute.areas );
-	m_carrierRoute.travel.Swap( carrierRoute.travel );
+	m_ghostRoute.areas.Swap( ghostRoute.areas );
+	m_ghostRoute.travel.Swap( ghostRoute.travel );
 
 	return !bMoved || RepathToCutOff( me );
 }
 
 //---------------------------------------------------------------------------------------------
-// Look back up the carrier's route, at the furthest point along it we still have a clear line to.
+// Look back up the ghost's route, at the furthest point along it we still have a clear line to.
 // That is where the carrier should come into view, which beats staring at the wall its marker is
 // behind. Only ever called once the bot has arrived and stopped: a bot still travelling steers by
 // where it is looking, so forcing its view off the path would make it strafe there.
@@ -87,8 +78,8 @@ void CNEOBotCtgEnemyInterceptCapPath::WatchForTheCarrier( CNEOBot *me )
 	}
 	m_watchTimer.Start( 0.5f );
 
-	// Index 0 is the carrier's own area: there is nothing further back up the route to watch.
-	if ( m_cutOff.iCarrierRouteIndex <= 0 || m_cutOff.iCarrierRouteIndex >= m_carrierRoute.Count() )
+	// Index 0 is the ghost's own area: there is nothing further back up the route to watch.
+	if ( m_cutOff.iCarrierRouteIndex <= 0 || m_cutOff.iCarrierRouteIndex >= m_ghostRoute.Count() )
 	{
 		return;
 	}
@@ -102,7 +93,7 @@ void CNEOBotCtgEnemyInterceptCapPath::WatchForTheCarrier( CNEOBot *me )
 	const int iStopAt = MAX( 0, m_cutOff.iCarrierRouteIndex - CTG_ENEMY_WATCH_AREA_LIMIT );
 	for ( int i = m_cutOff.iCarrierRouteIndex - 1; i >= iStopAt; --i )
 	{
-		const Vector vecSpot = m_carrierRoute.areas[i]->GetCenter() + vecEyeOffset;
+		const Vector vecSpot = m_ghostRoute.areas[i]->GetCenter() + vecEyeOffset;
 		if ( !me->GetVisionInterface()->IsLineOfSightClear( vecSpot ) )
 		{
 			break;
@@ -129,9 +120,7 @@ ActionResult< CNEOBot > CNEOBotCtgEnemyInterceptCapPath::OnStart( CNEOBot *me, A
 
 	if ( !RepathToCutOff( me ) )
 	{
-		return CNEOBotCtgEnemy::EnemyGhostCarrier( me )
-			? ChangeTo( new CNEOBotCtgEnemyChase, "No path to the cut-off" )
-			: Done( "No path to the hold with the ghost still loose - reseeking" );
+		return ChangeTo( new CNEOBotCtgEnemyChase, "No path to the cut-off" );
 	}
 
 	m_replanTimer.Start( sv_neo_bot_ctg_enemy_intercept_replan_seconds.GetFloat() );
@@ -147,9 +136,9 @@ ActionResult< CNEOBot > CNEOBotCtgEnemyInterceptCapPath::Update( CNEOBot *me, fl
 		return Done( "Game mode is no longer CTG" );
 	}
 
-	// The ghost may be loose (freezetime goalie, or a post-drop hold) - EnemyGhostCarrier is then
-	// null and that is fine. What is not recoverable here is the ghost being gone, or an ally
-	// having taken it (the escort's problem, not ours).
+	// The ghost may be loose (freezetime, or a post-drop hold) - EnemyGhostCarrier is then null and
+	// that is fine, see the arrival handling below. What is not recoverable here is the ghost being
+	// gone, or an ally having taken it (the escort's problem, not ours).
 	if ( !NEORules()->GhostExists() )
 	{
 		return Done( "Ghost no longer exists" );
@@ -175,9 +164,7 @@ ActionResult< CNEOBot > CNEOBotCtgEnemyInterceptCapPath::Update( CNEOBot *me, fl
 
 		if ( !Replan( me ) )
 		{
-			return pGhostCarrier
-				? ChangeTo( new CNEOBotCtgEnemyChase, "Lost the cut-off - chasing" )
-				: Done( "Lost the cut-off with the ghost still loose - reseeking" );
+			return ChangeTo( new CNEOBotCtgEnemyChase, "Lost the cut-off - chasing" );
 		}
 	}
 
@@ -186,15 +173,21 @@ ActionResult< CNEOBot > CNEOBotCtgEnemyInterceptCapPath::Update( CNEOBot *me, fl
 
 	if ( bArrived )
 	{
-		if ( pGhostCarrier )
+		if ( !pGhostCarrier )
 		{
-			// The carrier sees every enemy within sv_neo_ghost_view_distance through walls, so once
-			// it is that close there is nothing left to ambush and waiting only invites being flanked.
-			const float flGhostViewUnits = sv_neo_ghost_view_distance.GetFloat() / METERS_PER_INCH;
-			if ( me->GetAbsOrigin().DistToSqr( pGhostCarrier->GetAbsOrigin() ) < Square( flGhostViewUnits ) )
-			{
-				return ChangeTo( new CNEOBotCtgEnemyChase, "Carrier is on top of the cut-off - chasing" );
-			}
+			// Nobody has the ghost yet - this is the freezetime case, arriving before any pickup.
+			// There is nothing to ambush, so hand over to the chase: it Done()s immediately with
+			// "no enemy ghost carrier" and drops control back to the seek dispatcher, which goes
+			// and gets the loose ghost once freezetime is actually over.
+			return ChangeTo( new CNEOBotCtgEnemyChase, "Arrived at the cut-off with the ghost still loose - moving in" );
+		}
+
+		// The carrier sees every enemy within sv_neo_ghost_view_distance through walls, so once it
+		// is that close there is nothing left to ambush and waiting only invites being flanked.
+		const float flGhostViewUnits = sv_neo_ghost_view_distance.GetFloat() / METERS_PER_INCH;
+		if ( me->GetAbsOrigin().DistToSqr( pGhostCarrier->GetAbsOrigin() ) < Square( flGhostViewUnits ) )
+		{
+			return ChangeTo( new CNEOBotCtgEnemyChase, "Carrier is on top of the cut-off - chasing" );
 		}
 
 		// Hold the spot, watching the way the carry has to come.
@@ -205,9 +198,7 @@ ActionResult< CNEOBot > CNEOBotCtgEnemyInterceptCapPath::Update( CNEOBot *me, fl
 	m_path.Update( me );
 	if ( !m_path.IsValid() )
 	{
-		return pGhostCarrier
-			? ChangeTo( new CNEOBotCtgEnemyChase, "Lost the path to the cut-off - chasing" )
-			: Done( "Lost the path to the hold with the ghost still loose - reseeking" );
+		return ChangeTo( new CNEOBotCtgEnemyChase, "Lost the path to the cut-off - chasing" );
 	}
 
 	return Continue();
