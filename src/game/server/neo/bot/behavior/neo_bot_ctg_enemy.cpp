@@ -20,12 +20,6 @@ ConVar sv_neo_bot_ctg_enemy_intercept_lead( "sv_neo_bot_ctg_enemy_intercept_lead
 	"most this fraction of the carrier's. Below 1 it needs a head start; above 1 it will try marginal cut-offs.",
 	true, 0.1f, true, 2.0f );
 
-// NEO-HARNESS-TEMP: positive control for measuring the interception. When set, the decider always
-// picks the direct chase, which is what CNEOBotCtgEnemy did before this branch. Never part of the
-// PR -- see harness/patches/README.md.
-ConVar sv_neo_bot_ctg_enemy_force_chase( "sv_neo_bot_ctg_enemy_force_chase", "0", FCVAR_CHEAT,
-	"NEO harness debug: 1 = never intercept, always chase the enemy ghost carrier directly." );
-
 //---------------------------------------------------------------------------------------------
 // The active scoring zone nearest vecFrom that iTeam can capture into - either owned by iTeam, or
 // neutral (TEAM_ANY). A neutral zone is capturable by whichever team gets there first
@@ -305,8 +299,7 @@ ActionResult< CNEOBot > CNEOBotCtgEnemy::Update( CNEOBot *me, float interval )
 	// at all means the carrier is ahead of us and a detour would only give up more ground.
 	CutOff cutOff;
 	CNEOBotPredictedRoute carrierRoute;
-	if ( !sv_neo_bot_ctg_enemy_force_chase.GetBool() /* NEO-HARNESS-TEMP */
-		&& FindCutOff( me, pGhostCarrier, cutOff, &carrierRoute )
+	if ( FindCutOff( me, pGhostCarrier, cutOff, &carrierRoute )
 		&& cutOff.pArea != me->GetLastKnownArea() )
 	{
 		return ChangeTo( new CNEOBotCtgEnemyInterceptCapPath( cutOff, carrierRoute ),
