@@ -314,9 +314,21 @@ void CWeaponKnife::Hit(trace_t& traceHit, [[maybe_unused]] Activity nHitActivity
 
 		CalculateMeleeDamageForce(&info, hitDirection, traceHit.endpos, 0.05f);
 
-		if (currentAngle <= maxBackStabAngle)
+		const bool bIsBackstab = (currentAngle <= maxBackStabAngle);
+		if (bIsBackstab)
 		{	// increase damage if backstabbing only after melee damage force has been calculated, so objects cannot be "backstabbed" to launch them further
 			info.SetDamage(damageToOneShotSupport);
+		}
+
+		// NEO-HARNESS-TEMP: one line per landed knife swing on a player, so the backstab-seeking
+		// approach (CNEOBotKnifeRush) can be checked against whether it actually lands backstabs,
+		// not just kills - a kill alone does not say which angle it came from. See harness/patches/README.md.
+		extern ConVar sv_neo_forensic_log;
+		if (sv_neo_forensic_log.GetBool() && pHitEntity->IsPlayer())
+		{
+			Msg("NEO_FORENSIC_MELEE_HIT t=%.2f attacker=%d victim=%d angledeg=%.1f damage=%.0f backstab=%d\n",
+				gpGlobals->curtime, pPlayer->entindex(), pHitEntity->entindex(),
+				RAD2DEG(currentAngle), info.GetDamage(), bIsBackstab ? 1 : 0);
 		}
 
 		pHitEntity->DispatchTraceAttack(info, hitDirection, &traceHit);

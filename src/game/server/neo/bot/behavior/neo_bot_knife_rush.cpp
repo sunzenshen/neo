@@ -11,6 +11,17 @@
 // Declared in neo_bot_ctg_enemy.cpp, next to CNEOBotCtgEnemy::IsLosingTheRace.
 extern ConVar sv_neo_bot_ctg_no_retreat_when_carrier_ahead;
 
+// NEO-HARNESS-TEMP: measurement-only positive control, to be deleted once the backstab-approach
+// question is settled (see notes/ctg-defence-arms.md). Bypasses the "our own clip must be empty"
+// gate in IsPossible so a knife rush can be forced far more often than it fires in real play,
+// which is otherwise too rare (~1/30 rounds) to gather enough episodes to judge the approach by.
+// Never combine with a real measurement of the shipped feature's effect - this is for evaluating
+// the knife-fighting mechanic in isolation only.
+ConVar sv_neo_bot_ctg_knife_rush_ignore_ammo( "sv_neo_bot_ctg_knife_rush_ignore_ammo", "0", FCVAR_CHEAT,
+	"CTG no-retreat, TEMPORARY measurement control: when 1, a knife rush can be considered "
+	"regardless of our own clip state, to force enough episodes to evaluate the backstab approach. "
+	"Never part of the shipped behaviour." );
+
 ConVar sv_neo_bot_ctg_knife_rush_enter_range( "sv_neo_bot_ctg_knife_rush_enter_range", "150", FCVAR_CHEAT,
 	"CTG no-retreat: a known threat within this many units is close enough to charge with a knife "
 	"instead of trading shots. Wider than the knife's own swing range (NEO_WEP_KNIFE_RANGE = 51 u) "
@@ -83,7 +94,8 @@ bool CNEOBotKnifeRush::IsPossible( CNEOBot *me )
 	// with that until a reload finishes, which this bot may not have time for with a threat this
 	// close, so it is the clip specifically that has to be empty, not the total ammo count.
 	CNEOBaseCombatWeapon *myWeapon = static_cast< CNEOBaseCombatWeapon * >( me->GetActiveWeapon() );
-	if ( myWeapon && CNEOBot::IsRanged( myWeapon ) && myWeapon->Clip1() > 0 )
+	if ( !sv_neo_bot_ctg_knife_rush_ignore_ammo.GetBool()
+		&& myWeapon && CNEOBot::IsRanged( myWeapon ) && myWeapon->Clip1() > 0 )
 	{
 		return false;
 	}
