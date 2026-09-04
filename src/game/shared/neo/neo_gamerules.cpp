@@ -176,8 +176,9 @@ ConVar sv_neo_readyup_countdown("sv_neo_readyup_countdown", "5", FCVAR_REPLICATE
 ConVar sv_neo_forensic_log("sv_neo_forensic_log", "0", FCVAR_REPLICATED | FCVAR_CHEAT, "NEO harness debug: log positions and kills for offline match reconstruction.", true, 0, true, 1);
 ConVar sv_neo_forensic_interval("sv_neo_forensic_interval", "0.5", FCVAR_REPLICATED | FCVAR_CHEAT, "NEO harness debug: seconds between forensic position samples.", true, 0.05f, true, 5.0f);
 ConVar sv_neo_ghost_spawn_bias("sv_neo_ghost_spawn_bias", "0", FCVAR_REPLICATED, "Spawn ghost in the same location as the previous round on odd-indexed rounds (Round 1 = index 0)", true, 0, true, 1);
-// NEO HARNESS (debug): pin the ghost spawn point index for repeatable scenario testing.
-// -1 = normal random / bias selection. Values >= 0 are taken modulo the ghost-spawn count.
+// NEO-HARNESS-TEMP: pin the ghost spawn point index for repeatable scenario testing. -1 = normal
+// random / bias selection. Values >= 0 are taken modulo the ghost-spawn count. Never part of the
+// PR -- see harness/patches/README.md.
 ConVar sv_neo_ghost_spawn_force("sv_neo_ghost_spawn_force", "-1", FCVAR_REPLICATED | FCVAR_CHEAT, "NEO harness debug: pin the ghost spawn point index (wraps modulo count). -1 = normal selection.", true, -1, false, 0);
 ConVar sv_neo_teamdamage_assists("sv_neo_teamdamage_assists", "0", FCVAR_REPLICATED, "Whether to drain XP when assisting the death of a teammate.", true, 0.0f, true, 1.0f);
 ConVar sv_neo_client_autorecord("sv_neo_client_autorecord", "0", FCVAR_REPLICATED | FCVAR_DONTRECORD, "Record demos clientside", true, 0, true, 1);
@@ -2096,7 +2097,7 @@ void CNEORules::SpawnTheGhost(const Vector *origin)
 
 			desiredSpawn = Ceil2Int(roundNumber() / 2.f) % m_ghostSpawns.Count();
 		}
-		// NEO HARNESS (debug): sv_neo_ghost_spawn_force pins the index for repeatable tests.
+		// NEO-HARNESS-TEMP: sv_neo_ghost_spawn_force pins the index for repeatable tests.
 		if (sv_neo_ghost_spawn_force.GetInt() >= 0)
 		{
 			desiredSpawn = sv_neo_ghost_spawn_force.GetInt() % m_ghostSpawns.Count();
