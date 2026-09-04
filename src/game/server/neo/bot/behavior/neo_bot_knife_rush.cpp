@@ -78,11 +78,12 @@ bool CNEOBotKnifeRush::IsPossible( CNEOBot *me )
 		return false;
 	}
 
-	// A knife only beats a gun we can no longer fire. Any bullets left (clip or reserve) in a
-	// ranged weapon mean there is always a chance of a headshot, which is a better bet than a
-	// 25-damage knife swing - so this only makes sense once we are genuinely out.
+	// A knife only beats a gun we can't fire right now. A loaded clip always carries a chance of a
+	// headshot, which is a better bet than a 25-damage knife swing - reserve ammo does not help
+	// with that until a reload finishes, which this bot may not have time for with a threat this
+	// close, so it is the clip specifically that has to be empty, not the total ammo count.
 	CNEOBaseCombatWeapon *myWeapon = static_cast< CNEOBaseCombatWeapon * >( me->GetActiveWeapon() );
-	if ( myWeapon && CNEOBot::IsRanged( myWeapon ) && ( myWeapon->Clip1() + myWeapon->m_iPrimaryAmmoCount ) > 0 )
+	if ( myWeapon && CNEOBot::IsRanged( myWeapon ) && myWeapon->Clip1() > 0 )
 	{
 		return false;
 	}
