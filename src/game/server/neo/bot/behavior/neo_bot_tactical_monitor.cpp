@@ -16,6 +16,7 @@
 #include "bot/behavior/neo_bot_seek_weapon.h"
 #include "bot/behavior/neo_bot_retreat_to_cover.h"
 #include "bot/behavior/neo_bot_retreat_from_grenade.h"
+#include "bot/behavior/neo_bot_knife_rush.h"
 #include "bot/behavior/neo_bot_ladder_approach.h"
 #include "bot/behavior/neo_bot_ladder_climb.h"
 #include "bot/behavior/neo_bot_path_clear_breakable.h"
@@ -340,6 +341,15 @@ ActionResult< CNEOBot >	CNEOBotTacticalMonitor::Update( CNEOBot *me, float inter
 				}
 			}
 		}
+	}
+
+	// Both the retreat suppression above and this share one condition: the enemy ghost carrier has
+	// already won the position race (CNEOBotCtgEnemy::IsLosingTheRace), so surviving this fight
+	// buys nothing and finishing it does. A known threat already this close is worth charging with
+	// a forced knife rather than trading shots - see CNEOBotKnifeRush for the entry/exit detail.
+	if ( CNEOBotKnifeRush::IsPossible( me ) )
+	{
+		return SuspendFor( new CNEOBotKnifeRush, "Losing the race - knife rushing a close threat" );
 	}
 
 	if ( CBaseEntity *breakable = CNEOBotPathClearBreakable::GetBreakableInPath( me ) )

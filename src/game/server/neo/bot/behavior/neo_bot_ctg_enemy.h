@@ -58,6 +58,13 @@ public:
 	// The living enemy player carrying the ghost, or nullptr if there is none.
 	static CNEO_Player *EnemyGhostCarrier( CNEOBot *me );
 
+	// True when an enemy is carrying the ghost and is already nearer to the cap it is heading for
+	// (straight-line) than `me` is - the position race for that cap is lost. Used to decide when
+	// self-preservation stops paying: if the carrier is this close, retreating to reload or fall
+	// back buys nothing but time we do not have, and preventing the capture outranks surviving the
+	// engagement (see sv_neo_bot_ctg_no_retreat_when_carrier_ahead).
+	static bool IsLosingTheRace( CNEOBot *me );
+
 	// Predicts the route the ghost would take from where it is now (NEORules()->GetGhostPos() -
 	// the carrier's position while carried, the ground/marker position while not) to the nearest
 	// cap the enemy of `me` could score into, and finds the earliest area on it this bot can win

@@ -4,6 +4,7 @@
 #include "neo_smokelineofsightblocker.h"
 #include "bot/neo_bot.h"
 #include "bot/behavior/neo_bot_attack.h"
+#include "bot/behavior/neo_bot_ctg_enemy.h"
 #include "bot/behavior/neo_bot_grenade_dispatch.h"
 #include "bot/behavior/neo_bot_retreat_to_cover.h"
 #include "bot/neo_bot_path_compute.h"
@@ -13,6 +14,9 @@
 
 ConVar sv_neo_bot_attack_debug_cover("sv_neo_bot_attack_debug_cover", "0", FCVAR_CHEAT,
 	"Draw debug overlays for bot attack/cover behavior", true, 0, true, 1);
+
+// Declared in neo_bot_ctg_enemy.cpp, next to CNEOBotCtgEnemy::IsLosingTheRace.
+extern ConVar sv_neo_bot_ctg_no_retreat_when_carrier_ahead;
 
 
 //---------------------------------------------------------------------------------------------
@@ -431,6 +435,17 @@ QueryResultType	CNEOBotAttack::ShouldRetreat( const INextBot *me ) const
 {
 
 	const CNEOBot *meNeoBot = static_cast<const CNEOBot *>(me);
+
+	// The carrier is already closer to scoring than we are to stopping it - retreating to reload
+	// or fall back wins nothing, it only spends time we do not have. Preventing the capture
+	// outranks surviving this fight (sv_neo_bot_ctg_no_retreat_when_carrier_ahead).
+	if ( sv_neo_bot_ctg_no_retreat_when_carrier_ahead.GetBool()
+		&& NEORules()->GetGameType() == NEO_GAME_TYPE_CTG
+		&& CNEOBotCtgEnemy::IsLosingTheRace( const_cast<CNEOBot *>( meNeoBot ) ) )
+	{
+		return ANSWER_NO;
+	}
+
 	CNEOBaseCombatWeapon* myWeapon = static_cast<CNEOBaseCombatWeapon* >( meNeoBot->GetActiveWeapon() );
 	if ( !meNeoBot->IsRanged(myWeapon) )
 	{

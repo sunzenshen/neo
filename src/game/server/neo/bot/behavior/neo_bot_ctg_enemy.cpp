@@ -12,6 +12,13 @@
 // NEO-HARNESS-TEMP: forensic instrumentation only (see the NEO_FORENSIC_CUTOFF line in FindCutOff).
 extern ConVar sv_neo_forensic_log;
 
+ConVar sv_neo_bot_ctg_no_retreat_when_carrier_ahead( "sv_neo_bot_ctg_no_retreat_when_carrier_ahead", "0", FCVAR_CHEAT,
+	"CTG: when 1, a defender that has already lost the position race (CNEOBotCtgEnemy::IsLosingTheRace) "
+	"never retreats or backs off to reload, and is eligible to knife-rush a threat already at close "
+	"range (see CNEOBotKnifeRush). Preventing the capture outranks surviving the fight once the carrier "
+	"is this close - see notes/ctg-defence-arms.md.",
+	true, 0.0f, true, 1.0f );
+
 ConVar sv_neo_bot_ctg_enemy_intercept_lead( "sv_neo_bot_ctg_enemy_intercept_lead", "1.0", FCVAR_CHEAT,
 	"CTG: a bot claims a point on the enemy ghost carrier's route only when its own travel there is at "
 	"most this fraction of the carrier's. Below 1 it needs a head start; above 1 it will try marginal cut-offs.",
@@ -131,6 +138,29 @@ CNEO_Player *CNEOBotCtgEnemy::EnemyGhostCarrier( CNEOBot *me )
 	}
 
 	return pCarrier;
+}
+
+//---------------------------------------------------------------------------------------------
+bool CNEOBotCtgEnemy::IsLosingTheRace( CNEOBot *me )
+{
+	CNEO_Player *pCarrier = EnemyGhostCarrier( me );
+	if ( !pCarrier )
+	{
+		return false;
+	}
+
+	// Straight-line, deliberately - the same naive read of the marker every other CTG-enemy
+	// decision in this file makes, and it is the honest question here: has the carrier already
+	// covered more of the ground to its cap than I have left to cover to reach mine.
+	CNEOGhostCapturePoint *pGoalCap = GhostGoalCap( me );
+	if ( !pGoalCap )
+	{
+		return false;
+	}
+
+	const float flCarrierDistSq = pCarrier->GetAbsOrigin().DistToSqr( pGoalCap->GetAbsOrigin() );
+	const float flMyDistSq = me->GetAbsOrigin().DistToSqr( pGoalCap->GetAbsOrigin() );
+	return flCarrierDistSq < flMyDistSq;
 }
 
 //---------------------------------------------------------------------------------------------
