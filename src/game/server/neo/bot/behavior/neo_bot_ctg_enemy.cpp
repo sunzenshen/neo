@@ -9,9 +9,6 @@
 #include "nav_mesh.h"
 #include "nav_pathfind.h"
 
-// NEO-HARNESS-TEMP: forensic instrumentation only (see the NEO_FORENSIC_CUTOFF line in FindCutOff).
-extern ConVar sv_neo_forensic_log;
-
 ConVar sv_neo_bot_ctg_enemy_intercept_lead( "sv_neo_bot_ctg_enemy_intercept_lead", "1.0", FCVAR_CHEAT,
 	"CTG: a bot claims a point on the enemy ghost carrier's route only when its own travel there is at "
 	"most this fraction of the carrier's. Below 1 it needs a head start; above 1 it will try marginal cut-offs.",
@@ -238,15 +235,6 @@ bool CNEOBotCtgEnemy::FindCutOff( CNEOBot *me, CNEO_Player *pGhostCarrier, CutOf
 	if ( iChosen < 0 )
 	{
 		return false;
-	}
-
-	// NEO-HARNESS-TEMP: one line per cut-off decision, so where on the carrier's route defenders
-	// actually commit can be checked against the map. See harness/patches/README.md.
-	if ( sv_neo_forensic_log.GetBool() )
-	{
-		Msg( "NEO_FORENSIC_CUTOFF t=%.2f p=%d area=%d idx=%d routelen=%d\n",
-			gpGlobals->curtime, me->entindex(), carrierRoute.areas[ iChosen ]->GetID(), iChosen,
-			carrierRoute.Count() );
 	}
 
 	cutOff.pArea = carrierRoute.areas[ iChosen ];
