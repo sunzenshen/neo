@@ -5,6 +5,7 @@
 #include "bot/behavior/neo_bot_knife_rush.h"
 #include "bot/behavior/neo_bot_ctg_enemy.h"
 #include "bot/neo_bot_path_compute.h"
+#include "neo_enums.h"
 #include "weapon_knife.h"
 
 // Declared in neo_bot_ctg_enemy.cpp, next to CNEOBotCtgEnemy::IsLosingTheRace.
@@ -25,6 +26,19 @@ ConVar sv_neo_bot_ctg_knife_rush_exit_range( "sv_neo_bot_ctg_knife_rush_exit_ran
 ConVar sv_neo_bot_ctg_knife_rush_exit_range_unarmed_mult( "sv_neo_bot_ctg_knife_rush_exit_range_unarmed_mult", "1.75", FCVAR_CHEAT,
 	"CTG no-retreat: multiplies sv_neo_bot_ctg_knife_rush_exit_range when the threat has no working ranged weapon left.",
 	true, 1.0f, false, 0.0f );
+
+ConVar sv_neo_bot_ctg_knife_rush_flank_distance( "sv_neo_bot_ctg_knife_rush_flank_distance", "40", FCVAR_CHEAT,
+	"CTG no-retreat: the knife rush paths to this many units behind the target's current facing, not "
+	"to the target itself, to set up NEOTOKYO's backstab bonus (any hit within ~37 degrees of the "
+	"target's own back does 226 damage - a guaranteed kill regardless of class) instead of a front-on "
+	"trade (25 damage/swing, 4-9 swings to kill). Kept under the knife's own range (51 u) so arriving "
+	"at the flank point already puts us in swing distance.",
+	true, 0.0f, false, 0.0f );
+
+ConVar sv_neo_bot_ctg_knife_rush_repath_seconds( "sv_neo_bot_ctg_knife_rush_repath_seconds", "0.3", FCVAR_CHEAT,
+	"CTG no-retreat: seconds between the knife rush re-aiming its flank point at the target's current "
+	"back. Short, because both bots are moving fast relative to how close this fight already is.",
+	true, 0.05f, false, 0.0f );
 
 //---------------------------------------------------------------------------------------------
 // The threat's active weapon still being able to shoot us is what makes closing distance risky.
@@ -52,6 +66,14 @@ bool CNEOBotKnifeRush::IsPossible( CNEOBot *me )
 	if ( !sv_neo_bot_ctg_no_retreat_when_carrier_ahead.GetBool()
 		|| NEORules()->GetGameType() != NEO_GAME_TYPE_CTG
 		|| !CNEOBotCtgEnemy::IsLosingTheRace( me ) )
+	{
+		return false;
+	}
+
+	// Support is a terrible knife fighter - slow to close, slow to reposition for the backstab this
+	// whole approach is built around - so it sits this one out regardless of the relative-speed
+	// check below.
+	if ( me->GetClass() == NEO_CLASS_SUPPORT )
 	{
 		return false;
 	}
@@ -85,6 +107,37 @@ bool CNEOBotKnifeRush::IsPossible( CNEOBot *me )
 }
 
 //---------------------------------------------------------------------------------------------
+// Aim sv_neo_bot_ctg_knife_rush_flank_distance units behind the target's current facing, not at
+// the target itself - see the class comment for why. Falls back to the target's own position if it
+// is not a player we can read a facing from (should not happen for a live PvP threat, but a path
+// to fight from is better than none).
+bool CNEOBotKnifeRush::RepathToFlank( CNEOBot *me )
+{
+	CBaseEntity *pThreat = nullptr;
+	if ( const CKnownEntity *threat = me->GetVisionInterface()->GetPrimaryKnownThreat( true ) )
+	{
+		pThreat = threat->GetEntity();
+	}
+
+	if ( !pThreat )
+	{
+		return false;
+	}
+
+	Vector vecGoal = pThreat->GetAbsOrigin();
+
+	if ( CNEO_Player *pThreatPlayer = ToNEOPlayer( pThreat ) )
+	{
+		QAngle facing( 0.0f, pThreatPlayer->EyeAngles().y, 0.0f );
+		Vector vecForward;
+		AngleVectors( facing, &vecForward );
+		vecGoal -= vecForward * sv_neo_bot_ctg_knife_rush_flank_distance.GetFloat();
+	}
+
+	return CNEOBotPathCompute( me, m_path, vecGoal, FASTEST_ROUTE );
+}
+
+//---------------------------------------------------------------------------------------------
 ActionResult< CNEOBot > CNEOBotKnifeRush::OnStart( CNEOBot *me, Action< CNEOBot > *priorAction )
 {
 	m_hKnife = static_cast< CNEOBaseCombatWeapon * >( me->Weapon_OwnsThisType( "weapon_knife" ) );
@@ -97,6 +150,10 @@ ActionResult< CNEOBot > CNEOBotKnifeRush::OnStart( CNEOBot *me, Action< CNEOBot 
 
 	me->PushRequiredWeapon( m_hKnife );
 	m_bPushedRequiredWeapon = true;
+
+	m_path.SetMinLookAheadDistance( me->GetDesiredPathLookAheadRange() );
+	RepathToFlank( me );
+	m_repathTimer.Start( sv_neo_bot_ctg_knife_rush_repath_seconds.GetFloat() );
 
 	return Continue();
 }
@@ -121,11 +178,17 @@ ActionResult< CNEOBot > CNEOBotKnifeRush::Update( CNEOBot *me, float interval )
 		return Done( "Threat broke off - resuming normal combat" );
 	}
 
+	if ( m_repathTimer.IsElapsed() )
+	{
+		m_repathTimer.Start( sv_neo_bot_ctg_knife_rush_repath_seconds.GetFloat() );
+		RepathToFlank( me );
+	}
+
 	// Movement only - CNEOBotMainAction::Update runs every tick regardless of what covers
 	// TacticalMonitor, and its EquipRequiredWeapon() / FireWeaponAtEnemy() /
 	// UpdateLookingAroundForEnemies() already aim at and swing the forced knife once we are close
-	// enough. Nothing here needs to press fire itself.
-	CNEOBotPathUpdateChase( me, m_chasePath, threat->GetEntity(), FASTEST_ROUTE );
+	// enough, on whatever bearing we ended up approaching from. Nothing here needs to press fire.
+	m_path.Update( me );
 
 	return Continue();
 }
@@ -137,4 +200,26 @@ void CNEOBotKnifeRush::OnEnd( CNEOBot *me, Action< CNEOBot > *nextAction )
 	{
 		me->PopRequiredWeapon();
 	}
+}
+
+//---------------------------------------------------------------------------------------------
+EventDesiredResult< CNEOBot > CNEOBotKnifeRush::OnStuck( CNEOBot *me )
+{
+	if ( !RepathToFlank( me ) )
+	{
+		return TryDone( RESULT_TRY, "Stuck with no way to the target's flank" );
+	}
+
+	return TryContinue();
+}
+
+//---------------------------------------------------------------------------------------------
+EventDesiredResult< CNEOBot > CNEOBotKnifeRush::OnMoveToFailure( CNEOBot *me, const Path *path, MoveToFailureType reason )
+{
+	if ( !RepathToFlank( me ) )
+	{
+		return TryDone( RESULT_TRY, "Cannot reach the target's flank" );
+	}
+
+	return TryContinue();
 }

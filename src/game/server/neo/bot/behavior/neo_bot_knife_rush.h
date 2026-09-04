@@ -1,7 +1,7 @@
 #pragma once
 
 #include "bot/neo_bot.h"
-#include "Path/NextBotChasePath.h"
+#include "nav_pathfind.h"
 
 class CNEOBaseCombatWeapon;
 
@@ -14,12 +14,23 @@ class CNEOBaseCombatWeapon;
 // IsPossible() before ever constructing one - the same pattern as CNEOBotGetAmmo::IsPossible /
 // CNEOBotGetHealth::IsPossible.
 //
+// The approach deliberately aims for the target's back, not their current position: NEOTOKYO's
+// knife (weapon_knife.cpp) is a flat 25 damage per swing at ~1.8 swings/second - 4-9 hits to kill
+// depending on class - but any hit within about 37 degrees of the target's own facing does 226
+// (a guaranteed kill regardless of class). A front-on approach is a multi-second trade a still-armed
+// enemy usually wins; arriving at their back turns it into one hit. The aim point is recomputed on
+// a short timer as the target moves and turns, which - since it always aims for wherever "behind
+// them" currently is - naturally routes around a target that turns to face the incoming bot,
+// without any explicit circle-strafe logic.
+//
 // Firing and aiming are deliberately not this behaviour's job. CNEOBotMainAction::Update runs
 // every tick regardless of what is suspended beneath it, and its EquipRequiredWeapon() +
 // FireWeaponAtEnemy() + UpdateLookingAroundForEnemies() already look at, aim at and swing whatever
-// weapon is forced onto the required-weapon stack. This behaviour only owns closing the distance
-// and deciding when to give up on the plan - the enemy breaking off past knife range, especially
-// while still holding a weapon with bullets left, is the one thing that makes charging a mistake.
+// weapon is forced onto the required-weapon stack, on whatever bearing the approach ends up on -
+// arriving at their side or front still swings, just without the backstab bonus. This behaviour
+// only owns closing the distance and deciding when to give up on the plan - the enemy breaking off
+// past knife range, especially while still holding a weapon with bullets left, is the one thing
+// that makes charging a mistake.
 class CNEOBotKnifeRush : public Action< CNEOBot >
 {
 public:
@@ -33,10 +44,16 @@ public:
 	virtual ActionResult< CNEOBot >	Update( CNEOBot *me, float interval ) override;
 	virtual void						OnEnd( CNEOBot *me, Action< CNEOBot > *nextAction ) override;
 
+	virtual EventDesiredResult< CNEOBot > OnStuck( CNEOBot *me ) override;
+	virtual EventDesiredResult< CNEOBot > OnMoveToFailure( CNEOBot *me, const Path *path, MoveToFailureType reason ) override;
+
 	virtual const char *GetName( void ) const override { return "knifeRush"; }
 
 private:
+	bool RepathToFlank( CNEOBot *me );
+
 	CHandle< CNEOBaseCombatWeapon > m_hKnife;	// pushed onto the required-weapon stack for the duration
 	bool m_bPushedRequiredWeapon = false;		// guards OnEnd's pop against an OnStart that bailed early
-	ChasePath m_chasePath;
+	PathFollower m_path;
+	CountdownTimer m_repathTimer;				// throttles re-aiming the flank point at the target's back
 };
