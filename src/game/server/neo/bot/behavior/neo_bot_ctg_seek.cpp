@@ -250,26 +250,41 @@ void CNEOBotCtgSeek::RecomputeSeekPath( CNEOBot *me )
 		}
 		else
 		{
-			// Before racing for the ghost, ask whether the enemy is honestly closer to it than we
+			// Before racing for the ghost, ask - once per round, during the freeze time this
+			// action is normally entered in - whether the enemy is honestly closer to it than we
 			// are. If so by a wide enough margin, do not bother - go cover the zone it would
 			// threaten instead, on the unhurried DEFAULT_ROUTE, so the team is already regrouped
 			// there by the time the ghost is actually picked up and CNEOBotCtgEnemy takes over
 			// (see FindCutOff). The comparison plans from public information only: the enemy's
 			// side uses the map's own spawn point geometry, never a live enemy position.
-			const float flRatio = sv_neo_bot_ctg_seek_preposition_ratio.GetFloat();
-			Vector vecPreposition;
-			if ( flRatio > 0.0f && FindPrepositionGoal( me, flRatio, vecPreposition ) )
+			//
+			// This is a one-shot commitment, not something re-checked on every repath. A bot that
+			// is stuck, blocked, or has just arrived and needs a new target for the same round has
+			// already made this call once; asking again mid-round would let it flip-flop between
+			// "go to the ghost" and "go hold the zone" on no new information, which is exactly the
+			// kind of thrash this project has repeatedly found costly elsewhere. The round number
+			// is the tag rather than a plain bool because this Action can outlive a single round -
+			// nothing in Update() ends it at a round boundary - so a new round has to re-arm it.
+			const int iRound = NEORules()->roundNumber();
+			if ( m_iPrepositionDecidedRound != iRound )
 			{
-				m_vGoalPos = vecPreposition;
-				m_bGoingToTargetEntity = false;	// a position to hold, not something to pick up
-				m_hTargetEntity = nullptr;
+				m_iPrepositionDecidedRound = iRound;
 
-				if ( CNEOBotPathCompute( me, m_path, m_vGoalPos, DEFAULT_ROUTE )
-					&& m_path.IsValid() && m_path.GetResult() == Path::COMPLETE_PATH )
+				const float flRatio = sv_neo_bot_ctg_seek_preposition_ratio.GetFloat();
+				Vector vecPreposition;
+				if ( flRatio > 0.0f && FindPrepositionGoal( me, flRatio, vecPreposition ) )
 				{
-					return;
+					m_vGoalPos = vecPreposition;
+					m_bGoingToTargetEntity = false;	// a position to hold, not something to pick up
+					m_hTargetEntity = nullptr;
+
+					if ( CNEOBotPathCompute( me, m_path, m_vGoalPos, DEFAULT_ROUTE )
+						&& m_path.IsValid() && m_path.GetResult() == Path::COMPLETE_PATH )
+					{
+						return;
+					}
+					// No path to the threatened zone - fall through and race for the ghost instead.
 				}
-				// No path to the threatened zone - fall through and race for the ghost instead.
 			}
 
 			// Search for ghost on the ground
