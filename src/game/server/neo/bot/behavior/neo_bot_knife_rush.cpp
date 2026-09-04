@@ -89,15 +89,23 @@ bool CNEOBotKnifeRush::IsPossible( CNEOBot *me )
 		return false;
 	}
 
-	// A knife only beats a gun we can't fire right now. A loaded clip always carries a chance of a
-	// headshot, which is a better bet than a 25-damage knife swing - reserve ammo does not help
-	// with that until a reload finishes, which this bot may not have time for with a threat this
-	// close, so it is the clip specifically that has to be empty, not the total ammo count.
-	CNEOBaseCombatWeapon *myWeapon = static_cast< CNEOBaseCombatWeapon * >( me->GetActiveWeapon() );
-	if ( !sv_neo_bot_ctg_knife_rush_ignore_ammo.GetBool()
-		&& myWeapon && CNEOBot::IsRanged( myWeapon ) && myWeapon->Clip1() > 0 )
+	// A knife only beats a gun we can't fire right now. A loaded clip - in *either* slot, not just
+	// whichever is out - always carries a chance of a headshot, which is a better bet than a
+	// 25-damage knife swing: switching to a sidearm that still has rounds beats drawing a knife.
+	// Reserve ammo does not help with that until a reload finishes, which this bot may not have
+	// time for with a threat this close, so it is each weapon's clip specifically that has to be
+	// empty, not its total ammo count.
+	if ( !sv_neo_bot_ctg_knife_rush_ignore_ammo.GetBool() )
 	{
-		return false;
+		CNEOBaseCombatWeapon *pPrimary = static_cast< CNEOBaseCombatWeapon * >( me->Weapon_GetSlot( 0 ) );
+		CNEOBaseCombatWeapon *pSecondary = static_cast< CNEOBaseCombatWeapon * >( me->Weapon_GetSlot( 1 ) );
+
+		const bool bPrimaryHasAmmo = pPrimary && CNEOBot::IsRanged( pPrimary ) && pPrimary->Clip1() > 0;
+		const bool bSecondaryHasAmmo = pSecondary && CNEOBot::IsRanged( pSecondary ) && pSecondary->Clip1() > 0;
+		if ( bPrimaryHasAmmo || bSecondaryHasAmmo )
+		{
+			return false;
+		}
 	}
 
 	const CKnownEntity *threat = me->GetVisionInterface()->GetPrimaryKnownThreat( true );
