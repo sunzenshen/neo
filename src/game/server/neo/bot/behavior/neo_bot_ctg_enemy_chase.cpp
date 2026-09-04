@@ -52,21 +52,3 @@ ActionResult< CNEOBot > CNEOBotCtgEnemyChase::Update( CNEOBot *me, float interva
 
 	return Continue();
 }
-
-//---------------------------------------------------------------------------------------------
-EventDesiredResult< CNEOBot > CNEOBotCtgEnemyChase::OnStuck( CNEOBot *me )
-{
-	return TryContinue();
-}
-
-//---------------------------------------------------------------------------------------------
-EventDesiredResult< CNEOBot > CNEOBotCtgEnemyChase::OnMoveToSuccess( CNEOBot *me, const Path *path )
-{
-	return TryContinue();
-}
-
-//---------------------------------------------------------------------------------------------
-EventDesiredResult< CNEOBot > CNEOBotCtgEnemyChase::OnMoveToFailure( CNEOBot *me, const Path *path, MoveToFailureType reason )
-{
-	return TryContinue();
-}

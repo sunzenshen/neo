@@ -8,9 +8,6 @@
 #include "neo_gamerules.h"
 #include "neo_player_shared.h"
 #include "vphysics_interface.h"
-#include "bot/neo_bot_path_reservation.h"
-
-extern ConVar sv_neo_bot_ctg_enemy_distinct_cutoffs;
 
 ConVar sv_neo_bot_ctg_enemy_intercept_replan_seconds( "sv_neo_bot_ctg_enemy_intercept_replan_seconds", "5", FCVAR_CHEAT,
 	"CTG: seconds between an intercepting bot re-picking its cut-off on the enemy ghost carrier's route, to catch the carrier taking a line it did not predict.",
@@ -18,10 +15,10 @@ ConVar sv_neo_bot_ctg_enemy_intercept_replan_seconds( "sv_neo_bot_ctg_enemy_inte
 
 // How close to the cut-off area's centre counts as being there. A nav area is wider than a player,
 // so standing anywhere in it is close enough to meet whoever comes through.
-static const float kCutOffArrivalTolerance = 64.0f;
+static const float CTG_ENEMY_CUTOFF_ARRIVAL_TOLERANCE = 64.0f;
 
 // How many nav areas back up the carrier's route to consider when picking a spot to watch.
-static const int kWatchAreaLimit = 12;
+static const int CTG_ENEMY_WATCH_AREA_LIMIT = 12;
 
 //---------------------------------------------------------------------------------------------
 CNEOBotCtgEnemyInterceptCapPath::CNEOBotCtgEnemyInterceptCapPath( const CNEOBotCtgEnemy::CutOff &cutOff,
@@ -35,18 +32,10 @@ CNEOBotCtgEnemyInterceptCapPath::CNEOBotCtgEnemyInterceptCapPath( const CNEOBotC
 //---------------------------------------------------------------------------------------------
 bool CNEOBotCtgEnemyInterceptCapPath::RepathToCutOff( CNEOBot *me )
 {
-	// Claim the area for sv_neo_bot_ctg_enemy_distinct_cutoffs: every place this function is
-	// called (OnStart, a replan that moved, OnStuck, OnMoveToFailure) is a moment this bot is
-	// committing or recommitting to m_cutOff, so this is the one place that needs to say so. The
-	// duration is the replan interval plus a margin, so a bot that stops re-confirming - it moved
-	// on to chasing, or died - lets the claim lapse on its own rather than needing an explicit
-	// release.
-	if ( sv_neo_bot_ctg_enemy_distinct_cutoffs.GetBool() && m_cutOff.pArea )
-	{
-		CNEOBotPathReservations()->ReserveArea( m_cutOff.pArea, me,
-			sv_neo_bot_ctg_enemy_intercept_replan_seconds.GetFloat() + 2.0f );
-	}
-
+	// No explicit path reservation for the cut-off area: CNEOBotPathCompute reserves every area on
+	// the path it computes, the destination included, and it starts by releasing this bot's
+	// previous claims. Anything claimed here would be dropped again a line later.
+	//
 	// This walk ends in holding a spot, not passing through it. A one-way drop on the way is bad
 	// ground for that: if the next replan moves the cut-off, or the hold gets abandoned to chase,
 	// getting back means detouring around instead of retracing the same steps. Preferred against,
@@ -101,7 +90,7 @@ void CNEOBotCtgEnemyInterceptCapPath::WatchForTheCarrier( CNEOBot *me )
 
 	// One trace per area, so bound the walk: anything much further back than this is around a
 	// corner in practice, and the loop stops at the first area we cannot see anyway.
-	const int iStopAt = MAX( 0, m_cutOff.iCarrierRouteIndex - kWatchAreaLimit );
+	const int iStopAt = MAX( 0, m_cutOff.iCarrierRouteIndex - CTG_ENEMY_WATCH_AREA_LIMIT );
 	for ( int i = m_cutOff.iCarrierRouteIndex - 1; i >= iStopAt; --i )
 	{
 		const Vector vecSpot = m_carrierRoute.areas[i]->GetCenter() + vecEyeOffset;
@@ -164,7 +153,7 @@ ActionResult< CNEOBot > CNEOBotCtgEnemyInterceptCapPath::Update( CNEOBot *me, fl
 	}
 
 	const bool bArrived = ( me->GetLastKnownArea() == m_cutOff.pArea )
-		|| ( ( me->GetAbsOrigin() - m_cutOff.vecPos ).Length2DSqr() < Square( kCutOffArrivalTolerance ) );
+		|| ( ( me->GetAbsOrigin() - m_cutOff.vecPos ).Length2DSqr() < Square( CTG_ENEMY_CUTOFF_ARRIVAL_TOLERANCE ) );
 
 	if ( bArrived )
 	{

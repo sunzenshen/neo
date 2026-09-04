@@ -602,8 +602,7 @@ const CKnownEntity *CNEOBotMainAction::SelectMoreDangerousThreatInternal( const 
 	{
 		return threat2;
 	}
-
-	if ( !isImmediateThreat1 && !isImmediateThreat2 )
+	else if ( !isImmediateThreat1 && !isImmediateThreat2 )
 	{
 		// neither threat is immediately dangerous - use closest
 		return closerThreat;

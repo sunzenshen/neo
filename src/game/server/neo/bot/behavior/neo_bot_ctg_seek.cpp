@@ -29,18 +29,9 @@ ActionResult< CNEOBot > CNEOBotCtgSeek::Update( CNEOBot *me, float interval )
 	// the carrier the moment it sees a threat, and a bot holding a cut-off shoots what walks into
 	// it. What changes is that the fight is anchored to the carrier's route instead of to wherever
 	// the first escort happened to appear.
-	if ( NEORules()->GhostExists() )
+	if ( CNEOBotCtgEnemy::EnemyGhostCarrier( me ) )
 	{
-		const int iGhosterPlayer = NEORules()->GetGhosterPlayer();
-		if ( iGhosterPlayer > 0 && iGhosterPlayer <= gpGlobals->maxClients )
-		{
-			CNEO_Player *pGhostCarrier = ToNEOPlayer( UTIL_PlayerByIndex( iGhosterPlayer ) );
-			if ( pGhostCarrier && pGhostCarrier != me && pGhostCarrier->IsAlive()
-				&& pGhostCarrier->GetTeamNumber() != me->GetTeamNumber() )
-			{
-				return SuspendFor( new CNEOBotCtgEnemy, "Stopping the ghost carrier!" );
-			}
-		}
+		return SuspendFor( new CNEOBotCtgEnemy, "Stopping the ghost carrier!" );
 	}
 
 	ActionResult< CNEOBot > result = UpdateCommon( me, interval );

@@ -26,10 +26,9 @@ public:
 	virtual ActionResult< CNEOBot >	OnStart( CNEOBot *me, Action< CNEOBot > *priorAction ) override;
 	virtual ActionResult< CNEOBot >	Update( CNEOBot *me, float interval ) override;
 
-	virtual EventDesiredResult< CNEOBot > OnStuck( CNEOBot *me ) override;
-	virtual EventDesiredResult< CNEOBot > OnMoveToSuccess( CNEOBot *me, const Path *path ) override;
-	virtual EventDesiredResult< CNEOBot > OnMoveToFailure( CNEOBot *me, const Path *path, MoveToFailureType reason ) override;
-
+	// OnStuck / OnMoveToSuccess / OnMoveToFailure are deliberately not overridden. A ChasePath is
+	// recomputed every Update against a moving target, so the next tick already does what a handler
+	// would, and Action's defaults (TryContinue) let the event fall through to the actions below.
 	virtual const char *GetName( void ) const override { return "ctgEnemyChase"; }
 
 private:
