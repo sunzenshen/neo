@@ -60,11 +60,14 @@ CNEOGhostCapturePoint *CNEOBotCtgEnemy::NearestCapForTeam( int iTeam, const Vect
 }
 
 //---------------------------------------------------------------------------------------------
-// The cap zone the carrier is trying to reach. Run from the outside on public information - the
-// ghost marker gives the carrier's position away, cap zones are fixed map geometry.
-CNEOGhostCapturePoint *CNEOBotCtgEnemy::CarrierGoalCap( CNEO_Player *pGhostCarrier )
+// The cap zone the ghost is heading for. Run from the outside on public information - the ghost
+// marker gives its position away, cap zones are fixed map geometry. Keyed to the enemy of `me`
+// (the team that would carry and score) and the ghost's position, so it is meaningful before any
+// pickup as well as during a carry.
+CNEOGhostCapturePoint *CNEOBotCtgEnemy::GhostGoalCap( CNEOBot *me )
 {
-	return NearestCapForTeam( pGhostCarrier->GetTeamNumber(), pGhostCarrier->GetAbsOrigin() );
+	const int iEnemyTeam = NEORules()->GetOpposingTeam( me->GetTeamNumber() );
+	return NearestCapForTeam( iEnemyTeam, NEORules()->GetGhostPos() );
 }
 
 //---------------------------------------------------------------------------------------------
@@ -171,64 +174,69 @@ private:
 };
 
 //---------------------------------------------------------------------------------------------
-bool CNEOBotCtgEnemy::FindCutOff( CNEOBot *me, CNEO_Player *pGhostCarrier, CutOff &cutOff,
-	CNEOBotPredictedRoute *pOutCarrierRoute )
+bool CNEOBotCtgEnemy::BuildGhostRoute( CNEOBot *me, CNEOBotPredictedRoute &routeOut, Vector &vecGoalOut )
 {
-	cutOff = CutOff();
-	if ( pOutCarrierRoute )
-	{
-		pOutCarrierRoute->Reset();
-	}
+	routeOut.Reset();
 
-	if ( !pGhostCarrier )
-	{
-		return false;
-	}
-
-	CNEOGhostCapturePoint *pGoalCap = CarrierGoalCap( pGhostCarrier );
+	CNEOGhostCapturePoint *pGoalCap = GhostGoalCap( me );
 	if ( !pGoalCap )
 	{
 		return false;
 	}
+	vecGoalOut = pGoalCap->GetAbsOrigin();
 
-	const Vector vecGoal = pGoalCap->GetAbsOrigin();
+	// The ghost's side is a naive shortest route: we do not know which enemy will take it, their
+	// class, loadout or real intent, so guessing anything richer would be reading their mind.
+	CNavArea *pGhostArea = TheNavMesh->GetNearestNavArea( NEORules()->GetGhostPos() );
+	ShortestPathCost cost;
+	return PredictRoute( pGhostArea, vecGoalOut, cost, routeOut );
+}
 
-	// The carrier's side is a naive shortest route: we do not know its class, its loadout or where
-	// it actually means to go, so guessing anything richer would be reading its mind.
-	CNEOBotPredictedRoute carrierRoute;
-	ShortestPathCost carrierCost;
-	if ( !PredictRoute( pGhostCarrier->GetLastKnownArea(), vecGoal, carrierCost, carrierRoute ) )
+//---------------------------------------------------------------------------------------------
+bool CNEOBotCtgEnemy::FindCutOff( CNEOBot *me, CutOff &cutOff,
+	CNEOBotPredictedRoute *pOutGhostRoute )
+{
+	cutOff = CutOff();
+	if ( pOutGhostRoute )
+	{
+		pOutGhostRoute->Reset();
+	}
+
+	Vector vecGoal;
+	CNEOBotPredictedRoute ghostRoute;
+	if ( !BuildGhostRoute( me, ghostRoute, vecGoal ) )
 	{
 		return false;
 	}
 
 	// How far we have to travel to reach each area of that route. This is the honest half of the
 	// comparison: it knows what this bot can actually traverse, and it is measured the same way as
-	// the carrier's side (between area centres), so the two numbers are comparable.
+	// the ghost's side (between area centres), so the two numbers are comparable.
 	//
-	// Note the search has to come *after* the carrier's route is copied out: both this and
+	// Note the search has to come *after* the ghost's route is copied out: both this and
 	// NavAreaBuildPath work through the nav areas' shared search state.
 	const float flLead = sv_neo_bot_ctg_enemy_intercept_lead.GetFloat();
 
 	CUtlVector< float > myTravel;
-	CNEOBotRouteTravelCost search( me, carrierRoute, myTravel );
-	SearchSurroundingAreas( me->GetLastKnownArea(), search, carrierRoute.Length() * flLead );
+	CNEOBotRouteTravelCost search( me, ghostRoute, myTravel );
+	SearchSurroundingAreas( me->GetLastKnownArea(), search, ghostRoute.Length() * flLead );
 
-	// Walk the carrier's route outward from the carrier and take the first area we beat it to.
-	// Earliest wins: that is the point furthest from the carrier's cap where we can still be
-	// standing in its way. Pathing at the route directly, rather than intersecting it with our own
-	// route to the cap, is what makes an early meeting possible at all - two routes that both aim
-	// at the cap tend not to share ground until they are nearly there.
+	// Walk the ghost's route outward from the ghost and take the first area we beat it to.
+	// Earliest wins: that is the point furthest from the cap where we can still be standing in its
+	// way. Pathing at the route directly, rather than intersecting it with our own route to the
+	// cap, is what makes an early meeting possible at all - two routes that both aim at the cap
+	// tend not to share ground until they are nearly there.
 	//
 	// Every rule tried for choosing a *later* point than this - to set the ambush outside the
 	// carrier's through-wall vision, to space the defence out in depth, or to converge the whole
 	// team on one area - measured worse, and for the same reason each time: it makes the bot claim
 	// ground it cannot actually be standing on in time, so it spends the walk and arrives nowhere.
-	// The evidence is in notes/ctg-defence-arms.md.
+	// The evidence is in notes/ctg-defence-arms.md. The freezetime goalie (FindGoalieHold) is the
+	// one deliberate exception, and only for the slow class.
 	int iChosen = -1;
-	for ( int i = 0; i < carrierRoute.Count(); ++i )
+	for ( int i = 0; i < ghostRoute.Count(); ++i )
 	{
-		if ( myTravel[i] >= 0.0f && myTravel[i] <= carrierRoute.travel[i] * flLead )
+		if ( myTravel[i] >= 0.0f && myTravel[i] <= ghostRoute.travel[i] * flLead )
 		{
 			iChosen = i;
 			break;
@@ -240,23 +248,76 @@ bool CNEOBotCtgEnemy::FindCutOff( CNEOBot *me, CNEO_Player *pGhostCarrier, CutOf
 		return false;
 	}
 
-	// NEO-HARNESS-TEMP: one line per cut-off decision, so where on the carrier's route defenders
+	// NEO-HARNESS-TEMP: one line per cut-off decision, so where on the ghost's route defenders
 	// actually commit can be checked against the map. See harness/patches/README.md.
 	if ( sv_neo_forensic_log.GetBool() )
 	{
 		Msg( "NEO_FORENSIC_CUTOFF t=%.2f p=%d area=%d idx=%d routelen=%d\n",
-			gpGlobals->curtime, me->entindex(), carrierRoute.areas[ iChosen ]->GetID(), iChosen,
-			carrierRoute.Count() );
+			gpGlobals->curtime, me->entindex(), ghostRoute.areas[ iChosen ]->GetID(), iChosen,
+			ghostRoute.Count() );
 	}
 
-	cutOff.pArea = carrierRoute.areas[ iChosen ];
+	cutOff.pArea = ghostRoute.areas[ iChosen ];
 	cutOff.vecPos = cutOff.pArea->GetCenter();
 	cutOff.iCarrierRouteIndex = iChosen;
 
-	if ( pOutCarrierRoute )
+	if ( pOutGhostRoute )
 	{
-		pOutCarrierRoute->areas.Swap( carrierRoute.areas );
-		pOutCarrierRoute->travel.Swap( carrierRoute.travel );
+		pOutGhostRoute->areas.Swap( ghostRoute.areas );
+		pOutGhostRoute->travel.Swap( ghostRoute.travel );
+	}
+
+	return true;
+}
+
+//---------------------------------------------------------------------------------------------
+bool CNEOBotCtgEnemy::FindGoalieHold( CNEOBot *me, float flDepth, CutOff &holdOut,
+	CNEOBotPredictedRoute *pOutGhostRoute )
+{
+	holdOut = CutOff();
+	if ( pOutGhostRoute )
+	{
+		pOutGhostRoute->Reset();
+	}
+
+	Vector vecGoal;
+	CNEOBotPredictedRoute ghostRoute;
+	if ( !BuildGhostRoute( me, ghostRoute, vecGoal ) || ghostRoute.Count() == 0 )
+	{
+		return false;
+	}
+
+	// Walk back from the cap along the route until we are flDepth units short of it (or reach the
+	// route's start). That area is the cap's approach throat: far enough out not to be standing
+	// idle in the zone, close enough to be the last line the carry has to pass. The routes to a
+	// given cap all funnel through the same final corridor, so this lands on the same handful of
+	// areas regardless of which ghost spawn came up - see knowledge/maps/ntre_ballistrade_ctg.
+	const float flTarget = MAX( 0.0f, ghostRoute.Length() - flDepth );
+	int iHold = ghostRoute.Count() - 1;
+	for ( int i = 0; i < ghostRoute.Count(); ++i )
+	{
+		if ( ghostRoute.travel[i] >= flTarget )
+		{
+			iHold = i;
+			break;
+		}
+	}
+
+	if ( sv_neo_forensic_log.GetBool() )
+	{
+		Msg( "NEO_FORENSIC_CUTOFF t=%.2f p=%d area=%d idx=%d routelen=%d\n",
+			gpGlobals->curtime, me->entindex(), ghostRoute.areas[ iHold ]->GetID(), iHold,
+			ghostRoute.Count() );
+	}
+
+	holdOut.pArea = ghostRoute.areas[ iHold ];
+	holdOut.vecPos = holdOut.pArea->GetCenter();
+	holdOut.iCarrierRouteIndex = iHold;
+
+	if ( pOutGhostRoute )
+	{
+		pOutGhostRoute->areas.Swap( ghostRoute.areas );
+		pOutGhostRoute->travel.Swap( ghostRoute.travel );
 	}
 
 	return true;
@@ -276,7 +337,7 @@ ActionResult< CNEOBot > CNEOBotCtgEnemy::Update( CNEOBot *me, float interval )
 	// at all means the carrier is ahead of us and a detour would only give up more ground.
 	CutOff cutOff;
 	CNEOBotPredictedRoute carrierRoute;
-	if ( FindCutOff( me, pGhostCarrier, cutOff, &carrierRoute )
+	if ( FindCutOff( me, cutOff, &carrierRoute )
 		&& cutOff.pArea != me->GetLastKnownArea() )
 	{
 		return ChangeTo( new CNEOBotCtgEnemyInterceptCapPath( cutOff, carrierRoute ),

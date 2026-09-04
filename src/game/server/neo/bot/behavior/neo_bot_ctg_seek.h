@@ -15,4 +15,10 @@ public:
 
 protected:
 	virtual void RecomputeSeekPath( CNEOBot *me ) override;
+
+private:
+	// Freezetime only: split the defence by class so a slow goalie pre-covers the threatened wing
+	// cap while the fast class still races the loose ghost. Returns a change/suspend result when it
+	// has taken over, Continue() otherwise.
+	ActionResult< CNEOBot > ConsiderFreezetimeIntercept( CNEOBot *me );
 };

@@ -36,9 +36,10 @@ ActionResult< CNEOBot > CNEOBotCtgEnemyChase::Update( CNEOBot *me, float interva
 		m_routeTypeTimer.Start( sv_neo_bot_ctg_enemy_chase_replan_seconds.GetFloat() );
 
 		// A cut-off exists exactly when there is somewhere on the carrier's route we can still beat
-		// it to, which is the same question as "am I ahead of it or behind it".
+		// it to, which is the same question as "am I ahead of it or behind it". FindCutOff reads
+		// the ghost position itself now, which while carried is this same carrier's position.
 		CNEOBotCtgEnemy::CutOff cutOff;
-		m_routeType = CNEOBotCtgEnemy::FindCutOff( me, pGhostCarrier, cutOff )
+		m_routeType = CNEOBotCtgEnemy::FindCutOff( me, cutOff )
 			? DEFAULT_ROUTE : FASTEST_ROUTE;
 	}
 

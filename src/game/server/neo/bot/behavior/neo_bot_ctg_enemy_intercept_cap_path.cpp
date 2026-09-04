@@ -22,8 +22,8 @@ static const int CTG_ENEMY_WATCH_AREA_LIMIT = 12;
 
 //---------------------------------------------------------------------------------------------
 CNEOBotCtgEnemyInterceptCapPath::CNEOBotCtgEnemyInterceptCapPath( const CNEOBotCtgEnemy::CutOff &cutOff,
-	CNEOBotPredictedRoute &carrierRoute )
-	: m_cutOff( cutOff )
+	CNEOBotPredictedRoute &carrierRoute, bool bGoalie, float flGoalieDepth )
+	: m_cutOff( cutOff ), m_bGoalie( bGoalie ), m_flGoalieDepth( flGoalieDepth )
 {
 	m_carrierRoute.areas.Swap( carrierRoute.areas );
 	m_carrierRoute.travel.Swap( carrierRoute.travel );
@@ -47,11 +47,20 @@ bool CNEOBotCtgEnemyInterceptCapPath::RepathToCutOff( CNEOBot *me )
 //---------------------------------------------------------------------------------------------
 // Re-pick the cut-off. Returns false when there is no longer one to head for, in which case the
 // caller drops to the chase rather than walking on with a plan it can no longer check.
-bool CNEOBotCtgEnemyInterceptCapPath::Replan( CNEOBot *me, CNEO_Player *pGhostCarrier )
+//
+// Goalie mode holds its fixed depth off the cap only while the ghost is loose; the moment an
+// enemy is actually carrying it, this falls through to the ordinary earliest-cut-off search so
+// the bot stops camping the throat and races the live carrier instead.
+bool CNEOBotCtgEnemyInterceptCapPath::Replan( CNEOBot *me )
 {
+	const bool bGoalieNow = m_bGoalie && ( CNEOBotCtgEnemy::EnemyGhostCarrier( me ) == nullptr );
+
 	CNEOBotCtgEnemy::CutOff cutOff;
 	CNEOBotPredictedRoute carrierRoute;
-	if ( !CNEOBotCtgEnemy::FindCutOff( me, pGhostCarrier, cutOff, &carrierRoute ) )
+	const bool bFound = bGoalieNow
+		? CNEOBotCtgEnemy::FindGoalieHold( me, m_flGoalieDepth, cutOff, &carrierRoute )
+		: CNEOBotCtgEnemy::FindCutOff( me, cutOff, &carrierRoute );
+	if ( !bFound )
 	{
 		return false;
 	}
@@ -120,7 +129,9 @@ ActionResult< CNEOBot > CNEOBotCtgEnemyInterceptCapPath::OnStart( CNEOBot *me, A
 
 	if ( !RepathToCutOff( me ) )
 	{
-		return ChangeTo( new CNEOBotCtgEnemyChase, "No path to the cut-off" );
+		return CNEOBotCtgEnemy::EnemyGhostCarrier( me )
+			? ChangeTo( new CNEOBotCtgEnemyChase, "No path to the cut-off" )
+			: Done( "No path to the hold with the ghost still loose - reseeking" );
 	}
 
 	m_replanTimer.Start( sv_neo_bot_ctg_enemy_intercept_replan_seconds.GetFloat() );
@@ -136,19 +147,37 @@ ActionResult< CNEOBot > CNEOBotCtgEnemyInterceptCapPath::Update( CNEOBot *me, fl
 		return Done( "Game mode is no longer CTG" );
 	}
 
+	// The ghost may be loose (freezetime goalie, or a post-drop hold) - EnemyGhostCarrier is then
+	// null and that is fine. What is not recoverable here is the ghost being gone, or an ally
+	// having taken it (the escort's problem, not ours).
+	if ( !NEORules()->GhostExists() )
+	{
+		return Done( "Ghost no longer exists" );
+	}
+
 	CNEO_Player *pGhostCarrier = CNEOBotCtgEnemy::EnemyGhostCarrier( me );
 	if ( !pGhostCarrier )
 	{
-		return Done( "No enemy ghost carrier" );
+		const int iGhoster = NEORules()->GetGhosterPlayer();
+		if ( iGhoster > 0 && iGhoster <= gpGlobals->maxClients )
+		{
+			CNEO_Player *pCarrier = ToNEOPlayer( UTIL_PlayerByIndex( iGhoster ) );
+			if ( pCarrier && pCarrier->GetTeamNumber() == me->GetTeamNumber() )
+			{
+				return Done( "A teammate has the ghost" );
+			}
+		}
 	}
 
 	if ( m_replanTimer.IsElapsed() )
 	{
 		m_replanTimer.Start( sv_neo_bot_ctg_enemy_intercept_replan_seconds.GetFloat() );
 
-		if ( !Replan( me, pGhostCarrier ) )
+		if ( !Replan( me ) )
 		{
-			return ChangeTo( new CNEOBotCtgEnemyChase, "Lost the cut-off - chasing" );
+			return pGhostCarrier
+				? ChangeTo( new CNEOBotCtgEnemyChase, "Lost the cut-off - chasing" )
+				: Done( "Lost the cut-off with the ghost still loose - reseeking" );
 		}
 	}
 
@@ -157,15 +186,18 @@ ActionResult< CNEOBot > CNEOBotCtgEnemyInterceptCapPath::Update( CNEOBot *me, fl
 
 	if ( bArrived )
 	{
-		// The carrier sees every enemy within sv_neo_ghost_view_distance through walls, so once it
-		// is that close there is nothing left to ambush and waiting only invites being flanked.
-		const float flGhostViewUnits = sv_neo_ghost_view_distance.GetFloat() / METERS_PER_INCH;
-		if ( me->GetAbsOrigin().DistToSqr( pGhostCarrier->GetAbsOrigin() ) < Square( flGhostViewUnits ) )
+		if ( pGhostCarrier )
 		{
-			return ChangeTo( new CNEOBotCtgEnemyChase, "Carrier is on top of the cut-off - chasing" );
+			// The carrier sees every enemy within sv_neo_ghost_view_distance through walls, so once
+			// it is that close there is nothing left to ambush and waiting only invites being flanked.
+			const float flGhostViewUnits = sv_neo_ghost_view_distance.GetFloat() / METERS_PER_INCH;
+			if ( me->GetAbsOrigin().DistToSqr( pGhostCarrier->GetAbsOrigin() ) < Square( flGhostViewUnits ) )
+			{
+				return ChangeTo( new CNEOBotCtgEnemyChase, "Carrier is on top of the cut-off - chasing" );
+			}
 		}
 
-		// Hold the cut-off, watching the way the carrier has to come.
+		// Hold the spot, watching the way the carry has to come.
 		WatchForTheCarrier( me );
 		return Continue();
 	}
@@ -173,7 +205,9 @@ ActionResult< CNEOBot > CNEOBotCtgEnemyInterceptCapPath::Update( CNEOBot *me, fl
 	m_path.Update( me );
 	if ( !m_path.IsValid() )
 	{
-		return ChangeTo( new CNEOBotCtgEnemyChase, "Lost the path to the cut-off - chasing" );
+		return pGhostCarrier
+			? ChangeTo( new CNEOBotCtgEnemyChase, "Lost the path to the cut-off - chasing" )
+			: Done( "Lost the path to the hold with the ghost still loose - reseeking" );
 	}
 
 	return Continue();
