@@ -78,6 +78,15 @@ bool CNEOBotKnifeRush::IsPossible( CNEOBot *me )
 		return false;
 	}
 
+	// A knife only beats a gun we can no longer fire. Any bullets left (clip or reserve) in a
+	// ranged weapon mean there is always a chance of a headshot, which is a better bet than a
+	// 25-damage knife swing - so this only makes sense once we are genuinely out.
+	CNEOBaseCombatWeapon *myWeapon = static_cast< CNEOBaseCombatWeapon * >( me->GetActiveWeapon() );
+	if ( myWeapon && CNEOBot::IsRanged( myWeapon ) && ( myWeapon->Clip1() + myWeapon->m_iPrimaryAmmoCount ) > 0 )
+	{
+		return false;
+	}
+
 	const CKnownEntity *threat = me->GetVisionInterface()->GetPrimaryKnownThreat( true );
 	if ( !threat || !threat->GetEntity() || !threat->GetEntity()->IsAlive() )
 	{
