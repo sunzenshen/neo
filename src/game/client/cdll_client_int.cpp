@@ -947,6 +947,21 @@ static void RestrictNeoClientCheats()
 //-----------------------------------------------------------------------------
 int CHLClient::Init( CreateInterfaceFn appSystemFactory, CreateInterfaceFn physicsFactory, CGlobalVarsBase *pGlobals )
 {
+#if defined(NEO) && defined(DBGFLAG_ASSERT)
+	// NEO: Unattended sessions (see harness/ at the repo root) cannot answer tier0's modal assert
+	// dialog, which blocks the game thread until a human clicks it. -noassertdlg suppresses the
+	// dialog only: _SpewMessage has already printed "file (line) : Assertion Failed: expr" by the
+	// time we get here, so -condebug's console.log still records every assert.
+	// This is what the dialog's own "Ignore All Asserts" button does. Do NOT instead try to make
+	// ShouldUseNewAssertDialog() return false; the Assert macro in public/tier0/dbg.h calls
+	// DebuggerBreak() outright in that case.
+	if (CommandLine()->FindParm("-noassertdlg"))
+	{
+		SetAllAssertsDisabled(true);
+		Msg("NEO: -noassertdlg set, assert dialogs suppressed. Asserts still print to the console.\n");
+	}
+#endif
+
 	InitCRTMemDebug();
 	MathLib_Init( 2.2f, 2.2f, 0.0f, 2.0f );
 #if defined(NEO)

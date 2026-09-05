@@ -9,6 +9,7 @@
 #include "bot/neo_bot_path_compute.h"
 #include "bot/neo_bot_path_cost.h"
 #include "bot/behavior/neo_bot_behavior.h"
+#include "bot/behavior/neo_bot_ctg_enemy.h"
 #include "bot/behavior/neo_bot_dead.h"
 #include "NextBot/NavMeshEntities/func_nav_prerequisite.h"
 #include "bot/behavior/nav_entities/neo_bot_nav_ent_destroy_entity.h"
@@ -35,6 +36,9 @@ ConVar neo_bot_always_full_reload( "neo_bot_always_full_reload", "0", FCVAR_CHEA
 ConVar neo_bot_fire_weapon_allowed( "neo_bot_fire_weapon_allowed", "1", FCVAR_CHEAT, "If zero, NEOBots will not pull the trigger of their weapons (but will act like they did)" );
 
 ConVar neo_bot_allow_retreat( "neo_bot_allow_retreat", "1", FCVAR_CHEAT, "If zero, bots will not attempt to retreat if they are are in a bad situation." );
+
+// Declared in neo_bot_ctg_enemy.cpp, next to CNEOBotCtgEnemy::IsLosingTheRace.
+extern ConVar sv_neo_bot_ctg_no_retreat_when_carrier_ahead;
 
 ConVar neo_bot_recon_superjump_min_dist( "neo_bot_recon_superjump_min_dist", "4096", FCVAR_NONE,
 	"Minimum straight-line path distance required for a Recon bot to super jump while moving", true, 0, false, 0 );
@@ -1053,6 +1057,16 @@ float CNEOBotMainAction::GetFireDurationByDifficulty(CNEOBot* me) const
 QueryResultType	CNEOBotMainAction::ShouldRetreat( const INextBot *bot ) const
 {
 	CNEOBot *me = (CNEOBot *)bot->GetEntity();
+
+	// The carrier is already closer to scoring than we are to stopping it - retreating (to reload,
+	// to fall back, because we're outnumbered) wins nothing, it only spends time we do not have.
+	// Preventing the capture outranks surviving this fight.
+	if ( sv_neo_bot_ctg_no_retreat_when_carrier_ahead.GetBool()
+		&& NEORules()->GetGameType() == NEO_GAME_TYPE_CTG
+		&& CNEOBotCtgEnemy::IsLosingTheRace( me ) )
+	{
+		return ANSWER_NO;
+	}
 
 	if ( !neo_bot_allow_retreat.GetBool() )
 		return ANSWER_NO;

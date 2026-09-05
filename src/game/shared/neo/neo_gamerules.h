@@ -502,6 +502,7 @@ private:
 	
 	// For looking up capture zone locations
 	friend class CNEOBotCtgCarrier;
+	friend class CNEOBotCtgEnemy;
 	friend class CNEOBotCtgEscort;
 	friend class CNEOBotCtgLoneWolf;
 	friend class CNEOBotCtgLoneWolfAmbush;
@@ -552,6 +553,7 @@ private:
 	CNetworkVar(int, m_iGhosterTeam);
 	CNetworkVar(int, m_iGhosterPlayer);
 	CNetworkVector(m_vecGhostMarkerPos);
+	float m_flNeoForensicNextSample = 0.0f;	// NEO-HARNESS-TEMP: forensic sampler cadence
 	CNetworkVar(bool, m_bGhostExists);
 	CNetworkVar(float, m_flGhostLastHeld);
 	CNetworkHandle( CWeaponGhost, m_hGhost );
