@@ -314,8 +314,7 @@ void CWeaponKnife::Hit(trace_t& traceHit, [[maybe_unused]] Activity nHitActivity
 
 		CalculateMeleeDamageForce(&info, hitDirection, traceHit.endpos, 0.05f);
 
-		const bool bIsBackstab = (currentAngle <= maxBackStabAngle);
-		if (bIsBackstab)
+		if (currentAngle <= maxBackStabAngle)
 		{	// increase damage if backstabbing only after melee damage force has been calculated, so objects cannot be "backstabbed" to launch them further
 			info.SetDamage(damageToOneShotSupport);
 		}

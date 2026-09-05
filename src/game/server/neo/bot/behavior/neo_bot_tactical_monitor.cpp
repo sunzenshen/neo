@@ -343,10 +343,11 @@ ActionResult< CNEOBot >	CNEOBotTacticalMonitor::Update( CNEOBot *me, float inter
 		}
 	}
 
-	// Both the retreat suppression above and this share one condition: the enemy ghost carrier has
-	// already won the position race (CNEOBotCtgEnemy::IsLosingTheRace), so surviving this fight
-	// buys nothing and finishing it does. A known threat already this close is worth charging with
-	// a forced knife rather than trading shots - see CNEOBotKnifeRush for the entry/exit detail.
+	// Once the enemy ghost carrier has already won the position race for its cap
+	// (CNEOBotKnifeRush::IsLosingThePositionRace), surviving this fight buys nothing and finishing
+	// it does. A known threat already this close, against a bot with no working ranged weapon left,
+	// is worth charging with a forced knife rather than trading shots - see CNEOBotKnifeRush for
+	// the entry/exit detail.
 	if ( CNEOBotKnifeRush::IsPossible( me ) )
 	{
 		return SuspendFor( new CNEOBotKnifeRush, "Losing the race - knife rushing a close threat" );

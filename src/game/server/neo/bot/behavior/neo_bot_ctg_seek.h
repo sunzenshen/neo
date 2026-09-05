@@ -15,10 +15,4 @@ public:
 
 protected:
 	virtual void RecomputeSeekPath( CNEOBot *me ) override;
-
-private:
-	// Freezetime only, gated on sv_neo_bot_ctg_freezetime_intercept: every defender plans a ghost
-	// cut-off before anyone has picked the ghost up, instead of racing straight for it. Returns a
-	// change/suspend result when it has taken over, Continue() otherwise.
-	ActionResult< CNEOBot > ConsiderFreezetimeIntercept( CNEOBot *me );
 };

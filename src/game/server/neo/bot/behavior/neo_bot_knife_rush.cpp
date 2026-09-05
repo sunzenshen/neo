@@ -1,15 +1,17 @@
 #include "cbase.h"
 #include "neo_player.h"
 #include "neo_gamerules.h"
+#include "neo_ghost_cap_point.h"
 #include "bot/neo_bot.h"
 #include "bot/behavior/neo_bot_knife_rush.h"
-#include "bot/behavior/neo_bot_ctg_enemy.h"
 #include "bot/neo_bot_path_compute.h"
 #include "neo_enums.h"
 #include "weapon_knife.h"
 
-// Declared in neo_bot_ctg_enemy.cpp, next to CNEOBotCtgEnemy::IsLosingTheRace.
-extern ConVar sv_neo_bot_ctg_no_retreat_when_carrier_ahead;
+ConVar sv_neo_bot_ctg_knife_rush_enabled( "sv_neo_bot_ctg_knife_rush_enabled", "1", FCVAR_CHEAT,
+	"CTG: 1 (default) lets a bot that has already lost the position race for the ghost "
+	"(CNEOBotKnifeRush::IsLosingThePositionRace) charge a close threat with a forced knife instead "
+	"of trading shots, once both weapon slots are empty. See CNEOBotKnifeRush." );
 
 ConVar sv_neo_bot_ctg_knife_rush_enter_range( "sv_neo_bot_ctg_knife_rush_enter_range", "150", FCVAR_CHEAT,
 	"CTG no-retreat: a known threat within this many units is close enough to charge with a knife "
@@ -61,11 +63,69 @@ static bool ThreatHasWorkingRangedWeapon( CNEO_Player *pThreat )
 }
 
 //---------------------------------------------------------------------------------------------
+bool CNEOBotKnifeRush::IsLosingThePositionRace( CNEOBot *me )
+{
+	if ( !NEORules()->GhostExists() )
+	{
+		return false;
+	}
+
+	const int iGhoster = NEORules()->GetGhosterPlayer();
+	if ( iGhoster <= 0 || iGhoster > gpGlobals->maxClients )
+	{
+		return false;
+	}
+
+	CNEO_Player *pCarrier = ToNEOPlayer( UTIL_PlayerByIndex( iGhoster ) );
+	if ( !pCarrier || !pCarrier->IsAlive() || pCarrier->GetTeamNumber() == me->GetTeamNumber() )
+	{
+		return false;
+	}
+
+	// Nearest active cap zone the carrier's own team can score into - either owned by that team, or
+	// neutral (TEAM_ANY). Straight-line, deliberately: the naive read of the ghost marker every
+	// player gets, not anything read out of the carrier's own AI or route.
+	CNEOGhostCapturePoint *pBestCap = nullptr;
+	float flBestCapDistSq = FLT_MAX;
+	for ( int i = 0; i < NEORules()->m_pGhostCaps.Count(); ++i )
+	{
+		CNEOGhostCapturePoint *pCap = dynamic_cast< CNEOGhostCapturePoint * >(
+			UTIL_EntityByIndex( NEORules()->m_pGhostCaps[i] ) );
+		if ( !pCap || !pCap->GetActive() )
+		{
+			continue;
+		}
+
+		const int iCapTeam = pCap->owningTeamAlternate();
+		if ( iCapTeam != pCarrier->GetTeamNumber() && iCapTeam != TEAM_ANY )
+		{
+			continue;
+		}
+
+		const float flDistSq = pCarrier->GetAbsOrigin().DistToSqr( pCap->GetAbsOrigin() );
+		if ( flDistSq < flBestCapDistSq )
+		{
+			flBestCapDistSq = flDistSq;
+			pBestCap = pCap;
+		}
+	}
+
+	if ( !pBestCap )
+	{
+		return false;
+	}
+
+	const float flCarrierDistSq = pCarrier->GetAbsOrigin().DistToSqr( pBestCap->GetAbsOrigin() );
+	const float flMyDistSq = me->GetAbsOrigin().DistToSqr( pBestCap->GetAbsOrigin() );
+	return flCarrierDistSq < flMyDistSq;
+}
+
+//---------------------------------------------------------------------------------------------
 bool CNEOBotKnifeRush::IsPossible( CNEOBot *me )
 {
-	if ( !sv_neo_bot_ctg_no_retreat_when_carrier_ahead.GetBool()
+	if ( !sv_neo_bot_ctg_knife_rush_enabled.GetBool()
 		|| NEORules()->GetGameType() != NEO_GAME_TYPE_CTG
-		|| !CNEOBotCtgEnemy::IsLosingTheRace( me ) )
+		|| !IsLosingThePositionRace( me ) )
 	{
 		return false;
 	}

@@ -4,7 +4,6 @@
 #include "bot/neo_bot.h"
 #include "bot/behavior/neo_bot_dead.h"
 #include "bot/behavior/neo_bot_behavior.h"
-#include "bot/neo_bot_path_reservation.h"
 
 #include "nav_mesh.h"
 
@@ -14,7 +13,6 @@ extern void respawn( CBaseEntity* pEdict, bool fCopyCorpse );
 ActionResult< CNEOBot >	CNEOBotDead::OnStart( CNEOBot *me, Action< CNEOBot > *priorAction )
 {
 	m_deadTimer.Start();
-	CNEOBotPathReservations()->ReleaseAllAreas( me );
 
 	return Continue();
 }

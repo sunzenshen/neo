@@ -6,10 +6,9 @@
 class CNEOBaseCombatWeapon;
 
 //--------------------------------------------------------------------------------------------------------
-// Charges a known threat that is already close with a forced knife. Meant to run alongside the CTG
-// "no retreat" clause (sv_neo_bot_ctg_no_retreat_when_carrier_ahead, CNEOBotCtgEnemy::IsLosingTheRace):
-// once the position race against an enemy ghost carrier is already lost, backing off to reload
-// against a threat this close wins nothing, and a guaranteed melee trade is a better bet than
+// Charges a known threat that is already close with a forced knife. Entered once the position race
+// against an enemy ghost carrier is already lost (IsLosingThePositionRace, below): backing off to
+// reload against a threat this close wins nothing, and a guaranteed melee trade is a better bet than
 // hoping to win a ranged exchange from here. CNEOBotTacticalMonitor gates entry through
 // IsPossible() before ever constructing one - the same pattern as CNEOBotGetAmmo::IsPossible /
 // CNEOBotGetHealth::IsPossible.
@@ -50,6 +49,13 @@ public:
 	virtual const char *GetName( void ) const override { return "knifeRush"; }
 
 private:
+	// True when an enemy is carrying the ghost and is already nearer (straight-line) to the
+	// nearest active cap zone its own team can score into than `me` is - the position race for
+	// that cap is lost. Reads NEORules()->m_pGhostCaps directly (friend class CNEOBotKnifeRush in
+	// neo_gamerules.h), the same fixed map geometry every other CTG behaviour that reasons about
+	// "which zone" reads; it does not read anything from the carrier's own AI.
+	static bool IsLosingThePositionRace( CNEOBot *me );
+
 	bool RepathToFlank( CNEOBot *me );
 
 	CHandle< CNEOBaseCombatWeapon > m_hKnife;	// pushed onto the required-weapon stack for the duration

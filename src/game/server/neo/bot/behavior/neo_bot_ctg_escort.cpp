@@ -329,9 +329,7 @@ void CNEOBotCtgEscort::UpdateGoalPosition( CNEOBot *me, CNEO_Player *pGhostCarri
 	{
 		CNEOGhostCapturePoint *pCapPoint = dynamic_cast<CNEOGhostCapturePoint*>( UTIL_EntityByIndex( NEORules()->m_pGhostCaps[i] ) );
 		if ( !pCapPoint || !pCapPoint->GetActive() ) continue;
-		// A neutral zone (TEAM_ANY) is capturable by whichever team gets there, not just one.
-		const int iCapTeam = pCapPoint->owningTeamAlternate();
-		if ( iCapTeam == iMyTeam || iCapTeam == TEAM_ANY )
+		if ( pCapPoint->owningTeamAlternate() == iMyTeam )
 		{
 			float d = pGhostCarrier->GetAbsOrigin().DistToSqr( pCapPoint->GetAbsOrigin() );
 			if ( d < flNearestCapDistSq )
