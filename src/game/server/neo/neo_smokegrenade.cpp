@@ -4,11 +4,14 @@
 
 #include "neo_tracefilter_collisiongroupdelta.h"
 #include "particle_smokegrenade.h"
+#include "neo_gamerules.h"
 
 #include "mathlib/vector.h"
 
 // memdbgon must be the last include file in a .cpp file!!!
 #include "tier0/memdbgon.h"
+
+extern ConVar sv_neo_forensic_log;
 
 #define NADE_SOLID_TYPE SolidType_t::SOLID_BBOX
 
@@ -119,6 +122,15 @@ void CNEOGrenadeSmoke::Detonate(void)
 	{
 		m_hasBeenMadeNonSolid = true;
 
+		// NEO-HARNESS-TEMP: fight-forensics telemetry - see harness/patches/README.md.
+		if (sv_neo_forensic_log.GetBool())
+		{
+			auto pThrower = GetThrower();
+			const Vector& pos = GetAbsOrigin();
+			Msg("NEO_FORENSIC_GRENADE_DETONATE t=%.2f p=%d team=%d type=smoke pos=%.0f,%.0f,%.0f\n",
+				gpGlobals->curtime, pThrower ? pThrower->entindex() : -1, GetTeamNumber(), pos.x, pos.y, pos.z);
+		}
+
 		SetupParticles(sv_neo_smoke_bloom_layers.GetInt());
 		m_flSmokeBloomTime = gpGlobals->curtime;
 
@@ -199,6 +211,13 @@ CBaseGrenadeProjectile* NEOSmokegrenade_Create(const Vector& position, const QAn
 	pGrenade->SetThrower(ToBaseCombatCharacter(pOwner));
 	if (pOwner) pGrenade->ChangeTeam(pOwner->GetTeamNumber());
 	pGrenade->m_takedamage = DAMAGE_EVENTS_ONLY;
+
+	// NEO-HARNESS-TEMP: fight-forensics telemetry - see harness/patches/README.md.
+	if (sv_neo_forensic_log.GetBool() && pOwner)
+	{
+		Msg("NEO_FORENSIC_GRENADE_THROW t=%.2f p=%d team=%d type=smoke pos=%.0f,%.0f,%.0f\n",
+			gpGlobals->curtime, pOwner->entindex(), pOwner->GetTeamNumber(), position.x, position.y, position.z);
+	}
 
 	return pGrenade;
 }

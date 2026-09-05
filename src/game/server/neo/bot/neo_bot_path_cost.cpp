@@ -17,6 +17,12 @@ ConVar neo_bot_path_penalty_jump_multiplier("neo_bot_path_penalty_jump_multiplie
 ConVar neo_bot_path_penalty_ladder_multiplier("neo_bot_path_penalty_ladder_multiplier", "3.0", FCVAR_CHEAT,
 	"Penalty multiplier for ladder traversal in pathfinding", true, 0.1f, false, 0.0f);
 
+ConVar neo_bot_path_penalty_irreversible_drop_multiplier("neo_bot_path_penalty_irreversible_drop_multiplier", "4.0", FCVAR_CHEAT,
+	"Penalty multiplier for crossing a one-way drop, when the path cost has opted in to avoiding "
+	"them (CNEOBotPathCompute's bAvoidIrreversibleDrops). A preference, not a ban - the multiplier "
+	"applies to that one step's distance, so a route with no other way still takes the drop.",
+	true, 1.0f, false, 0.0f);
+
 ConVar neo_bot_path_penalty_exposure_base("neo_bot_path_penalty_exposure_base", "5.0", FCVAR_CHEAT,
 	"General additional penalty per visible area for bots to avoid exposed areas", true, 0.0f, false, 0.0f);
 
@@ -104,6 +110,18 @@ float CNEOBotPathCost::operator()(CNavArea* baseArea, CNavArea* fromArea, const 
 			{
 				// too far to drop
 				return -1.0f;
+			}
+
+			// A one-way drop - we can step down to area but area has no way back to fromArea - is
+			// fine to pass through, but bad ground to plan a hold on: if the plan changes after the
+			// bot commits to it, going back means a detour instead of retracing the same steps.
+			// Only checked when the caller has opted in (see the convar), since chasing or seeking
+			// never cares about reversing.
+			if (m_bAvoidIrreversibleDrops && deltaZ < 0.0f
+				&& fromArea->IsConnected(area, NUM_DIRECTIONS)
+				&& !area->IsConnected(fromArea, NUM_DIRECTIONS))
+			{
+				dist *= neo_bot_path_penalty_irreversible_drop_multiplier.GetFloat();
 			}
 		}
 

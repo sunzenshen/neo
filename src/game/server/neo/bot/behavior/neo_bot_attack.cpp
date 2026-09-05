@@ -4,6 +4,7 @@
 #include "neo_smokelineofsightblocker.h"
 #include "bot/neo_bot.h"
 #include "bot/behavior/neo_bot_attack.h"
+#include "bot/behavior/neo_bot_ctg_enemy.h"
 #include "bot/behavior/neo_bot_grenade_dispatch.h"
 #include "bot/behavior/neo_bot_retreat_to_cover.h"
 #include "bot/neo_bot_path_compute.h"
@@ -13,6 +14,20 @@
 
 ConVar sv_neo_bot_attack_debug_cover("sv_neo_bot_attack_debug_cover", "0", FCVAR_CHEAT,
 	"Draw debug overlays for bot attack/cover behavior", true, 0, true, 1);
+
+// Declared in neo_bot_ctg_enemy.cpp, next to CNEOBotCtgEnemy::IsLosingTheRace.
+extern ConVar sv_neo_bot_ctg_no_retreat_when_carrier_ahead;
+
+// When the carrier-ahead clause is in scope (CTG, convar on) but not triggered - we are not
+// losing the race - answer ANSWER_UNDEFINED instead of falling through to this function's own
+// weapon/cover-based checks below, so CNEOBotMainAction::ShouldRetreat (the next context up the
+// query cascade) answers instead. Measured 7 pinned ballistrade spawns: attacker-captured 40%
+// (own checks) -> 35% (defer), directionally favourable, not significant at that n (Fisher
+// p=0.776), shipped on the same mechanism-plus-direction basis as the no-retreat clause itself.
+ConVar sv_neo_bot_ctg_attack_defer_retreat_when_not_losing( "sv_neo_bot_ctg_attack_defer_retreat_when_not_losing", "1", FCVAR_CHEAT,
+	"CTG: 1 (default) makes CNEOBotAttack::ShouldRetreat answer ANSWER_UNDEFINED whenever it is "
+	"not losing the race (skipping its own weapon/cover retreat checks, deferring to "
+	"CNEOBotMainAction::ShouldRetreat instead). 0 restores CNEOBotAttack's own checks." );
 
 
 //---------------------------------------------------------------------------------------------
@@ -431,6 +446,24 @@ QueryResultType	CNEOBotAttack::ShouldRetreat( const INextBot *me ) const
 {
 
 	const CNEOBot *meNeoBot = static_cast<const CNEOBot *>(me);
+
+	if ( sv_neo_bot_ctg_no_retreat_when_carrier_ahead.GetBool()
+		&& NEORules()->GetGameType() == NEO_GAME_TYPE_CTG )
+	{
+		// The carrier is already closer to scoring than we are to stopping it - retreating to
+		// reload or fall back wins nothing, it only spends time we do not have. Preventing the
+		// capture outranks surviving this fight.
+		if ( CNEOBotCtgEnemy::IsLosingTheRace( const_cast<CNEOBot *>( meNeoBot ) ) )
+		{
+			return ANSWER_NO;
+		}
+
+		if ( sv_neo_bot_ctg_attack_defer_retreat_when_not_losing.GetBool() )
+		{
+			return ANSWER_UNDEFINED;
+		}
+	}
+
 	CNEOBaseCombatWeapon* myWeapon = static_cast<CNEOBaseCombatWeapon* >( meNeoBot->GetActiveWeapon() );
 	if ( !meNeoBot->IsRanged(myWeapon) )
 	{

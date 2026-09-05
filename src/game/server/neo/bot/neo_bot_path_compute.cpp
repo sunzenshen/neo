@@ -39,11 +39,12 @@ static void CNEOBotReservePath(CNEOBot* me, PathFollower& path)
 	}
 }
 
-bool CNEOBotPathCompute(CNEOBot* bot, PathFollower& path, const Vector& goal, RouteType route, float maxPathLength, bool includeGoalIfPathFails, bool requireGoalArea)
+bool CNEOBotPathCompute(CNEOBot* bot, PathFollower& path, const Vector& goal, RouteType route, float maxPathLength, bool includeGoalIfPathFails, bool requireGoalArea, bool bAvoidIrreversibleDrops)
 {
 	Assert(goal.IsValid());
 
 	CNEOBotPathCost cost_with_reservations(bot, route);
+	cost_with_reservations.m_bAvoidIrreversibleDrops = bAvoidIrreversibleDrops;
 	if (path.Compute(bot, goal, cost_with_reservations, maxPathLength, includeGoalIfPathFails, requireGoalArea) && path.IsValid())
 	{
 		CNEOBotReservePath(bot, path);
@@ -52,6 +53,7 @@ bool CNEOBotPathCompute(CNEOBot* bot, PathFollower& path, const Vector& goal, Ro
 
 	CNEOBotPathCost cost_without_reservations(bot, route);
 	cost_without_reservations.m_bIgnoreReservations = true;
+	cost_without_reservations.m_bAvoidIrreversibleDrops = bAvoidIrreversibleDrops;
 	if (path.Compute(bot, goal, cost_without_reservations, maxPathLength, includeGoalIfPathFails, requireGoalArea) && path.IsValid())
 	{
 		CNEOBotReservePath(bot, path);

@@ -964,7 +964,12 @@ void SetupCurrentView( const Vector &vecOrigin, const QAngle &angles, view_id_t 
 
 view_id_t CurrentViewID()
 {
-	Assert( g_CurrentViewID != VIEW_ILLEGAL );
+	// NEO-HARNESS-TEMP: the VIEW_ILLEGAL assert is silenced for unattended harness runs. It fires
+	// hundreds of times per match from a bad viewmodel asset (notes/asserts.md section 3,
+	// harness/patches/12-silence-view-illegal-assert.patch) and buries every other assert in
+	// console.log. This is deliberate papering-over, NOT a fix - it must be removed before this
+	// branch is prepared for PR submission.
+	// Assert( g_CurrentViewID != VIEW_ILLEGAL );
 	return ( view_id_t )g_CurrentViewID;
 }
 

@@ -439,8 +439,11 @@ Vector CNEOBotCtgCarrier::GetNearestCapPoint( const CNEOBot *me ) const
 				continue;
 			}
 
+			// A neutral zone (TEAM_ANY, e.g. an equidistant single capture point) is a valid
+			// target for whichever team gets there first, same as Think_CheckMyRadius's own
+			// eligibility check - not something only one team can see as an option.
 			int iCapTeam = pCapPoint->owningTeamAlternate();
-			if ( iCapTeam == iMyTeam )
+			if ( iCapTeam == iMyTeam || iCapTeam == TEAM_ANY )
 			{
 				float distanceToCap = me->GetAbsOrigin().DistToSqr( pCapPoint->GetAbsOrigin() );
 				if ( distanceToCap < flNearestCapDistSq )

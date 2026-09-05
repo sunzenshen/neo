@@ -24,6 +24,21 @@ ActionResult< CNEOBot > CNEOBotCtgSeek::Update( CNEOBot *me, float interval )
 		return Done( "Round Over: CTG objective no longer relevant" );
 	}
 
+	// The objective outranks the shooting when the *enemy* has the ghost. UpdateCommon suspends for
+	// CNEOBotAttack on any visible threat and runs first, so a defender that can see an escort
+	// never reaches the ghost decision below - measured over a 24-round arm, only 1.7 of 5
+	// defenders per round ever entered CNEOBotCtgEnemy at all, while the ghost was walked in. The
+	// escorts screen the carrier and the defence spends the round fighting the screen.
+	//
+	// This does not stop the bot fighting: CNEOBotCtgEnemyChase suspends for CNEOBotAttack aimed at
+	// the carrier the moment it sees a threat, and a bot holding a cut-off shoots what walks into
+	// it. What changes is that the fight is anchored to the carrier's route instead of to wherever
+	// the first escort happened to appear.
+	if ( CNEOBotCtgEnemy::EnemyGhostCarrier( me ) )
+	{
+		return SuspendFor( new CNEOBotCtgEnemy, "Stopping the ghost carrier!" );
+	}
+
 	ActionResult< CNEOBot > result = UpdateCommon( me, interval );
 	if ( result.IsRequestingChange() || result.IsDone() )
 	{
@@ -45,22 +60,19 @@ ActionResult< CNEOBot > CNEOBotCtgSeek::Update( CNEOBot *me, float interval )
 		return SuspendFor( new CNEOBotCtgLoneWolf, "I'm the last one on my team!" );
 	}
 
+	// The enemy-carrier case is handled above, before the combat suspend; these two are the ones
+	// where the ghost is on our own side, and they stay below it deliberately. Raising the escort
+	// would do the *attacking* team the same favour, which is the opposite of the intent.
 	if (NEORules()->GhostExists())
 	{
 		int iGhosterPlayer = NEORules()->GetGhosterPlayer();
 		if (iGhosterPlayer > 0 && iGhosterPlayer <= gpGlobals->maxClients)
 		{
 			CNEO_Player* pGhostCarrier = ToNEOPlayer(UTIL_PlayerByIndex(iGhosterPlayer));
-			if (pGhostCarrier && pGhostCarrier != me)
+			if (pGhostCarrier && pGhostCarrier != me
+				&& pGhostCarrier->GetTeamNumber() == me->GetTeamNumber())
 			{
-				if (pGhostCarrier->GetTeamNumber() == me->GetTeamNumber())
-				{
-					return SuspendFor(new CNEOBotCtgEscort, "Protecting the ghost carrier!");
-				}
-				else
-				{
-					return SuspendFor(new CNEOBotCtgEnemy, "Stopping the ghost carrier!");
-				}
+				return SuspendFor(new CNEOBotCtgEscort, "Protecting the ghost carrier!");
 			}
 
 			// If I have the ghost, switch to ghost behavior

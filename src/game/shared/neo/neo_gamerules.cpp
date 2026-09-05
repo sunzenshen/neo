@@ -170,7 +170,16 @@ ConVar sv_neo_readyup_lobby("sv_neo_readyup_lobby", "0", FCVAR_REPLICATED, "If e
 ConVar sv_neo_pausematch_enabled("sv_neo_pausematch_enabled", "0", FCVAR_REPLICATED, "If enabled, players will be able to pause the match mid-game.", true, 0.0f, true, 1.0f);
 ConVar sv_neo_pausematch_unpauseimmediate("sv_neo_pausematch_unpauseimmediate", "0", FCVAR_REPLICATED | FCVAR_CHEAT, "Testing only - If enabled, unpause will be immediate.", true, 0.0f, true, 1.0f);
 ConVar sv_neo_readyup_countdown("sv_neo_readyup_countdown", "5", FCVAR_REPLICATED, "Set the countdown from fully ready to start of match in seconds.", true, 0.0f, true, 120.0f);
+// NEO-HARNESS-TEMP: forensic match reconstruction (see harness/patches/README.md). Emits
+// NEO_FORENSIC_KILL and NEO_FORENSIC_POS lines that harness/iter/forensics.py turns into a map of
+// what happened. Never part of a PR.
+ConVar sv_neo_forensic_log("sv_neo_forensic_log", "0", FCVAR_REPLICATED | FCVAR_CHEAT, "NEO harness debug: log positions and kills for offline match reconstruction.", true, 0, true, 1);
+ConVar sv_neo_forensic_interval("sv_neo_forensic_interval", "0.5", FCVAR_REPLICATED | FCVAR_CHEAT, "NEO harness debug: seconds between forensic position samples.", true, 0.05f, true, 5.0f);
 ConVar sv_neo_ghost_spawn_bias("sv_neo_ghost_spawn_bias", "0", FCVAR_REPLICATED, "Spawn ghost in the same location as the previous round on odd-indexed rounds (Round 1 = index 0)", true, 0, true, 1);
+// NEO-HARNESS-TEMP: pin the ghost spawn point index for repeatable scenario testing. -1 = normal
+// random / bias selection. Values >= 0 are taken modulo the ghost-spawn count. Never part of the
+// PR -- see harness/patches/README.md.
+ConVar sv_neo_ghost_spawn_force("sv_neo_ghost_spawn_force", "-1", FCVAR_REPLICATED | FCVAR_CHEAT, "NEO harness debug: pin the ghost spawn point index (wraps modulo count). -1 = normal selection.", true, -1, false, 0);
 ConVar sv_neo_teamdamage_assists("sv_neo_teamdamage_assists", "0", FCVAR_REPLICATED, "Whether to drain XP when assisting the death of a teammate.", true, 0.0f, true, 1.0f);
 ConVar sv_neo_client_autorecord("sv_neo_client_autorecord", "0", FCVAR_REPLICATED | FCVAR_DONTRECORD, "Record demos clientside", true, 0, true, 1);
 #ifdef CLIENT_DLL
@@ -1121,6 +1130,29 @@ bool CNEORules::CheckShouldNotThink()
 void CNEORules::Think(void)
 {
 #ifdef GAME_DLL
+	// NEO-HARNESS-TEMP: forensic reconstruction. Periodic position samples build the movement
+	// tracks the kill lines are drawn on top of. Never part of a PR.
+	if (sv_neo_forensic_log.GetBool() && gpGlobals->curtime >= m_flNeoForensicNextSample)
+	{
+		m_flNeoForensicNextSample = gpGlobals->curtime + sv_neo_forensic_interval.GetFloat();
+		for (int i = 1; i <= gpGlobals->maxClients; ++i)
+		{
+			CNEO_Player *pPlayer = static_cast<CNEO_Player *>(UTIL_PlayerByIndex(i));
+			if (!pPlayer || !pPlayer->IsAlive() || pPlayer->IsObserver())
+			{
+				continue;
+			}
+			const Vector vecPos = pPlayer->GetAbsOrigin();
+			CNavArea *pArea = pPlayer->GetLastKnownArea();
+			Msg("NEO_FORENSIC_POS t=%.2f p=%d team=%d pos=%.0f,%.0f,%.0f area=%d hp=%d ghost=%d\n",
+				gpGlobals->curtime, i, pPlayer->GetTeamNumber(),
+				vecPos.x, vecPos.y, vecPos.z, pArea ? pArea->GetID() : -1,
+				pPlayer->GetHealth(), m_iGhosterPlayer == i ? 1 : 0);
+		}
+	}
+#endif // GAME_DLL
+
+#ifdef GAME_DLL
 	CheckGameConfig();
 	if (CheckShouldNotThink())
 	{
@@ -1765,6 +1797,26 @@ void CNEORules::SetWinningDMPlayer(CNEO_Player *pWinner)
 		}
 	}
 
+	// NEO: Machine-readable round/match markers for the unattended match harness (see harness/ at
+	// the repo root), matching the pair SetWinningTeam emits. DM never goes through SetWinningTeam,
+	// so without these a deathmatch ends with nothing for the log watcher to grep and the harness
+	// reports the run as never having finished. Keep these two lines greppable and stable.
+	Msg("NEO_ROUND_END: round=%d winner=%d reason=%d dmwinner=%d dmxp=%d\n",
+		roundNumber(), pWinner->GetTeamNumber(), NEO_VICTORY_POINTS,
+		pWinner->GetUserID(), pWinner->m_iXP.Get());
+	Msg("NEO_MATCH_END: winner=%d\n", pWinner->GetTeamNumber());
+	// One line per player so a run's DM scoring can be audited against the kill feed.
+	for (int i = 1; i <= gpGlobals->maxClients; ++i)
+	{
+		auto *pPlayer = static_cast<CNEO_Player *>(UTIL_PlayerByIndex(i));
+		if (pPlayer && pPlayer->GetTeamNumber() >= FIRST_GAME_TEAM)
+		{
+			Msg("NEO_DM_SCORE: userid=%d team=%d xp=%d deaths=%d name=\"%s\"\n",
+				pPlayer->GetUserID(), pPlayer->GetTeamNumber(), pPlayer->m_iXP.Get(),
+				pPlayer->DeathCount(), pPlayer->GetNeoPlayerName());
+		}
+	}
+
 	GoToIntermission();
 
 	IGameEvent *event = gameeventmanager->CreateEvent("game_end");
@@ -2054,6 +2106,13 @@ void CNEORules::SpawnTheGhost(const Vector *origin)
 
 			desiredSpawn = Ceil2Int(roundNumber() / 2.f) % m_ghostSpawns.Count();
 		}
+		// NEO-HARNESS-TEMP: sv_neo_ghost_spawn_force pins the index for repeatable tests.
+		if (sv_neo_ghost_spawn_force.GetInt() >= 0)
+		{
+			desiredSpawn = sv_neo_ghost_spawn_force.GetInt() % m_ghostSpawns.Count();
+			DevMsg("NEO_GHOST_SPAWN_FORCE: pinned ghost spawn index %d/%d\n", desiredSpawn, m_ghostSpawns.Count());
+		}
+
 		Assert(desiredSpawn >= 0);
 		Assert(desiredSpawn < m_ghostSpawns.Count());
 
@@ -3992,6 +4051,43 @@ void CNEORules::SetWinningTeam(int team, int iWinReason, bool bForceMapReset, bo
 
 	m_bGotMatchWinner = gotMatchWinner;
 	m_iMatchWinner = team;
+
+	// NEO: Machine-readable round/match markers for the unattended match harness (see harness/ at
+	// the repo root). The victory text above only reaches the HUD and chat, so a log watcher has
+	// nothing to grep on. Keep these two lines greppable and stable; the harness parses them to
+	// decide when a round finished and when to shut the game down.
+	{
+		const auto *pTeamJinrai = GetGlobalTeam(TEAM_JINRAI);
+		const auto *pTeamNSF = GetGlobalTeam(TEAM_NSF);
+		Msg("NEO_ROUND_END: round=%d winner=%d reason=%d jinrai=%d nsf=%d\n",
+			roundNumber(), team, iWinReason,
+			pTeamJinrai ? pTeamJinrai->GetRoundsWon() : -1,
+			pTeamNSF ? pTeamNSF->GetRoundsWon() : -1);
+		if (gotMatchWinner)
+		{
+			Msg("NEO_MATCH_END: winner=%d\n", team);
+		}
+	}
+
+	// NEO-HARNESS-TEMP: forensic reconstruction. A round's outcome code says who won but not what
+	// the win was worth, and in CTG those differ by an order of magnitude - a ghost capture rank-ups
+	// every winner (AwardRankUp, ranks {0,4,10,20}) while an elimination win is worth 1-3 XP. The
+	// XP ledger is therefore the honest scoreboard for defensive work, so dump it per round.
+	if (sv_neo_forensic_log.GetBool())
+	{
+		Msg("NEO_FORENSIC_ROUND: round=%d winner=%d reason=%d capprevent=%d\n",
+			roundNumber(), team, iWinReason, m_bTeamBeenAwardedDueToCapPrevent ? 1 : 0);
+		for (int i = 1; i <= gpGlobals->maxClients; ++i)
+		{
+			auto *pPlayer = static_cast<CNEO_Player *>(UTIL_PlayerByIndex(i));
+			if (pPlayer && pPlayer->GetTeamNumber() >= FIRST_GAME_TEAM)
+			{
+				Msg("NEO_FORENSIC_SCORE: round=%d p=%d team=%d xp=%d frags=%d deaths=%d alive=%d\n",
+					roundNumber(), i, pPlayer->GetTeamNumber(), pPlayer->m_iXP.Get(),
+					pPlayer->FragCount(), pPlayer->DeathCount(), pPlayer->IsAlive() ? 1 : 0);
+			}
+		}
+	}
 }
 
 // NEO JANK (nullsystem): Dont like how this is fetched twice (PlayerKilled, DeathNotice),
@@ -4091,6 +4187,16 @@ void CNEORules::CheckIfCapPrevent(CNEO_Player *capPreventerPlayer)
 	const int iOppositeTeam = (iPreventerTeam == TEAM_JINRAI) ? TEAM_NSF : TEAM_JINRAI;
 	m_bTeamBeenAwardedDueToCapPrevent = (bOtherTeamPlayingGhost &&
 										 iTallyAlive[iPreventerTeam] == 0 && iTallyAlive[iOppositeTeam] > 0);
+
+	// NEO-HARNESS-TEMP: forensic reconstruction. This is the anti-suicide rule firing: the last
+	// defender took itself out while the enemy held the ghost, so the capture is awarded anyway.
+	// A defensive AI change that quietly raises the self-inflicted death rate would show up here
+	// and nowhere else in the outcome codes.
+	if (sv_neo_forensic_log.GetBool() && m_bTeamBeenAwardedDueToCapPrevent)
+	{
+		Msg("NEO_FORENSIC_CAPPREVENT: t=%.2f p=%d team=%d\n",
+			gpGlobals->curtime, iCapPreventerEntIdx, iPreventerTeam);
+	}
 }
 #endif
 
@@ -4374,6 +4480,24 @@ void CNEORules::DeathNotice(CBasePlayer* pVictim, const CTakeDamageInfo& info)
 #endif
 	}
 
+	// NEO-HARNESS-TEMP: forensic reconstruction. One line per death carrying both endpoints, so an
+	// offline tool can draw who shot whom, from where, at what range. Never part of a PR.
+	if (sv_neo_forensic_log.GetBool())
+	{
+		const Vector vecVictim = pVictim->GetAbsOrigin();
+		CNavArea *pVictimArea = pVictim->GetLastKnownArea();
+		const Vector vecKiller = pScorer ? pScorer->GetAbsOrigin() : vec3_origin;
+		CNavArea *pKillerArea = pScorer ? pScorer->GetLastKnownArea() : nullptr;
+		Msg("NEO_FORENSIC_KILL t=%.2f victim=%d victeam=%d victpos=%.0f,%.0f,%.0f victarea=%d "
+			"killer=%d killteam=%d killpos=%.0f,%.0f,%.0f killarea=%d weapon=%s hs=%d\n",
+			gpGlobals->curtime,
+			pVictim->entindex(), pVictim->GetTeamNumber(),
+			vecVictim.x, vecVictim.y, vecVictim.z, pVictimArea ? pVictimArea->GetID() : -1,
+			pScorer ? pScorer->entindex() : -1, pScorer ? pScorer->GetTeamNumber() : -1,
+			vecKiller.x, vecKiller.y, vecKiller.z, pKillerArea ? pKillerArea->GetID() : -1,
+			killer_weapon_name, pVictim->LastHitGroup() == HITGROUP_HEAD ? 1 : 0);
+	}
+
 	IGameEvent* event = gameeventmanager->CreateEvent("player_death");
 	if (event)
 	{
@@ -4592,6 +4716,21 @@ void CNEORules::SetRoundStatus(NeoRoundStatus status)
 			if (auto pEntGameCfg = GetActiveGameConfig())
 			{
 				pEntGameCfg->m_OnRoundStart.FireOutput(nullptr, pEntGameCfg);
+			}
+
+			// NEO-HARNESS-TEMP: forensic reconstruction. Bots get added and auto-balanced onto a
+			// team incrementally as neo_bot_quota fills the roster, and each gets an initial spawn
+			// at whatever team it was placed on *before* the round's final attacker/defender spawn
+			// set is locked in - so the first several NEO_FORENSIC_POS samples in a match can show
+			// a player at one corner of the map, then jump to the other, well before any real kill
+			// or objective event. This line is the honest boundary: nothing before it, for this
+			// round, reflects the round actually being played. Position/kill samples earlier than
+			// this timestamp should be discarded by analysis, not just the ones before round 1 -
+			// the same bot-placement settling can happen at the start of any round, though round 1
+			// is where it is most visible because every player is joining at once.
+			if (sv_neo_forensic_log.GetBool())
+			{
+				Msg("NEO_FORENSIC_ROUND_LIVE: round=%d t=%.2f\n", roundNumber(), gpGlobals->curtime);
 			}
 		}
 #endif

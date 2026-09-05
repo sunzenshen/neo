@@ -36,10 +36,15 @@ public:
         return lhs < rhs;
     }
 
-    // Less function for EHANDLE in m_BotReservedAreas
+    // Less function for EHANDLE in m_BotReservedAreas.
+    // Compare the whole packed handle, not just the serial number. GetSerialNumber() returns only
+    // the slot's reuse counter (m_Index >> NUM_SERIAL_NUM_SHIFT_BITS), which is identical across
+    // every entity slot that has been recycled the same number of times -- so at round start every
+    // bot hashes to the same key and CUtlMap treats them as one bot. ToInt() carries the entry
+    // index as well and is therefore unique per live entity.
     inline static bool EHandleLessFunc(const EHANDLE &lhs, const EHANDLE &rhs)
     {
-        return lhs.GetSerialNumber() < rhs.GetSerialNumber();
+        return lhs.ToInt() < rhs.ToInt();
     }
 
     CNEOBotPathReservationSystem() : m_BotReservedAreas(EHandleLessFunc), m_AreaAvoidPenalties(DefLessFunc(unsigned int))

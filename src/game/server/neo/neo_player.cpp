@@ -149,6 +149,7 @@ extern ConVar sv_neo_dev_test_clantag;
 extern ConVar sv_stickysprint;
 extern ConVar sv_neo_dev_loadout;
 extern ConVar neo_bot_difficulty;
+extern ConVar sv_neo_forensic_log;
 
 ConVar sv_neo_can_change_classes_anytime("sv_neo_can_change_classes_anytime", "0", FCVAR_CHEAT | FCVAR_REPLICATED, "Can players change classes at any moment, even mid-round?",
 	true, 0.0f, true, 1.0f);
@@ -2451,6 +2452,18 @@ void CNEO_Player::AddPoints(int score, bool bAllowNegativeScore, bool bIgnorePla
 	m_iXP += score;
 	//pl.frags = m_iFrags; NEO TODO (Adam) Is this actually used anywhere? should we include a xp field in CPlayerState ?
 	int newRank = GetRank(m_iXP);
+
+	// NEO-HARNESS-TEMP: every XP change, win or lose, kill or capture or penalty - this is the one
+	// chokepoint every point award/deduction in every mode flows through. Correlate against
+	// NEO_FORENSIC_KILL/NEO_FORENSIC_ROUND by timestamp to attribute a delta to its cause; this
+	// line alone is enough for a per-round or per-match XP-gained/denied read without waiting for
+	// round end. See harness/patches/README.md.
+	if (sv_neo_forensic_log.GetBool())
+	{
+		Msg("NEO_FORENSIC_XP t=%.2f p=%d team=%d delta=%d xp=%d rank=%d\n",
+			gpGlobals->curtime, entindex(), GetTeamNumber(), score, m_iXP.Get(), newRank);
+	}
+
 	if (oldRank == newRank)
 	{
 		return;

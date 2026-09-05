@@ -2,6 +2,7 @@
 #include "neo_grenade.h"
 
 #include "neo_tracefilter_collisiongroupdelta.h"
+#include "neo_gamerules.h"
 
 #ifdef GAME_DLL
 #include "gamestats.h"
@@ -12,6 +13,8 @@
 
 // memdbgon must be the last include file in a .cpp file!!!
 #include "tier0/memdbgon.h"
+
+extern ConVar sv_neo_forensic_log;
 
 #define NADE_SOLID_TYPE SolidType_t::SOLID_BBOX
 
@@ -98,6 +101,13 @@ void CNEOGrenadeFrag::Explode(trace_t* pTrace, int bitsDamageType)
 #ifdef GAME_DLL
 	auto pThrower = GetThrower();
 	auto pPlayer = ToBasePlayer(pThrower);
+	// NEO-HARNESS-TEMP: fight-forensics telemetry - see harness/patches/README.md.
+	if (sv_neo_forensic_log.GetBool() && pThrower)
+	{
+		const Vector& pos = GetAbsOrigin();
+		Msg("NEO_FORENSIC_GRENADE_DETONATE t=%.2f p=%d team=%d type=frag pos=%.0f,%.0f,%.0f\n",
+			gpGlobals->curtime, pThrower->entindex(), pThrower->GetTeamNumber(), pos.x, pos.y, pos.z);
+	}
 	if (pPlayer)
 	{
 		// Use the thrower's position as the reported position
@@ -128,6 +138,13 @@ CBaseGrenadeProjectile *NEOFraggrenade_Create(const Vector &position, const QAng
 	pGrenade->SetThrower(ToBaseCombatCharacter(pOwner));
 	if (pOwner) pGrenade->ChangeTeam(pOwner->GetTeamNumber());
 	pGrenade->m_takedamage = DAMAGE_EVENTS_ONLY;
+
+	// NEO-HARNESS-TEMP: fight-forensics telemetry - see harness/patches/README.md.
+	if (sv_neo_forensic_log.GetBool() && pOwner)
+	{
+		Msg("NEO_FORENSIC_GRENADE_THROW t=%.2f p=%d team=%d type=frag pos=%.0f,%.0f,%.0f\n",
+			gpGlobals->curtime, pOwner->entindex(), pOwner->GetTeamNumber(), position.x, position.y, position.z);
+	}
 
 	return pGrenade;
 }

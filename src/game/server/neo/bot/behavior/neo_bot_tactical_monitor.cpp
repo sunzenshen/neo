@@ -22,6 +22,7 @@
 #include "bot/behavior/neo_bot_pause.h"
 #if 0 // NEO TODO (Adam) Fix picking up weapons, search for dropped weapons to pick up ammo
 #include "bot/behavior/neo_bot_get_ammo.h"
+#include "bot/behavior/neo_bot_ctg_enemy.h"
 #endif
 #include "bot/behavior/nav_entities/neo_bot_nav_ent_destroy_entity.h"
 #include "bot/behavior/nav_entities/neo_bot_nav_ent_move_to.h"
@@ -36,6 +37,14 @@ ConVar neo_bot_force_jump( "neo_bot_force_jump", "0", FCVAR_CHEAT, "Force bots t
 
 ConVar neo_bot_scavenge_upgrade_delay( "neo_bot_scavenge_upgrade_delay", "4", FCVAR_GAMEDLL,
 	"Delay in seconds between checking for a better weapon if the bot already has a primary weapon.", true, 1, false, 0 );
+
+// NEO-HARNESS-TEMP: investigation only, never part of a PR. Logs the final ShouldRetreat cascade
+// answer alongside CNEOBotCtgEnemy::IsLosingTheRace, so a batch can be read for retreat behaviour
+// specifically in the case sv_neo_bot_ctg_no_retreat_when_carrier_ahead does NOT touch - the bot
+// closer to the threatened cap than the carrier - which the proposal 0011 A/B never isolated.
+ConVar sv_neo_bot_ctg_log_retreat_query( "sv_neo_bot_ctg_log_retreat_query", "0", FCVAR_REPLICATED | FCVAR_CHEAT,
+	"NEO harness debug: log every CTG ShouldRetreat cascade answer alongside IsLosingTheRace, for "
+	"offline analysis of retreat behaviour when the bot is winning vs losing the race." );
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
@@ -326,6 +335,18 @@ ActionResult< CNEOBot >	CNEOBotTacticalMonitor::Update( CNEOBot *me, float inter
 
 	// check if we need to get to cover
 	QueryResultType shouldRetreat = me->GetIntentionInterface()->ShouldRetreat( me );
+
+	// NEO-HARNESS-TEMP: see sv_neo_bot_ctg_log_retreat_query's declaration.
+	if ( sv_neo_bot_ctg_log_retreat_query.GetBool() && NEORules()->GetGameType() == NEO_GAME_TYPE_CTG )
+	{
+		CNEO_Player *pCarrier = CNEOBotCtgEnemy::EnemyGhostCarrier( me );
+		if ( pCarrier )
+		{
+			Msg( "NEO_FORENSIC_RETREAT_QUERY t=%.2f p=%d losing_race=%d answer=%d\n",
+				gpGlobals->curtime, ENTINDEX( me ),
+				CNEOBotCtgEnemy::IsLosingTheRace( me ) ? 1 : 0, (int)shouldRetreat );
+		}
+	}
 
 	if ( shouldRetreat == ANSWER_YES )
 	{
