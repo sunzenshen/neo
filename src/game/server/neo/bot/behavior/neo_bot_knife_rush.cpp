@@ -42,6 +42,27 @@ ConVar sv_neo_bot_ctg_knife_rush_repath_seconds( "sv_neo_bot_ctg_knife_rush_repa
 	"back. Short, because both bots are moving fast relative to how close this fight already is.",
 	true, 0.05f, false, 0.0f );
 
+// NEO-HARNESS-TEMP (proposal 0014 - CQC knife-vs-retreat experiment). See neo_bot_knife_rush.h.
+ConVar sv_neo_bot_cqc_experiment( "sv_neo_bot_cqc_experiment", "0", FCVAR_CHEAT,
+	"CQC experiment: 0 off; 1 = TEAM_JINRAI bots knife-rush a close threat while TEAM_NSF bots fall "
+	"back and shoot; 2 = swapped. Pair with sv_neo_bot_cqc_no_fire_range to force knife-range "
+	"encounters. Off = shipped behaviour.",
+	true, 0.0f, true, 2.0f );
+
+//---------------------------------------------------------------------------------------------
+ECqcArm CqcExperimentArmForBot( CNEOBot *me )
+{
+	const int iMode = sv_neo_bot_cqc_experiment.GetInt();
+	if ( iMode <= 0 || !me )
+	{
+		return CQC_ARM_NONE;
+	}
+
+	const bool bJinraiKnifes = ( iMode == 1 );
+	const bool bIsJinrai = ( me->GetTeamNumber() == TEAM_JINRAI );
+	return ( bIsJinrai == bJinraiKnifes ) ? CQC_ARM_KNIFE : CQC_ARM_RETREAT;
+}
+
 //---------------------------------------------------------------------------------------------
 // The threat's active weapon still being able to shoot us is what makes closing distance risky.
 // No weapon, an empty one, or a melee weapon of their own all mean the same thing here: they
@@ -121,35 +142,12 @@ bool CNEOBotKnifeRush::IsLosingThePositionRace( CNEOBot *me )
 }
 
 //---------------------------------------------------------------------------------------------
-bool CNEOBotKnifeRush::IsPossible( CNEOBot *me )
+bool CNEOBotKnifeRush::HasCloseKnifeableThreat( CNEOBot *me )
 {
-	if ( !sv_neo_bot_ctg_knife_rush_enabled.GetBool()
-		|| NEORules()->GetGameType() != NEO_GAME_TYPE_CTG
-		|| !IsLosingThePositionRace( me ) )
-	{
-		return false;
-	}
-
 	// Support is a terrible knife fighter - slow to close, slow to reposition for the backstab this
 	// whole approach is built around - so it sits this one out regardless of the relative-speed
 	// check below.
 	if ( me->GetClass() == NEO_CLASS_SUPPORT )
-	{
-		return false;
-	}
-
-	// A knife only beats a gun we can't fire right now. A loaded clip - in *either* slot, not just
-	// whichever is out - always carries a chance of a headshot, which is a better bet than a
-	// 25-damage knife swing: switching to a sidearm that still has rounds beats drawing a knife.
-	// Reserve ammo does not help with that until a reload finishes, which this bot may not have
-	// time for with a threat this close, so it is each weapon's clip specifically that has to be
-	// empty, not its total ammo count.
-	CNEOBaseCombatWeapon *pPrimary = static_cast< CNEOBaseCombatWeapon * >( me->Weapon_GetSlot( 0 ) );
-	CNEOBaseCombatWeapon *pSecondary = static_cast< CNEOBaseCombatWeapon * >( me->Weapon_GetSlot( 1 ) );
-
-	const bool bPrimaryHasAmmo = pPrimary && CNEOBot::IsRanged( pPrimary ) && pPrimary->Clip1() > 0;
-	const bool bSecondaryHasAmmo = pSecondary && CNEOBot::IsRanged( pSecondary ) && pSecondary->Clip1() > 0;
-	if ( bPrimaryHasAmmo || bSecondaryHasAmmo )
 	{
 		return false;
 	}
@@ -180,6 +178,49 @@ bool CNEOBotKnifeRush::IsPossible( CNEOBot *me )
 	}
 
 	return true;
+}
+
+//---------------------------------------------------------------------------------------------
+bool CNEOBotKnifeRush::IsPossible( CNEOBot *me )
+{
+	// NEO-HARNESS-TEMP (proposal 0014): the CQC experiment's knife arm enters here directly, on
+	// the same close-threat gate as the shipped rush but without the CTG-only / losing-the-race /
+	// empty-clip preconditions - the no-fire gate already keeps these bots off their guns, so
+	// forcing the knife is the arm. A bot the experiment assigned to the retreat arm never rushes.
+	const ECqcArm arm = CqcExperimentArmForBot( me );
+	if ( arm == CQC_ARM_KNIFE )
+	{
+		return HasCloseKnifeableThreat( me );
+	}
+	if ( arm == CQC_ARM_RETREAT )
+	{
+		return false;
+	}
+
+	if ( !sv_neo_bot_ctg_knife_rush_enabled.GetBool()
+		|| NEORules()->GetGameType() != NEO_GAME_TYPE_CTG
+		|| !IsLosingThePositionRace( me ) )
+	{
+		return false;
+	}
+
+	// A knife only beats a gun we can't fire right now. A loaded clip - in *either* slot, not just
+	// whichever is out - always carries a chance of a headshot, which is a better bet than a
+	// 25-damage knife swing: switching to a sidearm that still has rounds beats drawing a knife.
+	// Reserve ammo does not help with that until a reload finishes, which this bot may not have
+	// time for with a threat this close, so it is each weapon's clip specifically that has to be
+	// empty, not its total ammo count.
+	CNEOBaseCombatWeapon *pPrimary = static_cast< CNEOBaseCombatWeapon * >( me->Weapon_GetSlot( 0 ) );
+	CNEOBaseCombatWeapon *pSecondary = static_cast< CNEOBaseCombatWeapon * >( me->Weapon_GetSlot( 1 ) );
+
+	const bool bPrimaryHasAmmo = pPrimary && CNEOBot::IsRanged( pPrimary ) && pPrimary->Clip1() > 0;
+	const bool bSecondaryHasAmmo = pSecondary && CNEOBot::IsRanged( pSecondary ) && pSecondary->Clip1() > 0;
+	if ( bPrimaryHasAmmo || bSecondaryHasAmmo )
+	{
+		return false;
+	}
+
+	return HasCloseKnifeableThreat( me );
 }
 
 //---------------------------------------------------------------------------------------------

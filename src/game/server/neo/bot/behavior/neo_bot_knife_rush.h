@@ -6,6 +6,22 @@
 class CNEOBaseCombatWeapon;
 
 //--------------------------------------------------------------------------------------------------------
+// NEO-HARNESS-TEMP (proposal 0014 - CQC knife-vs-retreat experiment).
+//
+// sv_neo_bot_cqc_experiment assigns every bot to one of two close-quarters arms by team, so a
+// single mirror match pits "charge with the knife" against "fall back and shoot":
+//   0 = experiment off (shipped behaviour; this whole block is inert)
+//   1 = TEAM_JINRAI bots run the knife arm, TEAM_NSF bots run the retreat arm
+//   2 = swapped (run half a batch each way to cancel team/spawn asymmetry)
+// CqcExperimentArmForBot() resolves a bot to its arm. The knife arm is driven by an extra entry
+// path in CNEOBotKnifeRush::IsPossible(); the retreat arm by CNEOBotCqcRetreat.
+enum ECqcArm { CQC_ARM_NONE = 0, CQC_ARM_KNIFE, CQC_ARM_RETREAT };
+ECqcArm CqcExperimentArmForBot( CNEOBot *me );
+
+extern ConVar sv_neo_bot_cqc_experiment;
+extern ConVar sv_neo_bot_ctg_knife_rush_enter_range;	// shared close-quarters trigger distance
+
+//--------------------------------------------------------------------------------------------------------
 // Charges a known threat that is already close with a forced knife. Entered once the position race
 // against an enemy ghost carrier is already lost (IsLosingThePositionRace, below): backing off to
 // reload against a threat this close wins nothing, and a guaranteed melee trade is a better bet than
@@ -38,6 +54,12 @@ public:
 	// with, and the threat's class is not faster than ours - a faster enemy that decides to run
 	// cannot be run down, so closing on it with a knife only trades our gun for nothing.
 	static bool IsPossible( CNEOBot *me );
+
+	// NEO-HARNESS-TEMP (proposal 0014): the close-threat / owns-knife / not-Support /
+	// not-chasing-a-faster-class portion of IsPossible(), factored out so the CQC experiment's
+	// knife arm can reuse it without the shipped path's CTG-only, losing-the-race and
+	// empty-clip preconditions.
+	static bool HasCloseKnifeableThreat( CNEOBot *me );
 
 	virtual ActionResult< CNEOBot >	OnStart( CNEOBot *me, Action< CNEOBot > *priorAction ) override;
 	virtual ActionResult< CNEOBot >	Update( CNEOBot *me, float interval ) override;
