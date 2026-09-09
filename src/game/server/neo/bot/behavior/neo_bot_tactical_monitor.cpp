@@ -16,8 +16,6 @@
 #include "bot/behavior/neo_bot_seek_weapon.h"
 #include "bot/behavior/neo_bot_retreat_to_cover.h"
 #include "bot/behavior/neo_bot_retreat_from_grenade.h"
-#include "bot/behavior/neo_bot_knife_rush.h"
-#include "bot/behavior/neo_bot_cqc_retreat.h"	// NEO-HARNESS-TEMP (proposal 0014)
 #include "bot/behavior/neo_bot_ladder_approach.h"
 #include "bot/behavior/neo_bot_ladder_climb.h"
 #include "bot/behavior/neo_bot_path_clear_breakable.h"
@@ -344,22 +342,8 @@ ActionResult< CNEOBot >	CNEOBotTacticalMonitor::Update( CNEOBot *me, float inter
 		}
 	}
 
-	// Once the enemy ghost carrier has already won the position race for its cap
-	// (CNEOBotKnifeRush::IsLosingThePositionRace), surviving this fight buys nothing and finishing
-	// it does. A known threat already this close, against a bot with no working ranged weapon left,
-	// is worth charging with a forced knife rather than trading shots - see CNEOBotKnifeRush for
-	// the entry/exit detail.
-	// NEO-HARNESS-TEMP (proposal 0014): the CQC experiment's retreat arm. Checked just before the
-	// knife rush so the two arms are mutually exclusive and react at the same trigger distance.
-	if ( CNEOBotCqcRetreat::IsPossible( me ) )
-	{
-		return SuspendFor( new CNEOBotCqcRetreat, "CQC experiment: falling back to gun range" );
-	}
-
-	if ( CNEOBotKnifeRush::IsPossible( me ) )
-	{
-		return SuspendFor( new CNEOBotKnifeRush, "Losing the race - knife rushing a close threat" );
-	}
+	// The knife-rush decision (and the "enemy too close for this weapon, make space" decision)
+	// now live in CNEOBotAttack, not here - see CNEOBotAttack::ShouldKnifeRush.
 
 	if ( CBaseEntity *breakable = CNEOBotPathClearBreakable::GetBreakableInPath( me ) )
 	{

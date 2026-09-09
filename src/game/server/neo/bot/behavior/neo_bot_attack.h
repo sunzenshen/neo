@@ -26,6 +26,13 @@ public:
 
 	virtual const char *GetName( void ) const	{ return "Attack"; };
 
+	// True when a bot already engaging a threat should drop into CNEOBotKnifeRush: it owns a knife
+	// and can see a living enemy, and either sv_neo_bot_force_knife_fight is set (debug / reviewer
+	// evaluation) or it is completely out of bullets - both primary and secondary weapon absent, or
+	// with clip and reserve at zero. Checked before the "too close, make space" range test so a bot
+	// that still has ammo never takes the knife path.
+	static bool ShouldKnifeRush( CNEOBot *me );
+
 private:
 	bool m_bSawEnemySinceLastPathCompute; // throttles m_attackCoverArea search
 	const CNavArea *m_attackCoverArea; // attempting to advance towards this cover area

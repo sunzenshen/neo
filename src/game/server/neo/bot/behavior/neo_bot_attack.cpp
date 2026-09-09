@@ -6,6 +6,7 @@
 #include "bot/behavior/neo_bot_attack.h"
 #include "bot/behavior/neo_bot_grenade_dispatch.h"
 #include "bot/behavior/neo_bot_retreat_to_cover.h"
+#include "bot/behavior/neo_bot_knife_rush.h"
 #include "bot/neo_bot_path_compute.h"
 
 #include "nav_mesh.h"
@@ -13,6 +14,64 @@
 
 ConVar sv_neo_bot_attack_debug_cover("sv_neo_bot_attack_debug_cover", "0", FCVAR_CHEAT,
 	"Draw debug overlays for bot attack/cover behavior", true, 0, true, 1);
+
+extern ConVar sv_neo_forensic_log;	// NEO-HARNESS-TEMP: declared in neo_gamerules.cpp
+
+ConVar sv_neo_bot_force_knife_fight("sv_neo_bot_force_knife_fight", "0", FCVAR_CHEAT,
+	"Debug / reviewer evaluation: 1 = a bot in Attack that owns a knife and can see a living enemy "
+	"drops into the knife rush regardless of ammo. 0 (default) = only rush when completely out of "
+	"bullets (both weapon slots empty of clip and reserve).");
+
+ConVar sv_neo_bot_attack_too_close_retreat_ratio("sv_neo_bot_attack_too_close_retreat_ratio", "0", FCVAR_CHEAT,
+	"If > 0: a bot in Attack that still has ammo and whose focused enemy is closer than this "
+	"fraction of the bot's current-weapon optimal range (CNEOBot::GetDesiredAttackRange) breaks off "
+	"to CNEOBotRetreatToCover to make space. 0 (default) = never. Tune in (0,1].",
+	true, 0.0f, true, 1.0f);
+
+//---------------------------------------------------------------------------------------------
+// A weapon slot is "dry" - no bullets to be had from it - when it holds no weapon, holds a
+// non-ranged weapon, or holds a ranged weapon whose clip AND player-side reserve are both empty.
+static bool NeoBotWeaponSlotIsDry( CNEOBot *me, int slot )
+{
+	CNEOBaseCombatWeapon *w = static_cast<CNEOBaseCombatWeapon *>( me->Weapon_GetSlot( slot ) );
+	if ( !w || !CNEOBot::IsRanged( w ) )
+	{
+		return true;
+	}
+	return w->Clip1() <= 0 && me->GetAmmoCount( w->GetPrimaryAmmoType() ) <= 0;
+}
+
+//---------------------------------------------------------------------------------------------
+bool CNEOBotAttack::ShouldKnifeRush( CNEOBot *me )
+{
+	if ( !me->Weapon_OwnsThisType( "weapon_knife" ) )
+	{
+		return false;
+	}
+
+	const CKnownEntity *threat = me->GetVisionInterface()->GetPrimaryKnownThreat( true );
+	if ( !threat || !threat->GetEntity() || !threat->GetEntity()->IsAlive() )
+	{
+		return false;
+	}
+
+	// Only break off into the rush when the enemy is actually close enough to charge - otherwise a
+	// bot with a knife and a visible-but-distant enemy thrashes between Attack and knifeRush every
+	// tick. Below this range, out-of-ammo / forced bots stay in Attack and let its chase close the
+	// gap; the rush picks up for the final backstab approach. The knifeRush exit range is wider, so
+	// the enter/exit band is hysteresis.
+	if ( !me->IsRangeLessThan( threat->GetEntity()->GetAbsOrigin(), sv_neo_bot_knife_rush_enter_range.GetFloat() ) )
+	{
+		return false;
+	}
+
+	if ( sv_neo_bot_force_knife_fight.GetBool() )
+	{
+		return true;
+	}
+
+	return NeoBotWeaponSlotIsDry( me, 0 ) && NeoBotWeaponSlotIsDry( me, 1 );
+}
 
 
 //---------------------------------------------------------------------------------------------
@@ -240,6 +299,32 @@ ActionResult< CNEOBot >	CNEOBotAttack::Update( CNEOBot *me, float interval )
 
 	CNEOBaseCombatWeapon* myWeapon = static_cast<CNEOBaseCombatWeapon* >( me->GetActiveWeapon() );
 	bool isUsingCloseRangeWeapon = me->IsCloseRange( myWeapon );
+
+	// Close-quarters decisions. Knife first: ShouldKnifeRush() requires "no bullets anywhere" (or
+	// the force cvar), so a bot that still has ammo never takes it and the range test below is what
+	// governs those bots instead - the two stay independent.
+	if ( ShouldKnifeRush( me ) )
+	{
+		return SuspendFor( new CNEOBotKnifeRush, "Out of ammo (or forced) - knife rushing the threat" );
+	}
+
+	const float flTooCloseRatio = sv_neo_bot_attack_too_close_retreat_ratio.GetFloat();
+	if ( flTooCloseRatio > 0.0f
+		&& !m_attackCoverArea				// don't interrupt an in-progress leapfrog to cover
+		&& me->IsRanged( myWeapon )
+		&& threat->IsVisibleRecently()
+		&& me->IsRangeLessThan( threatLastKnownPos, flTooCloseRatio * me->GetDesiredAttackRange() ) )
+	{
+		// NEO-HARNESS-TEMP (proposal 0014): join point for "did the bot that broke off survive?".
+		// analyze_cqc_retreat.py pairs this with the next NEO_FORENSIC_KILL for the same p.
+		if ( sv_neo_forensic_log.GetBool() )
+		{
+			Msg( "NEO_FORENSIC_CQC_RETREAT t=%f p=%d team=%d range=%.0f optrange=%.0f\n",
+				gpGlobals->curtime, me->entindex(), me->GetTeamNumber(),
+				( threatLastKnownPos - me->GetAbsOrigin() ).Length(), me->GetDesiredAttackRange() );
+		}
+		return SuspendFor( new CNEOBotRetreatToCover(), "Enemy too close for this weapon - making space" );
+	}
 
 	if (!m_attackCoverArea // don't slow movement to cover with strafing
 		&& isUsingCloseRangeWeapon && threat->IsVisibleRecently() && me->IsRangeLessThan( threatLastKnownPos, 1.1f * me->GetDesiredAttackRange() ) )

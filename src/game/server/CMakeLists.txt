@@ -1539,7 +1539,6 @@ set(UNITY_SOURCE_NEO_BOT
     neo/bot/behavior/neo_bot_jgr_enemy.cpp
     neo/bot/behavior/neo_bot_jgr_escort.cpp
     neo/bot/behavior/neo_bot_jgr_juggernaut.cpp
-    neo/bot/behavior/neo_bot_cqc_retreat.cpp
     neo/bot/behavior/neo_bot_jgr_seek.cpp
     neo/bot/behavior/neo_bot_knife_rush.cpp
     neo/bot/behavior/neo_bot_ladder_approach.cpp
@@ -1611,7 +1610,6 @@ target_sources_grouped(
     neo/bot/behavior/neo_bot_jgr_enemy.h
     neo/bot/behavior/neo_bot_jgr_escort.h
     neo/bot/behavior/neo_bot_jgr_juggernaut.h
-    neo/bot/behavior/neo_bot_cqc_retreat.h
     neo/bot/behavior/neo_bot_jgr_seek.h
     neo/bot/behavior/neo_bot_knife_rush.h
     neo/bot/behavior/neo_bot_ladder_approach.h

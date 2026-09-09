@@ -506,7 +506,6 @@ private:
 	friend class CNEOBotCtgLoneWolf;
 	friend class CNEOBotCtgLoneWolfAmbush;
 	friend class CNEOBotCtgLoneWolfSeek;
-	friend class CNEOBotKnifeRush;
 	friend class CNEOBotTacticalMonitor;
 
 	friend class CNEOBotSeekAndDestroy;

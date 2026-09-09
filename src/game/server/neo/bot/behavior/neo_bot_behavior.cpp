@@ -34,12 +34,11 @@ ConVar neo_bot_always_full_reload( "neo_bot_always_full_reload", "0", FCVAR_CHEA
 
 ConVar neo_bot_fire_weapon_allowed( "neo_bot_fire_weapon_allowed", "1", FCVAR_CHEAT, "If zero, NEOBots will not pull the trigger of their weapons (but will act like they did)" );
 
-// NEO-HARNESS-TEMP (proposal 0014 - CQC knife-vs-retreat experiment). When > 0, a bot holds
-// *ranged* fire until its primary known threat is within this many units, so encounters collapse
-// to knife range over and over. 0 = disabled (shipped behaviour). Melee swings are unaffected.
-ConVar sv_neo_bot_cqc_no_fire_range( "sv_neo_bot_cqc_no_fire_range", "0", FCVAR_CHEAT,
-	"CQC experiment: hold ranged fire until the threat is within this many units (0 = off).",
-	true, 0.0f, false, 0.0f );
+// sv_neo_bot_force_knife_fight (defined in neo_bot_attack.cpp): a debug / reviewer switch that
+// makes every bot fight only with the knife. Its half of the job here is to hold all ranged fire
+// so the bot cannot fall back on a gun; the other half (breaking off into CNEOBotKnifeRush on
+// sight) lives in CNEOBotAttack::ShouldKnifeRush. Melee swings are unaffected.
+extern ConVar sv_neo_bot_force_knife_fight;
 
 ConVar neo_bot_allow_retreat( "neo_bot_allow_retreat", "1", FCVAR_CHEAT, "If zero, bots will not attempt to retreat if they are are in a bad situation." );
 
@@ -802,21 +801,12 @@ void CNEOBotMainAction::FireWeaponAtEnemy( CNEOBot *me )
 		return;
 	}
 
-	// NEO-HARNESS-TEMP (proposal 0014): CQC experiment no-fire gate. Hold ranged fire until the
-	// threat is close, so the match keeps producing knife-range encounters. A melee weapon (the
-	// knife arm's forced weapon) is never gated.
-	if ( sv_neo_bot_cqc_no_fire_range.GetFloat() > 0.0f )
+	// sv_neo_bot_force_knife_fight: hold all ranged fire so a forced-knife bot cannot fall back on
+	// a gun. Melee swings go through the normal path below.
+	if ( sv_neo_bot_force_knife_fight.GetBool() && CNEOBot::IsRanged( static_cast<CNEOBaseCombatWeapon*>( me->GetActiveWeapon() ) ) )
 	{
-		CNEOBaseCombatWeapon *pActive = static_cast<CNEOBaseCombatWeapon*>( me->GetActiveWeapon() );
-		if ( CNEOBot::IsRanged( pActive ) )
-		{
-			const float flThreatRange = ( threat->GetEntity()->GetAbsOrigin() - me->GetAbsOrigin() ).Length();
-			if ( flThreatRange > sv_neo_bot_cqc_no_fire_range.GetFloat() )
-			{
-				me->ReleaseFireButton();
-				return;
-			}
-		}
+		me->ReleaseFireButton();
+		return;
 	}
 
 	CNEOBot::LineOfFireFlags lofFlags = CNEOBot::LINE_OF_FIRE_FLAGS_DEFAULT;

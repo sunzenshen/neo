@@ -5,29 +5,16 @@
 
 class CNEOBaseCombatWeapon;
 
+extern ConVar sv_neo_bot_knife_rush_enter_range;	// "close enough to break off into the rush" distance
+
 //--------------------------------------------------------------------------------------------------------
-// NEO-HARNESS-TEMP (proposal 0014 - CQC knife-vs-retreat experiment).
+// Charges a known threat with a forced knife, aiming for the backstab arc.
 //
-// sv_neo_bot_cqc_experiment assigns every bot to one of two close-quarters arms by team, so a
-// single mirror match pits "charge with the knife" against "fall back and shoot":
-//   0 = experiment off (shipped behaviour; this whole block is inert)
-//   1 = TEAM_JINRAI bots run the knife arm, TEAM_NSF bots run the retreat arm
-//   2 = swapped (run half a batch each way to cancel team/spawn asymmetry)
-// CqcExperimentArmForBot() resolves a bot to its arm. The knife arm is driven by an extra entry
-// path in CNEOBotKnifeRush::IsPossible(); the retreat arm by CNEOBotCqcRetreat.
-enum ECqcArm { CQC_ARM_NONE = 0, CQC_ARM_KNIFE, CQC_ARM_RETREAT };
-ECqcArm CqcExperimentArmForBot( CNEOBot *me );
-
-extern ConVar sv_neo_bot_cqc_experiment;
-extern ConVar sv_neo_bot_ctg_knife_rush_enter_range;	// shared close-quarters trigger distance
-
-//--------------------------------------------------------------------------------------------------------
-// Charges a known threat that is already close with a forced knife. Entered once the position race
-// against an enemy ghost carrier is already lost (IsLosingThePositionRace, below): backing off to
-// reload against a threat this close wins nothing, and a guaranteed melee trade is a better bet than
-// hoping to win a ranged exchange from here. CNEOBotTacticalMonitor gates entry through
-// IsPossible() before ever constructing one - the same pattern as CNEOBotGetAmmo::IsPossible /
-// CNEOBotGetHealth::IsPossible.
+// This is only the *approach* behaviour. The decision to enter it lives in CNEOBotAttack
+// (CNEOBotAttack::ShouldKnifeRush): by default a bot rushes only when it is completely out of
+// bullets - both primary and secondary weapon absent or with clip and reserve at zero - so the
+// knife is genuinely all it has left. sv_neo_bot_force_knife_fight forces it on sight for
+// debugging / reviewer evaluation.
 //
 // The approach deliberately aims for the target's back, not their current position: NEOTOKYO's
 // knife (weapon_knife.cpp) is a flat 25 damage per swing at ~1.8 swings/second - 4-9 hits to kill
@@ -43,24 +30,10 @@ extern ConVar sv_neo_bot_ctg_knife_rush_enter_range;	// shared close-quarters tr
 // FireWeaponAtEnemy() + UpdateLookingAroundForEnemies() already look at, aim at and swing whatever
 // weapon is forced onto the required-weapon stack, on whatever bearing the approach ends up on -
 // arriving at their side or front still swings, just without the backstab bonus. This behaviour
-// only owns closing the distance and deciding when to give up on the plan - the enemy breaking off
-// past knife range, especially while still holding a weapon with bullets left, is the one thing
-// that makes charging a mistake.
+// only owns closing the distance and deciding when to give up on the plan.
 class CNEOBotKnifeRush : public Action< CNEOBot >
 {
 public:
-	// True when TacticalMonitor should suspend into a knife rush right now: there is a known,
-	// living threat already within sv_neo_bot_ctg_knife_rush_enter_range, we have a knife to fight
-	// with, and the threat's class is not faster than ours - a faster enemy that decides to run
-	// cannot be run down, so closing on it with a knife only trades our gun for nothing.
-	static bool IsPossible( CNEOBot *me );
-
-	// NEO-HARNESS-TEMP (proposal 0014): the close-threat / owns-knife / not-Support /
-	// not-chasing-a-faster-class portion of IsPossible(), factored out so the CQC experiment's
-	// knife arm can reuse it without the shipped path's CTG-only, losing-the-race and
-	// empty-clip preconditions.
-	static bool HasCloseKnifeableThreat( CNEOBot *me );
-
 	virtual ActionResult< CNEOBot >	OnStart( CNEOBot *me, Action< CNEOBot > *priorAction ) override;
 	virtual ActionResult< CNEOBot >	Update( CNEOBot *me, float interval ) override;
 	virtual void						OnEnd( CNEOBot *me, Action< CNEOBot > *nextAction ) override;
@@ -71,13 +44,6 @@ public:
 	virtual const char *GetName( void ) const override { return "knifeRush"; }
 
 private:
-	// True when an enemy is carrying the ghost and is already nearer (straight-line) to the
-	// nearest active cap zone its own team can score into than `me` is - the position race for
-	// that cap is lost. Reads NEORules()->m_pGhostCaps directly (friend class CNEOBotKnifeRush in
-	// neo_gamerules.h), the same fixed map geometry every other CTG behaviour that reasons about
-	// "which zone" reads; it does not read anything from the carrier's own AI.
-	static bool IsLosingThePositionRace( CNEOBot *me );
-
 	bool RepathToFlank( CNEOBot *me );
 
 	CHandle< CNEOBaseCombatWeapon > m_hKnife;	// pushed onto the required-weapon stack for the duration
