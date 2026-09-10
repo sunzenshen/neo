@@ -5,6 +5,7 @@
 #include "bot/neo_bot.h"
 #include "bot/behavior/neo_bot_attack.h"
 #include "bot/behavior/neo_bot_grenade_dispatch.h"
+#include "bot/behavior/neo_bot_knife_rush.h"
 #include "bot/behavior/neo_bot_retreat_to_cover.h"
 #include "bot/neo_bot_path_compute.h"
 
@@ -16,6 +17,8 @@ ConVar sv_neo_bot_attack_cover_search_interval("sv_neo_bot_attack_cover_search_i
 
 ConVar sv_neo_bot_attack_debug_cover("sv_neo_bot_attack_debug_cover", "0", FCVAR_CHEAT,
 	"Draw debug overlays for bot attack/cover behavior", true, 0, true, 1);
+
+extern ConVar sv_neo_bot_force_knife_fight;
 
 
 //---------------------------------------------------------------------------------------------
@@ -273,6 +276,15 @@ ActionResult< CNEOBot >	CNEOBotAttack::Update( CNEOBot *me, float interval )
 	CNEOBaseCombatWeapon* myWeapon = static_cast<CNEOBaseCombatWeapon* >( me->GetActiveWeapon() );
 	bool isUsingCloseRangeWeapon = me->IsCloseRange( myWeapon );
 
+	if ( m_knifeRushCheckTimer.IsElapsed() )
+	{
+		m_knifeRushCheckTimer.Start( 1.0f );
+		if ( !sv_neo_bot_force_knife_fight.GetBool() && CNEOBotKnifeRush::ShouldRush( me ) )
+		{
+			return SuspendFor( new CNEOBotKnifeRush, "Knife rushing threat" );
+		}
+	}
+
 	if (!m_attackCoverArea // don't slow movement to cover with strafing
 		&& isUsingCloseRangeWeapon && threat->IsVisibleRecently() && me->IsRangeLessThan( threatLastKnownPos, 1.1f * me->GetDesiredAttackRange() ) )
 	{
@@ -450,7 +462,7 @@ QueryResultType	CNEOBotAttack::ShouldRetreat( const INextBot *me ) const
 
 	const CNEOBot *meNeoBot = static_cast<const CNEOBot *>(me);
 	CNEOBaseCombatWeapon* myWeapon = static_cast<CNEOBaseCombatWeapon* >( meNeoBot->GetActiveWeapon() );
-	if ( !meNeoBot->IsRanged(myWeapon) )
+	if ( sv_neo_bot_force_knife_fight.GetBool() || !meNeoBot->IsRanged(myWeapon) )
 	{
 		return ANSWER_NO;
 	}

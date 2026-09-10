@@ -37,4 +37,5 @@ private:
 	ChasePath m_chasePath;
 	CountdownTimer m_coverSearchTimer;
 	CountdownTimer m_grenadeThrowCooldownTimer;
+	CountdownTimer m_knifeRushCheckTimer;
 };

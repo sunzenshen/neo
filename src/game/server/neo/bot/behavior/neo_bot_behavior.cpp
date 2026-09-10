@@ -42,6 +42,8 @@ ConVar neo_bot_recon_superjump_min_dist( "neo_bot_recon_superjump_min_dist", "40
 ConVar neo_bot_recon_superjump_min_accuracy( "neo_bot_recon_superjump_min_accuracy", "0.96", FCVAR_NONE,
 	"Minimum directional alignment with path required for a Recon bot to super jump while moving", true, 0.1f, false, 1.0f );
 
+extern ConVar sv_neo_bot_force_knife_fight;
+
 //---------------------------------------------------------------------------------------------
 Action< CNEOBot > *CNEOBotMainAction::InitialContainedAction( CNEOBot *me )
 {
@@ -751,6 +753,13 @@ void CNEOBotMainAction::FireWeaponAtEnemy( CNEOBot *me )
 	CNEOBaseCombatWeapon* myWeapon = static_cast<CNEOBaseCombatWeapon*>( me->GetActiveWeapon() );
 	if ( !myWeapon )
 		return;
+
+	if ( sv_neo_bot_force_knife_fight.GetBool() && CNEOBot::IsRanged( myWeapon ) )
+	{
+		// For debugging bot knife rushes, disable their use of ranged weapons
+		me->ReleaseFireButton();
+		return;
+	}
 
 	// Check reload waiting edge case, potentially from weapon swaps
 	if ( m_isWaitingForFullReload && myWeapon->GetMaxClip1() > 0 && myWeapon->Clip1() >= myWeapon->GetMaxClip1() )
