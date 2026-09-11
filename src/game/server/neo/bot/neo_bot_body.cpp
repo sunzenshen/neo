@@ -3,9 +3,15 @@
 #include "neo_bot.h"
 #include "neo_bot_body.h"
 
+// memdbgon must be the last include file in a .cpp file!!!
+#include "tier0/memdbgon.h"
 
-// 
-// Return how often we should sample our target's position and 
+ConVar nb_bot_scan_head_speed( "nb_bot_scan_head_speed", "150", FCVAR_CHEAT,
+	"Max head turn rate (deg/s) for a bot's non-threat scanning looks - keeps the "
+	"spectator view from being whipped around. Threat tracking still uses nb_saccade_speed." );
+
+//
+// Return how often we should sample our target's position and
 // velocity to update our aim tracking, to allow realistic slop in tracking
 //
 float CNEOBotBody::GetHeadAimTrackingInterval() const
@@ -28,6 +34,26 @@ float CNEOBotBody::GetHeadAimTrackingInterval() const
 	}
 
 	return 0.0f;
+}
+
+//
+// A scanning look has no entity subject and a priority below CRITICAL. Turn the head
+// gently for those so a spectator riding this bot's eyes doesn't get motion sick from
+// the whole view whipping around. Active threat tracking keeps PlayerBody's fast saccade.
+//
+float CNEOBotBody::GetMaxHeadAngularVelocity() const
+{
+	if ( GetLookAtSubject() == NULL && m_lookAtPriority < IBody::CRITICAL )
+	{
+		if ( m_scanSpeedOverride > 0.0f )
+		{
+			return m_scanSpeedOverride;
+		}
+
+		return nb_bot_scan_head_speed.GetFloat();
+	}
+
+	return PlayerBody::GetMaxHeadAngularVelocity();
 }
 
 CNEO_Player *CNEOBotBody::NEOPlayerEnt() const

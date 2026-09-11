@@ -22,6 +22,7 @@
 #include "neo_weapon_loadout.h"
 #include "behavior/neo_bot_behavior.h"
 #include "neo_crosshair.h"
+#include "neo_bot_path_compute.h"
 
 ConVar neo_bot_notice_gunfire_range("neo_bot_notice_gunfire_range", "3000", FCVAR_GAMEDLL);
 ConVar neo_bot_notice_quiet_gunfire_range("neo_bot_notice_quiet_gunfire_range", "500", FCVAR_GAMEDLL);
@@ -41,6 +42,7 @@ extern ConVar neo_bot_difficulty;
 extern ConVar neo_bot_farthest_visible_theater_sample_count;
 extern ConVar neo_bot_path_lookahead_range;
 extern ConVar neo_bot_path_around_friendly_cooldown;
+extern ConVar sv_neo_bot_look_telemetry; // NEO-HARNESS-TEMP (proposal 0019); strip before PR
 
 
 
@@ -549,6 +551,10 @@ CNEOBot::CNEOBot()
 	m_squad = NULL;
 	m_didReselectClass = false;
 	m_spotWhereEnemySentryLastInjuredMe = vec3_origin;
+	m_watchedEmergenceAreaId = -1;
+	m_watchedEmergencePos = vec3_invalid;
+	m_watchedEmergenceGazePoint = vec3_invalid;
+	m_watchedEmergenceRecomputeTimer.Invalidate();
 	m_isLookingAroundForEnemies = true;
 	m_behaviorFlags = 0;
 	m_attentionFocusEntity = NULL;
@@ -1179,8 +1185,72 @@ public:
 };
 
 
+// proposal 0019: how many degrees (measured from the bot's eye) the anticipated
+// emergence point must shift before the bot moves its head to the new one. Stops the
+// view chattering while a heard threat crosses back and forth between nearby nav areas.
+ConVar nb_bot_look_emergence_hysteresis_deg("nb_bot_look_emergence_hysteresis_deg", "12", FCVAR_CHEAT,
+	"Min angular shift (deg, from the bot's eye) before it re-aims at a moved emergence point.");
+
+// proposal 0019: minimum time between emergence-point recomputes. Longer = the bot commits
+// to watching one corner for longer while a heard threat moves around behind cover.
+ConVar nb_bot_look_emergence_recompute_interval("nb_bot_look_emergence_recompute_interval", "0.5", FCVAR_CHEAT,
+	"Seconds a bot holds an anticipated emergence point before recomputing it for a heard threat.");
+
+// proposal 0019: head turn rate for the emergence-point look - between the idle-scan cap
+// (nb_bot_scan_head_speed) and the full reaction saccade, since it tracks a real heard threat.
+ConVar nb_bot_look_emergence_head_speed("nb_bot_look_emergence_head_speed", "400", FCVAR_CHEAT,
+	"Max head turn rate (deg/s) for a bot turning onto an anticipated enemy emergence point.");
+
+// proposal 0019 (fairness pass): small human-plausible wobble baked into the emergence-point
+// gaze once when it is (re)acquired - not per tick, so it can't reintroduce the whip-panning
+// this proposal removed. Flat across difficulty; NEOBotEmergenceLookHeight below is where
+// difficulty comes in.
+const float NEO_BOT_LOOK_LATERAL_JITTER = 16.0f;
+const float NEO_BOT_LOOK_HEIGHT_JITTER = 4.0f;
+
+// proposal 0019 (fairness pass): height (game units, from the floor) the emergence-point look
+// aims for, by difficulty. Aiming exactly at head height on every difficulty read as an
+// omniscient headshot prediction; an Expert bot still reads the corner at head height, but a
+// lower difficulty looks progressively lower (never below chest - the floor would look wrong)
+// so its guess visibly isn't locked on the way an expert's is.
+static float NEOBotEmergenceLookHeight(CNEOBot::DifficultyType difficulty)
+{
+	switch (difficulty)
+	{
+	case CNEOBot::EXPERT: return HumanEyeHeight;       // ~62 - head
+	case CNEOBot::HARD:   return 0.75f * HumanHeight;  // ~53 - shoulder
+	}
+
+	return 0.55f * HumanHeight;                          // ~39 - torso (NORMAL, EASY)
+}
+
+// Return true if b is within maxDeg of a, as seen from eye.
+static bool NEOBotLookWithinHysteresis(const Vector &eye, const Vector &a, const Vector &b, float maxDeg)
+{
+	Vector da = a - eye;
+	Vector db = b - eye;
+	if (da.IsZero() || db.IsZero())
+	{
+		return false;
+	}
+
+	da.NormalizeInPlace();
+	db.NormalizeInPlace();
+
+	const float d = clamp(DotProduct(da, db), -1.0f, 1.0f);
+	return RAD2DEG(acosf(d)) <= maxDeg;
+}
+
+
 //-----------------------------------------------------------------------------------------------------
-// Update our view to watch where members of the given team will be coming from
+// Update our view to watch where members of the given team will be coming from.
+//
+// NEO NOTE (proposal 0019): a prior version of this made calm bots continuously scan
+// the whole potentially-visible nav set (globally "oldest observed" area, random
+// tie-break, ~0.5 s cadence). Through the fast head-aim saccade that whip-panned the
+// first-person view and made humans sick spectating a bot's eyes. It is deliberately
+// left inert now - calm bots' heads are driven by path following. The purposeful look
+// is UpdateLookingAroundForEnemies' emergence-point watch for a heard threat.
 void CNEOBot::UpdateLookingAroundForIncomingPlayers(bool lookForEnemies)
 {
 	if (!m_lookAtEnemyInvasionAreasTimer.IsElapsed())
@@ -1202,6 +1272,10 @@ void CNEOBot::UpdateLookingAroundForEnemies(void)
 
 	if (HasAttribute(CNEOBot::IGNORE_ENEMIES))
 		return;
+
+	// proposal 0019: clear last tick's scan-speed override; the emergence-point look below
+	// re-sets it while it is the active look.
+	GetBodyInterface()->SetScanSpeedOverride(0.0f);
 
 	const float maxLookInterval = 1.0f;
 
@@ -1243,12 +1317,89 @@ void CNEOBot::UpdateLookingAroundForEnemies(void)
 			imperfectAimSpot.x += RandomFloat(-error, error);
 			imperfectAimSpot.y += RandomFloat(-error, error);
 
-			GetBodyInterface()->AimHeadTowards(imperfectAimSpot, IBody::IMPORTANT, 1.0f, NULL, "Turning around to find threat out of our FOV");
+			// CRITICAL, not IMPORTANT: this is a real threat with a clear line to us - snap
+			// around at full saccade speed, not the gentle scan rate (proposal 0019). The
+			// nausea problem was repeated aimless scanning, not an occasional motivated turn.
+			GetBodyInterface()->AimHeadTowards(imperfectAimSpot, IBody::CRITICAL, 1.0f, NULL, "Turning around to find threat out of our FOV");
 			return;
 		}
 
 		{
-			// look toward potentially visible area nearest the last known position
+			// Known but hidden: watch the point where this enemy would first come
+			// into view if it walked its fastest route to us - the corner it steps
+			// out of. Recompute only when its last-known nav area changes (throttled),
+			// so the view holds still between updates instead of chasing a fresh
+			// random point every tick (proposal 0019).
+			const CNavArea* threatArea = known->GetLastKnownArea();
+			const int threatAreaId = threatArea ? threatArea->GetID() : -1;
+			CBaseEntity* threatEnt = known->GetEntity();
+
+			const bool threatChanged = (threatEnt != m_watchedEmergenceThreat.Get());
+			const bool areaChanged = (threatAreaId != m_watchedEmergenceAreaId);
+
+			if ((threatChanged || areaChanged) && m_watchedEmergenceRecomputeTimer.IsElapsed())
+			{
+				m_watchedEmergenceRecomputeTimer.Start(nb_bot_look_emergence_recompute_interval.GetFloat());
+
+				const bool hadPoint = (m_watchedEmergencePos != vec3_invalid);
+				const Vector prevPos = m_watchedEmergencePos;
+				m_watchedEmergenceThreat = threatEnt;
+				m_watchedEmergenceAreaId = threatAreaId;
+
+				const Vector &newPos = CNEOBotFindPathEmergencePoint(
+					this, GetAbsOrigin(), known->GetLastKnownPosition(),
+					EMERGENCE_TEST_COMPLETELY_VISIBLE);
+
+				// Adopt the new point unless it is the same threat and the shift is
+				// within the hysteresis cone - then hold the current gaze so the head
+				// does not chatter.
+				const char *htOutcome = "kept";
+				if (newPos == vec3_invalid)
+				{
+					m_watchedEmergencePos = vec3_invalid;
+					htOutcome = "none";
+				}
+				else if (threatChanged || !hadPoint ||
+					!NEOBotLookWithinHysteresis(EyePosition(), prevPos, newPos, nb_bot_look_emergence_hysteresis_deg.GetFloat()))
+				{
+					m_watchedEmergencePos = newPos;
+
+					// Bake the difficulty-scaled height + a small wobble in now, once, so it
+					// never gets re-rolled tick to tick (proposal 0019 fairness pass).
+					Vector gazePoint = newPos;
+					gazePoint.x += RandomFloat(-NEO_BOT_LOOK_LATERAL_JITTER, NEO_BOT_LOOK_LATERAL_JITTER);
+					gazePoint.y += RandomFloat(-NEO_BOT_LOOK_LATERAL_JITTER, NEO_BOT_LOOK_LATERAL_JITTER);
+					gazePoint.z += NEOBotEmergenceLookHeight(GetDifficulty())
+						+ RandomFloat(-NEO_BOT_LOOK_HEIGHT_JITTER, NEO_BOT_LOOK_HEIGHT_JITTER);
+					m_watchedEmergenceGazePoint = gazePoint;
+
+					htOutcome = "moved";
+				}
+
+				// NEO-HARNESS-TEMP (proposal 0019): confirm this look actually fires. Strip before PR.
+				if (sv_neo_bot_look_telemetry.GetBool())
+				{
+					Msg("NEO_LOOK_TELEM %6.2f emergence bot=%d threatArea=%d result=%s\n",
+						gpGlobals->curtime, entindex(), threatAreaId, htOutcome);
+				}
+			}
+
+			if (m_watchedEmergencePos != vec3_invalid)
+			{
+				// Turn onto the anticipated corner faster than an idle scan (this is a real
+				// heard threat), but still short of the full 1000 deg/s reaction saccade.
+				GetBodyInterface()->SetScanSpeedOverride(nb_bot_look_emergence_head_speed.GetFloat());
+
+				// maxLookInterval duration so this overrides path-follow body aim. The gaze
+				// point (floor point + difficulty height + wobble) was baked in when adopted,
+				// above - not re-derived here, so it doesn't jitter every tick.
+				GetBodyInterface()->AimHeadTowards(m_watchedEmergenceGazePoint,
+					IBody::IMPORTANT, maxLookInterval, NULL, "Watching a heard threat's likely emergence point");
+				return;
+			}
+
+			// No point on the route is visible from here - fall back to scanning
+			// the potentially-visible area nearest the last known position.
 			CNavArea* myArea = GetLastKnownArea();
 			if (myArea)
 			{

@@ -34,6 +34,11 @@ ConVar neo_bot_always_full_reload( "neo_bot_always_full_reload", "0", FCVAR_CHEA
 
 ConVar neo_bot_fire_weapon_allowed( "neo_bot_fire_weapon_allowed", "1", FCVAR_CHEAT, "If zero, NEOBots will not pull the trigger of their weapons (but will act like they did)" );
 
+// NEO-HARNESS-TEMP (proposal 0019): per-bot head-motion proxy stats (NEO_LOOK_TELEM lines)
+// for the looking-around / motion-sickness rework. Strip before PR.
+ConVar sv_neo_bot_look_telemetry( "sv_neo_bot_look_telemetry", "0", FCVAR_CHEAT,
+	"Log per-bot head-motion proxy stats for the bot looking-around rework (proposal 0019)." );
+
 ConVar neo_bot_allow_retreat( "neo_bot_allow_retreat", "1", FCVAR_CHEAT, "If zero, bots will not attempt to retreat if they are are in a bad situation." );
 
 ConVar neo_bot_recon_superjump_min_dist( "neo_bot_recon_superjump_min_dist", "4096", FCVAR_NONE,
@@ -128,6 +133,139 @@ ActionResult< CNEOBot >	CNEOBotMainAction::Update( CNEOBot *me, float interval )
 // 		{
 // 			DevMsg( "%3.2f: Yaw rate = %3.2f\n", gpGlobals->curtime, m_yawRate );
 // 		}
+	}
+
+	// NEO-HARNESS-TEMP (proposal 0019): accumulate head-motion proxy stats and dump a
+	// per-bot summary line every 5 s. Strip before PR.
+	if ( sv_neo_bot_look_telemetry.GetBool() )
+	{
+		const float htCurYaw = me->EyeAngles().y;
+		const float htDYaw = AngleDiff( htCurYaw, m_htPrevYaw );
+		m_htPrevYaw = htCurYaw;
+		const float htRate = fabsf( htDYaw / ( interval + 0.0001f ) );
+
+		if ( !m_htDumpTimer.HasStarted() )
+		{
+			m_htDumpTimer.Start( 5.0f );
+			m_htPrevDYaw = htDYaw;
+		}
+
+		++m_htTicks;
+		m_htMaxRate = MAX( m_htMaxRate, htRate );
+
+		const float htEdges[7] = { 25.0f, 50.0f, 100.0f, 200.0f, 400.0f, 800.0f, 1600.0f };
+		int htBin = 0;
+		while ( htBin < 7 && htRate >= htEdges[htBin] )
+		{
+			++htBin;
+		}
+		++m_htRateBins[htBin];
+
+		if ( ( htDYaw > 0.5f && m_htPrevDYaw < -0.5f ) || ( htDYaw < -0.5f && m_htPrevDYaw > 0.5f ) )
+		{
+			++m_htReversals;
+		}
+		if ( fabsf( htDYaw ) > 0.5f )
+		{
+			m_htPrevDYaw = htDYaw;
+		}
+
+		const bool htHasVisibleThreat = ( me->GetVisionInterface()->GetPrimaryKnownThreat( true ) != NULL );
+		if ( !htHasVisibleThreat )
+		{
+			++m_htNoThreatTicks;
+			m_htNoThreatYawTravel += fabsf( htDYaw );
+		}
+
+		// Per-bot gaze sample for the forensic map (~5 Hz): eye position, view yaw/pitch,
+		// current yaw rate, whether a threat is visible.
+		if ( m_htGazeTimer.IsElapsed() )
+		{
+			m_htGazeTimer.Start( 0.2f );
+			const Vector htEye = me->EyePosition();
+			const QAngle htAng = me->EyeAngles();
+			Msg( "NEO_LOOK_GAZE %6.2f bot=%d team=%d pos=%.0f,%.0f,%.0f yaw=%.1f pitch=%.1f rate=%.0f vis=%d ghost=%d\n",
+				gpGlobals->curtime, me->entindex(), me->GetTeamNumber(),
+				htEye.x, htEye.y, htEye.z, htAng.y, htAng.x, htRate, htHasVisibleThreat ? 1 : 0,
+				me->IsCarryingGhost() ? 1 : 0 );
+		}
+
+		// Reaction latency: time from a threat first becoming known (usually a sound) to the
+		// bot's aim landing on it / its first shot. Tests whether the scan-speed cap delays
+		// the turn-to-face for a heard threat.
+		{
+			const CKnownEntity *rk = me->GetVisionInterface()->GetPrimaryKnownThreat( false );
+			CBaseEntity *re = rk ? rk->GetEntity() : NULL;
+			if ( re != m_htReactThreat.Get() )
+			{
+				m_htReactThreat = re;
+				m_htReactAimed = m_htReactFired = m_htReactVis = false;
+				if ( re )
+				{
+					m_htReactT0 = gpGlobals->curtime;
+					Vector rf;
+					AngleVectors( me->EyeAngles(), &rf );
+					Vector rto = re->WorldSpaceCenter() - me->EyePosition();
+					rto.NormalizeInPlace();
+					m_htReactInitErr = RAD2DEG( acosf( clamp( DotProduct( rf, rto ), -1.0f, 1.0f ) ) );
+				}
+			}
+			else if ( re )
+			{
+				Vector rf;
+				AngleVectors( me->EyeAngles(), &rf );
+				Vector rto = re->WorldSpaceCenter() - me->EyePosition();
+				rto.NormalizeInPlace();
+				const float err = RAD2DEG( acosf( clamp( DotProduct( rf, rto ), -1.0f, 1.0f ) ) );
+				const bool vis = rk->IsVisibleInFOVNow();
+				if ( vis && !m_htReactVis )
+				{
+					m_htReactVis = true;
+					Msg( "NEO_LOOK_REACT %6.2f bot=%d ev=vis dt=%.2f initErr=%.0f\n",
+						gpGlobals->curtime, me->entindex(), gpGlobals->curtime - m_htReactT0, m_htReactInitErr );
+				}
+				if ( err < 5.0f && !m_htReactAimed )
+				{
+					m_htReactAimed = true;
+					Msg( "NEO_LOOK_REACT %6.2f bot=%d ev=aim dt=%.2f initErr=%.0f\n",
+						gpGlobals->curtime, me->entindex(), gpGlobals->curtime - m_htReactT0, m_htReactInitErr );
+				}
+				if ( ( me->m_nButtons & IN_ATTACK ) && !m_htReactFired )
+				{
+					m_htReactFired = true;
+					Msg( "NEO_LOOK_REACT %6.2f bot=%d ev=fire dt=%.2f initErr=%.0f\n",
+						gpGlobals->curtime, me->entindex(), gpGlobals->curtime - m_htReactT0, m_htReactInitErr );
+				}
+			}
+		}
+
+		if ( m_htDumpTimer.IsElapsed() )
+		{
+			const float htWin = 5.0f;
+			const float htNoThreatDegPerMin = ( m_htNoThreatTicks > 0 )
+				? ( m_htNoThreatYawTravel * 60.0f / ( m_htNoThreatTicks * ( interval + 0.0001f ) ) )
+				: 0.0f;
+			const float htNoThreatFrac = ( m_htTicks > 0 ) ? ( (float)m_htNoThreatTicks / m_htTicks ) : 0.0f;
+
+			Msg( "NEO_LOOK_TELEM %6.2f headmotion bot=%d(%s) ticks=%d maxRate=%.0f revPerSec=%.2f "
+				"noThreatDegPerMin=%.0f noThreatFrac=%.2f bins=%d/%d/%d/%d/%d/%d/%d/%d\n",
+				gpGlobals->curtime, me->entindex(), me->GetPlayerName(),
+				m_htTicks, m_htMaxRate, m_htReversals / htWin,
+				htNoThreatDegPerMin, htNoThreatFrac,
+				m_htRateBins[0], m_htRateBins[1], m_htRateBins[2], m_htRateBins[3],
+				m_htRateBins[4], m_htRateBins[5], m_htRateBins[6], m_htRateBins[7] );
+
+			m_htTicks = 0;
+			m_htNoThreatTicks = 0;
+			m_htNoThreatYawTravel = 0.0f;
+			m_htReversals = 0;
+			m_htMaxRate = 0.0f;
+			for ( int i = 0; i < 8; ++i )
+			{
+				m_htRateBins[i] = 0;
+			}
+			m_htDumpTimer.Start( 5.0f );
+		}
 	}
 
 	me->EquipRequiredWeapon();

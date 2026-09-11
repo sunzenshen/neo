@@ -49,6 +49,26 @@ private:
 	float m_priorYaw;
 	IntervalTimer m_steadyTimer;
 
+	// NEO-HARNESS-TEMP (proposal 0019): head-motion proxy telemetry, gated by
+	// sv_neo_bot_look_telemetry. Strip before PR.
+	float m_htPrevYaw = 0.0f;
+	float m_htPrevDYaw = 0.0f;
+	int m_htTicks = 0;
+	int m_htNoThreatTicks = 0;
+	float m_htNoThreatYawTravel = 0.0f;
+	int m_htReversals = 0;
+	float m_htMaxRate = 0.0f;
+	int m_htRateBins[8] = {};
+	CountdownTimer m_htDumpTimer;
+	CountdownTimer m_htGazeTimer;
+	// reaction-latency tracking: from "threat first known" to on-target / first shot
+	EHANDLE m_htReactThreat;
+	float m_htReactT0 = 0.0f;
+	float m_htReactInitErr = 0.0f;
+	bool m_htReactAimed = false;
+	bool m_htReactFired = false;
+	bool m_htReactVis = false;
+
 	bool m_isWaitingForFullReload;
 
 	void FireWeaponAtEnemy( CNEOBot *me );

@@ -458,6 +458,15 @@ private:
 
 	CountdownTimer m_lookAtEnemyInvasionAreasTimer;
 
+	// proposal 0019 - anticipated point where a heard-but-unseen threat would first
+	// come into view along its fastest route to us. Held steady while the threat's
+	// last-known nav area is unchanged; recomputed (throttled) only when it changes.
+	CHandle< CBaseEntity > m_watchedEmergenceThreat;
+	int m_watchedEmergenceAreaId;
+	Vector m_watchedEmergencePos;			// floor-level point - the hysteresis anchor
+	Vector m_watchedEmergenceGazePoint;	// m_watchedEmergencePos + difficulty height + wobble; what we actually aim at
+	CountdownTimer m_watchedEmergenceRecomputeTimer;
+
 	CNavArea* m_spawnArea;			// where we spawned
 	CountdownTimer m_justLostPointTimer;
 
