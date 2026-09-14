@@ -23,6 +23,7 @@ class CNEOBotActionPoint;
 class CNEOBotGenerator;
 class CNEOBot;
 class CWeaponGhost;
+class CNEOFindClosestPotentiallyVisibleAreaToPos;
 
 extern ConVar hl2_normspeed;
 
