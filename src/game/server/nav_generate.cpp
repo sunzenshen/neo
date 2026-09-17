@@ -22,6 +22,12 @@
 #include "func_simpleladder.h"
 #endif
 
+#ifdef NEO
+#include <vector>
+#include <unordered_map>
+#include <unordered_set>
+#endif
+
 // NOTE: This has to be the last file included!
 #include "tier0/memdbgon.h"
 
@@ -43,6 +49,15 @@ ConVar nav_generate_jump_connections( "nav_generate_jump_connections", "1", FCVA
 ConVar nav_generate_incremental_range( "nav_generate_incremental_range", "2000", FCVAR_CHEAT );
 ConVar nav_generate_incremental_tolerance( "nav_generate_incremental_tolerance", "0", FCVAR_CHEAT, "Z tolerance for adding new nav areas." );
 ConVar nav_area_max_size( "nav_area_max_size", "50", FCVAR_CHEAT, "Max area size created in nav generation" );
+
+#ifdef NEO
+// Diagnostic only. SampleStep() accepts a climb of up to ClimbUpHeight between grid columns with no
+// check that a player's jump could cover it, so a mesh can hold pockets reachable out of but never
+// into. Report them at save time instead of at the first stuck bot.
+ConVar nav_generate_warn_unreachable( "nav_generate_warn_unreachable", "1", FCVAR_CHEAT,
+	"If non-zero, warn at save time about nav areas with no directed path in from any spawn or "
+	"objective entity, and about objectives no spawn can reach. Does not modify the mesh." );
+#endif
 
 // Common bounding box for traces
 Vector NavTraceMins( -0.45, -0.45, 0 );
@@ -3713,6 +3728,8 @@ bool CNavMesh::UpdateGeneration( float maxTime )
 			// Create new areas
 			CreateNavAreasFromNodes();
 
+			Msg( "Creating navigation areas from sampled data...DONE (%d areas)\n", TheNavAreas.Count() );
+
 			// And toggle the selection, so we end up with the new areas
 			if ( m_generationMode == GENERATE_INCREMENTAL )
 			{
@@ -4043,6 +4060,9 @@ bool CNavMesh::UpdateGeneration( float maxTime )
 			{
 				BuildBrushLadders();
 			}
+
+			WarnUnreachableAreas();
+			WarnUnreachableObjectives();
 #endif
 
 			// generation complete!
@@ -5015,6 +5035,271 @@ CON_COMMAND_F( nav_gen_cliffs_approx, "Mark cliff areas, post-processing approxi
 
 #ifdef NEO
 //--------------------------------------------------------------------------------------------------------------
+// NEO: reachability diagnostics, run from UpdateGeneration()'s SAVE_NAV_MESH case on the final
+// area set, gated by nav_generate_warn_unreachable.
+//--------------------------------------------------------------------------------------------------------------
+namespace
+{
+	// Entities the reachability checks treat as "a player starts here" / "a player must get here".
+	const char *const kNavSpawnClasses[] = { "info_player_attacker", "info_player_defender", "info_player_start", "info_player_deathmatch" };
+	const char *const kNavObjectiveClasses[] = { "neo_ghostspawnpoint", "neo_ghost_retrieval_point", "neo_juggernautspawnpoint" };
+
+	enum NavSeedSet
+	{
+		NAV_SEED_SPAWNS,
+		NAV_SEED_OBJECTIVES,
+		NAV_SEED_SPAWNS_AND_OBJECTIVES,
+	};
+
+	template < typename Functor >
+	void ForEachSeedEntity( NavSeedSet set, Functor &func )
+	{
+		if ( set != NAV_SEED_OBJECTIVES )
+		{
+			for ( const char *classname : kNavSpawnClasses )
+			{
+				CBaseEntity *ent = NULL;
+				while ( ( ent = gEntList.FindEntityByClassname( ent, classname ) ) != NULL )
+				{
+					func( ent );
+				}
+			}
+		}
+
+		if ( set != NAV_SEED_SPAWNS )
+		{
+			for ( const char *classname : kNavObjectiveClasses )
+			{
+				CBaseEntity *ent = NULL;
+				while ( ( ent = gEntList.FindEntityByClassname( ent, classname ) ) != NULL )
+				{
+					func( ent );
+				}
+			}
+		}
+	}
+
+	// Seeds a forward BFS: each seed entity's nearest area goes into both `queue` and `visited`.
+	// The STL containers here and below are file-local; pointer-keyed sets have no CUtl equivalent.
+	void CollectSeedAreas( NavSeedSet set, std::vector<CNavArea*> &queue, std::unordered_set<CNavArea*> &visited )
+	{
+		auto seed = [&]( CBaseEntity *ent )
+		{
+			CNavArea *area = TheNavMesh->GetNearestNavArea( ent, GETNAVAREA_CHECK_GROUND );
+			if ( area && visited.insert( area ).second )
+			{
+				queue.push_back( area );
+			}
+		};
+		ForEachSeedEntity( set, seed );
+	}
+
+	// Union-find over areas, used for undirected component grouping (a one-way link still puts
+	// both areas in the same component).
+	class NavAreaUnionFind
+	{
+	public:
+		explicit NavAreaUnionFind( int reserveCount )
+		{
+			m_parent.reserve( reserveCount );
+		}
+
+		void Add( CNavArea *area )
+		{
+			m_parent.emplace( area, area );
+		}
+
+		bool Contains( CNavArea *area ) const
+		{
+			return m_parent.count( area ) != 0;
+		}
+
+		CNavArea *Find( CNavArea *area )
+		{
+			CNavArea *root = area;
+			while ( m_parent[root] != root )
+			{
+				root = m_parent[root];
+			}
+
+			while ( m_parent[area] != root )
+			{
+				CNavArea *next = m_parent[area];
+				m_parent[area] = root;
+				area = next;
+			}
+
+			return root;
+		}
+
+		void Union( CNavArea *a, CNavArea *b )
+		{
+			CNavArea *rootA = Find( a );
+			CNavArea *rootB = Find( b );
+			if ( rootA != rootB )
+			{
+				m_parent[rootB] = rootA;
+			}
+		}
+
+		// Unions `area` with every outgoing neighbour that is also in the set.
+		void UnionAdjacent( CNavArea *area )
+		{
+			for ( int d = 0; d < NUM_DIRECTIONS; ++d )
+			{
+				const int count = area->GetAdjacentCount( (NavDirType)d );
+				for ( int i = 0; i < count; ++i )
+				{
+					CNavArea *adj = area->GetAdjacentArea( (NavDirType)d, i );
+					if ( adj && Contains( adj ) )
+					{
+						Union( area, adj );
+					}
+				}
+			}
+		}
+
+	private:
+		std::unordered_map<CNavArea*, CNavArea*> m_parent;
+	};
+
+	// Forward-directed BFS from the areas already in `queue`/`visited`: outgoing connections, ladder
+	// tops from LADDER_UP and ladder bottoms from LADDER_DOWN (top_behind is excluded because
+	// ConnectGeneratedLadder() disconnects it).
+	void WalkForwardReachable( std::vector<CNavArea*> &queue, std::unordered_set<CNavArea*> &visited )
+	{
+		for ( size_t head = 0; head < queue.size(); ++head )
+		{
+			CNavArea *area = queue[head];
+
+			for ( int d = 0; d < NUM_DIRECTIONS; ++d )
+			{
+				const int count = area->GetAdjacentCount( (NavDirType)d );
+				for ( int i = 0; i < count; ++i )
+				{
+					CNavArea *adj = area->GetAdjacentArea( (NavDirType)d, i );
+					if ( adj && visited.insert( adj ).second )
+					{
+						queue.push_back( adj );
+					}
+				}
+			}
+
+			const NavLadderConnectVector *up = area->GetLadders( CNavLadder::LADDER_UP );
+			for ( int i = 0; i < up->Count(); ++i )
+			{
+				CNavLadder *ladder = (*up)[i].ladder;
+				if ( !ladder )
+				{
+					continue;
+				}
+
+				CNavArea *tops[3] = { ladder->m_topForwardArea, ladder->m_topLeftArea, ladder->m_topRightArea };
+				for ( CNavArea *top : tops )
+				{
+					if ( top && visited.insert( top ).second )
+					{
+						queue.push_back( top );
+					}
+				}
+			}
+
+			const NavLadderConnectVector *down = area->GetLadders( CNavLadder::LADDER_DOWN );
+			for ( int i = 0; i < down->Count(); ++i )
+			{
+				CNavLadder *ladder = (*down)[i].ladder;
+				if ( ladder && ladder->m_bottomArea && visited.insert( ladder->m_bottomArea ).second )
+				{
+					queue.push_back( ladder->m_bottomArea );
+				}
+			}
+		}
+	}
+
+	// Every area with no directed path in from any spawn or objective entity, grouped into
+	// undirected pockets for reporting. Returns false when there was nothing to seed from.
+	bool FindUnreachableAreaPockets( std::vector< std::vector<CNavArea*> > &pockets )
+	{
+		pockets.clear();
+
+		if ( TheNavAreas.Count() == 0 )
+		{
+			return false;
+		}
+
+		std::unordered_set<CNavArea*> visited;
+		visited.reserve( TheNavAreas.Count() );
+		std::vector<CNavArea*> queue;
+		CollectSeedAreas( NAV_SEED_SPAWNS_AND_OBJECTIVES, queue, visited );
+		if ( queue.empty() )
+		{
+			return false;
+		}
+
+		WalkForwardReachable( queue, visited );
+		if ( (int)visited.size() >= TheNavAreas.Count() )
+		{
+			return true;
+		}
+
+		std::vector<CNavArea*> unreached;
+		NavAreaUnionFind groups( TheNavAreas.Count() );
+		FOR_EACH_VEC( TheNavAreas, it )
+		{
+			CNavArea *area = TheNavAreas[it];
+			if ( visited.find( area ) == visited.end() )
+			{
+				groups.Add( area );
+				unreached.push_back( area );
+			}
+		}
+
+		for ( CNavArea *area : unreached )
+		{
+			groups.UnionAdjacent( area );
+		}
+
+		std::unordered_map<CNavArea*, size_t> pocketOfRoot;
+		for ( CNavArea *area : unreached )
+		{
+			auto inserted = pocketOfRoot.emplace( groups.Find( area ), pockets.size() );
+			if ( inserted.second )
+			{
+				pockets.emplace_back();
+			}
+			pockets[inserted.first->second].push_back( area );
+		}
+
+		return true;
+	}
+
+	// Every area with a directed path in from a spawn entity. Seeded from spawns only: an objective
+	// in its own disconnected pocket would otherwise mark that pocket reached by seeding it.
+	// Returns false when there was no spawn to seed from.
+	bool FindSpawnReachableAreas( std::unordered_set<CNavArea*> &visited )
+	{
+		visited.clear();
+
+		if ( TheNavAreas.Count() == 0 )
+		{
+			return false;
+		}
+
+		visited.reserve( TheNavAreas.Count() );
+		std::vector<CNavArea*> queue;
+		CollectSeedAreas( NAV_SEED_SPAWNS, queue, visited );
+		if ( queue.empty() )
+		{
+			return false;
+		}
+
+		WalkForwardReachable( queue, visited );
+		return true;
+	}
+}
+
+
+//--------------------------------------------------------------------------------------------------------------
 /**
  * Build CNavLadders from the BSP's CONTENTS_LADDER brushes and report the result.
  */
@@ -5027,6 +5312,102 @@ void CNavMesh::BuildBrushLadders( void )
 	else
 	{
 		Warning( "Generating brush ladders...FAIL\n" );
+	}
+}
+
+
+//--------------------------------------------------------------------------------------------------------------
+/**
+ * Report every pocket of areas no spawn or objective entity has a directed path into. Diagnostic
+ * only; the mesh is not modified.
+ */
+void CNavMesh::WarnUnreachableAreas( void )
+{
+	if ( !nav_generate_warn_unreachable.GetBool() )
+	{
+		return;
+	}
+
+	std::vector< std::vector<CNavArea*> > pockets;
+	if ( !FindUnreachableAreaPockets( pockets ) || pockets.empty() )
+	{
+		return;
+	}
+
+	int total = 0;
+	for ( auto &pocket : pockets )
+	{
+		total += (int)pocket.size();
+	}
+
+	Warning( "WarnUnreachableAreas: %d area(s) in %d pocket(s) have no directed path in from any spawn or objective\n",
+		total, (int)pockets.size() );
+
+	constexpr size_t kMaxAreaIdsListed = 8;
+	for ( auto &pocket : pockets )
+	{
+		const Vector center = pocket[0]->GetCenter();
+		CFmtStr areaList;
+		for ( size_t i = 0; i < pocket.size() && i < kMaxAreaIdsListed; ++i )
+		{
+			areaList.AppendFormat( i ? ", %u" : "%u", pocket[i]->GetID() );
+		}
+		if ( pocket.size() > kMaxAreaIdsListed )
+		{
+			areaList.Append( ", ..." );
+		}
+		Msg( "  %d area(s) near (%.0f,%.0f,%.0f): area %s\n",
+			(int)pocket.size(), center.x, center.y, center.z, areaList.Access() );
+	}
+}
+
+
+//--------------------------------------------------------------------------------------------------------------
+/**
+ * Report every objective entity whose nearest area no spawn has a directed path to. Seeded from
+ * spawns only, so an objective sitting in its own disconnected pocket is caught (it would seed
+ * that pocket as reached in WarnUnreachableAreas()). Diagnostic only.
+ */
+void CNavMesh::WarnUnreachableObjectives( void )
+{
+	if ( !nav_generate_warn_unreachable.GetBool() )
+	{
+		return;
+	}
+
+	std::unordered_set<CNavArea*> spawnReachable;
+	if ( !FindSpawnReachableAreas( spawnReachable ) )
+	{
+		return;
+	}
+
+	int flagged = 0;
+	auto check = [&]( CBaseEntity *ent )
+	{
+		CNavArea *area = TheNavMesh->GetNearestNavArea( ent, GETNAVAREA_CHECK_GROUND );
+		if ( area && spawnReachable.count( area ) )
+		{
+			return;
+		}
+
+		++flagged;
+		const Vector pos = ent->GetAbsOrigin();
+		if ( area )
+		{
+			Warning( "WarnUnreachableObjectives: %s at (%.0f,%.0f,%.0f) has no directed path in from any spawn (nearest area %u)\n",
+				ent->GetClassname(), pos.x, pos.y, pos.z, area->GetID() );
+		}
+		else
+		{
+			Warning( "WarnUnreachableObjectives: %s at (%.0f,%.0f,%.0f) has no nav area at all\n",
+				ent->GetClassname(), pos.x, pos.y, pos.z );
+		}
+	};
+	ForEachSeedEntity( NAV_SEED_OBJECTIVES, check );
+
+	if ( flagged == 0 )
+	{
+		Msg( "WarnUnreachableObjectives: every objective is reachable from at least one spawn\n" );
 	}
 }
 #endif // NEO
