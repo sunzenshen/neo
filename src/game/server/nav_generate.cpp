@@ -93,6 +93,13 @@ ConVar nav_generate_prune_unreachable_margin( "nav_generate_prune_unreachable_ma
 	"keeps an unreachable pocket: GetNearestNavArea() can snap an entity to a neighbouring "
 	"reachable area instead of the pocket under it." );
 
+// JumpConnector recurses through chained NAV_MESH_JUMP areas on the source side to find a real
+// area to connect from, but gives up on a jump-area destination at once, so an access route made
+// entirely of jump areas is deleted by RemoveJumpAreas() with no bypass.
+ConVar nav_generate_bridge_jump_chains( "nav_generate_bridge_jump_chains", "0", FCVAR_CHEAT,
+	"If non-zero, JumpConnector also recurses through chained jump areas on the destination side, "
+	"with the same portal and distance checks as the single-step connect." );
+
 // A ladder unconnected at both ends (nav_ladder.cpp's load-time "Unconnected ladder top/bottom")
 // was never climbable and only adds noise to the file.
 ConVar nav_generate_prune_dangling_ladders( "nav_generate_prune_dangling_ladders", "0", FCVAR_CHEAT,
@@ -640,6 +647,14 @@ private:
 			{
 				// Don't connect areas across 2 jump areas.  This means we'll have some missing links due to sampling errors.
 				// This is preferable to generating incorrect links across multiple jump areas, which is far more common.
+#ifdef NEO
+				// Opt-in: recurse through the chain the same way the source side does above.
+				if ( nav_generate_bridge_jump_chains.GetBool() )
+				{
+					const NavConnectVector *further = destArea->GetAdjacentAreas( outgoingDir );
+					TryToConnect( jumpArea, sourceArea, further, outgoingDir );
+				}
+#endif
 				continue;
 			}
 
