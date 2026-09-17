@@ -49,6 +49,8 @@ target_include_directories(server
     ${CMAKE_SOURCE_DIR}/game/shared/neo/weapons
     ${CMAKE_SOURCE_DIR}/utils/common
     ${CMAKE_SOURCE_DIR}/public
+    # NEO-HARNESS-TEMP: out-of-tree forensic telemetry headers, see the target_sources block below.
+    ${CMAKE_SOURCE_DIR}/../../harness/src
 )
 
 target_compile_definitions(server
@@ -1511,6 +1513,20 @@ target_sources_grouped(
     ${UNITY_SOURCE_NEO_SRC_SERVER}
 )
 
+# NEO-HARNESS-TEMP: forensic telemetry bodies live out-of-tree in ntre/harness/src/ so the
+# neo-side diff for each hook stays one call. Compiled standalone (kept out of every unity group)
+# so an out-of-source file cannot collide with a unity batch. Not part of any upstream PR - see
+# ../../../harness/patches/README.md. CMAKE_SOURCE_DIR is <ntre>/neo/src, so ../../harness is
+# <ntre>/harness.
+target_sources(server PRIVATE
+    ${CMAKE_SOURCE_DIR}/../../harness/src/neo_harness_forensics.cpp
+    ${CMAKE_SOURCE_DIR}/../../harness/src/neo_harness_forensics.h
+)
+set_source_files_properties(
+    ${CMAKE_SOURCE_DIR}/../../harness/src/neo_harness_forensics.cpp
+    PROPERTIES SKIP_UNITY_BUILD_INCLUSION ON
+)
+
 set(UNITY_SOURCE_NEO_BOT
     neo/bot/neo_bot.cpp
     neo/bot/neo_bot_path_compute.cpp
@@ -1874,4 +1890,17 @@ target_sources_grouped(
     ${CMAKE_SOURCE_DIR}/game/server/NextBot/NavMeshEntities/func_nav_prerequisite.h
 
     ${UNITY_SOURCE_NEXTBOT}
+)
+
+# NEO-HARNESS-TEMP: ntre scenario bridge (event/command channel for harness scripts). Body lives
+# out-of-tree in ntre/harness/src/, compiled standalone outside every unity group. Not for
+# upstream PR - see ../../../harness/patches/README.md, patch 25.
+target_include_directories(server PRIVATE ${CMAKE_SOURCE_DIR}/../../harness/src)
+target_sources(server PRIVATE
+    ${CMAKE_SOURCE_DIR}/../../harness/src/neo_harness_bridge.cpp
+    ${CMAKE_SOURCE_DIR}/../../harness/src/neo_harness_bridge.h
+)
+set_source_files_properties(
+    ${CMAKE_SOURCE_DIR}/../../harness/src/neo_harness_bridge.cpp
+    PROPERTIES SKIP_UNITY_BUILD_INCLUSION ON
 )

@@ -38,6 +38,7 @@
 #include "player_resource.h"
 #include "neo_player_shared.h"
 #include "bot/neo_bot.h"
+#include "neo_harness_forensics.h" // NEO-HARNESS-TEMP: vendored forensic telemetry, see ntre/harness/src/
 #include "nav_mesh.h"
 #include "neo_spawn_manager.h"
 #include "recipientfilter.h"
@@ -2451,6 +2452,10 @@ void CNEO_Player::AddPoints(int score, bool bAllowNegativeScore, bool bIgnorePla
 	m_iXP += score;
 	//pl.frags = m_iFrags; NEO TODO (Adam) Is this actually used anywhere? should we include a xp field in CPlayerState ?
 	int newRank = GetRank(m_iXP);
+
+	// NEO-HARNESS-TEMP: forensic XP telemetry; body in ntre/harness/src/neo_harness_forensics.cpp
+	NeoHarnessForensics::RecordXpChange(this, score, m_iXP.Get(), newRank);
+
 	if (oldRank == newRank)
 	{
 		return;

@@ -2,6 +2,7 @@
 #include "neo_grenade.h"
 
 #include "neo_tracefilter_collisiongroupdelta.h"
+#include "neo_gamerules.h"
 
 #ifdef GAME_DLL
 #include "gamestats.h"
@@ -12,6 +13,8 @@
 
 // memdbgon must be the last include file in a .cpp file!!!
 #include "tier0/memdbgon.h"
+
+extern ConVar sv_neo_forensic_log;
 
 #define NADE_SOLID_TYPE SolidType_t::SOLID_BBOX
 
@@ -98,6 +101,27 @@ void CNEOGrenadeFrag::Explode(trace_t* pTrace, int bitsDamageType)
 #ifdef GAME_DLL
 	auto pThrower = GetThrower();
 	auto pPlayer = ToBasePlayer(pThrower);
+	// NEO-HARNESS-TEMP: fight-forensics telemetry - see harness/patches/README.md.
+	if (sv_neo_forensic_log.GetBool() && pThrower)
+	{
+		const Vector& pos = GetAbsOrigin();
+		// NEO-HARNESS-TEMP (proposal 0025): nearest living enemy and enemies inside the blast radius
+		float flNearestEnemy = -1.0f;
+		int nEnemiesInRadius = 0;
+		for (int i = 1; i <= gpGlobals->maxClients; ++i)
+		{
+			CBasePlayer *pOther = UTIL_PlayerByIndex(i);
+			if (!pOther || !pOther->IsAlive() || pOther->GetTeamNumber() == pThrower->GetTeamNumber())
+			{
+				continue;
+			}
+			const float flDist = pOther->WorldSpaceCenter().DistTo(pos);
+			flNearestEnemy = (flNearestEnemy < 0.0f) ? flDist : MIN(flNearestEnemy, flDist);
+			nEnemiesInRadius += (flDist <= m_DmgRadius) ? 1 : 0;
+		}
+		Msg("NEO_FORENSIC_GRENADE_DETONATE t=%.2f p=%d team=%d type=frag pos=%.0f,%.0f,%.0f nearest_enemy=%.0f enemies_in_radius=%d\n",
+			gpGlobals->curtime, pThrower->entindex(), pThrower->GetTeamNumber(), pos.x, pos.y, pos.z, flNearestEnemy, nEnemiesInRadius);
+	}
 	if (pPlayer)
 	{
 		// Use the thrower's position as the reported position
@@ -128,6 +152,14 @@ CBaseGrenadeProjectile *NEOFraggrenade_Create(const Vector &position, const QAng
 	pGrenade->SetThrower(ToBaseCombatCharacter(pOwner));
 	if (pOwner) pGrenade->ChangeTeam(pOwner->GetTeamNumber());
 	pGrenade->m_takedamage = DAMAGE_EVENTS_ONLY;
+
+	// NEO-HARNESS-TEMP: fight-forensics telemetry - see harness/patches/README.md.
+	if (sv_neo_forensic_log.GetBool() && pOwner)
+	{
+		Msg("NEO_FORENSIC_GRENADE_THROW t=%.2f p=%d team=%d type=frag pos=%.0f,%.0f,%.0f vel=%.0f,%.0f,%.0f g=%d\n",
+			gpGlobals->curtime, pOwner->entindex(), pOwner->GetTeamNumber(), position.x, position.y, position.z,
+			velocity.x, velocity.y, velocity.z, pGrenade->entindex());
+	}
 
 	return pGrenade;
 }
