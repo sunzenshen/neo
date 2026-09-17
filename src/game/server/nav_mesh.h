@@ -1241,6 +1241,10 @@ private:
 	void SplitAreasUnderOverhangs( void );
 	void ValidateNavAreaConnections( void );
 	void StitchGeneratedAreas( void );							// Stitches incrementally-generated areas into the existing mesh
+#ifdef NEO
+	void BuildBrushLadders( void );								// BuildBrushLaddersFromBsp() plus the DONE/FAIL report
+	void DestroyLadder( CNavLadder *ladder );					// remove one ladder from m_ladders and delete it
+#endif
 	void StitchAreaSet( CUtlVector< CNavArea * > *areas );		// Stitches an arbitrary set of areas into the existing mesh
 	void HandleObstacleTopAreas( void );						// Handles fixing/generating areas on top of slim obstacles such as fences and railings
 	void RaiseAreasWithInternalObstacles();
