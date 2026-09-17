@@ -141,6 +141,10 @@ void CNavMesh::Reset( void )
 	m_markedArea = NULL;
 	m_selectedArea = NULL;
 	m_bQuitWhenFinished = false;
+#ifdef NEO
+	m_bOptInPassesSuppressed = false;
+	m_bReanalyzingAfterPrune = false;
+#endif
 
 	m_editMode = NORMAL;
 
@@ -3249,6 +3253,20 @@ void CNavMesh::DestroyLadders( void )
 	m_selectedLadder = NULL;
 }
 
+
+#ifdef NEO
+//--------------------------------------------------------------------------------------------------------------
+/**
+ * Remove one ladder from the mesh and delete it
+ */
+void CNavMesh::DestroyLadder( CNavLadder *ladder )
+{
+	m_ladders.FindAndRemove( ladder );
+	OnEditDestroyNotify( ladder );
+	delete ladder;
+}
+#endif
+
 #ifdef NEO
 namespace Neo
 {
@@ -3711,7 +3729,27 @@ namespace Neo
 		m_editMode = EditModeType::NORMAL;
 		m_climbableSurface = true;
 
+		const int ladderCountBefore = m_ladders.Count();
 		CommandNavBuildLadder();
+
+		// nav_analyze re-runs this scan without clearing m_ladders (only BeginGeneration() does), so
+		// a re-detected ladder is matched by final top/bottom position against the ones already
+		// built and dropped. Origin (brush scan vs nav_build_ladder) is not recorded in the file.
+		if ( m_ladders.Count() > ladderCountBefore )
+		{
+			constexpr float kDuplicateLadderEndpointRange = 8.0f;
+			CNavLadder *justCreated = m_ladders.Tail();
+			for ( int li = 0; li < m_ladders.Count() - 1; ++li )
+			{
+				CNavLadder *existing = m_ladders[li];
+				if ( existing->m_top.DistTo( justCreated->m_top ) <= kDuplicateLadderEndpointRange
+					&& existing->m_bottom.DistTo( justCreated->m_bottom ) <= kDuplicateLadderEndpointRange )
+				{
+					DestroyLadder( justCreated );
+					break;
+				}
+			}
+		}
 	}
 
 	return true;
@@ -3771,53 +3809,77 @@ bool CNavMesh::BuildBrushLaddersFromBsp()
 		goto cleanup;
 	}
 
-	for (const auto& planesOfLadderBrush : planesOfLadderBrushes)
+	// Bucket every candidate brush by shape (height, base Z, XY footprint, each to kShapeBucketSize)
+	// first: a shape repeated kRepeatedShapeThreshold+ times is architecture (fence rails,
+	// kickplates), not that many climbs, and used to yield 100+ dangling ladders on one map.
 	{
-		auto* polyhedron = GeneratePolyhedronFromPlanes(
-			planesOfLadderBrush.Base()->Base(),
-			planesOfLadderBrush.Count(),
-			ON_EPSILON, true);
-		
-		if (!polyhedron)
+		struct LadderBrushCandidate
 		{
-			Assert(false);
-			goto fail;
-		}
+			CPolyhedron* polyhedron;
+			int heightBucket, baseZBucket, dxBucket, dyBucket;
+		};
 
-		const bool ladderGenOk = LadderFromPolyhedron(polyhedron);
+		constexpr float kShapeBucketSize = 8.0f;
+		constexpr int kRepeatedShapeThreshold = 4;
 
-		polyhedron->Release();
+		CUtlVector<LadderBrushCandidate> candidates;
+		candidates.EnsureCapacity(planesOfLadderBrushes.Count());
 
-		if (!ladderGenOk)
+		for (const auto& planesOfLadderBrush : planesOfLadderBrushes)
 		{
-			Warning("%s: failed to generate ladder from polyhedron\n", __FUNCTION__);
+			// bUseTemporaryMemory=false: the temporary polyhedron is one reused scratch buffer, and
+			// every candidate has to stay alive across both passes.
+			auto* polyhedron = GeneratePolyhedronFromPlanes(
+				planesOfLadderBrush.Base()->Base(),
+				planesOfLadderBrush.Count(),
+				ON_EPSILON, false);
 
-			if (polyhedron->iVertexCount <= 0)
+			if (!polyhedron)
 			{
-				Warning("\tAdditionally, generated polyhedron reports %d sides but expected >0\n",
-					polyhedron->iVertexCount);
 				Assert(false);
-				continue;
+				goto fail;
 			}
 
-			CUtlVector<decltype(polyhedron->pVertices)> vertices;
-			vertices.EnsureCapacity(polyhedron->iVertexCount);
+			Vector mins, maxs;
+			ClearBounds(mins, maxs);
 			for (int i = 0; i < polyhedron->iVertexCount; ++i)
 			{
-				auto** pVert = vertices.AddToTailGetPtr();
-				*pVert = polyhedron->pVertices + i;
-				Assert(*pVert);
+				AddPointToBounds(polyhedron->pVertices[i], mins, maxs);
 			}
-			Assert(vertices.Count() == polyhedron->iVertexCount);
 
-			CUtlString errMsg;
-			errMsg.Format("\t%d verts: ", polyhedron->iVertexCount);
-			for (const auto& vert : vertices)
+			auto* candidate = candidates.AddToTailGetPtr();
+			candidate->polyhedron = polyhedron;
+			candidate->heightBucket = RoundFloatToInt((maxs.z - mins.z) / kShapeBucketSize);
+			candidate->baseZBucket = RoundFloatToInt(mins.z / kShapeBucketSize);
+			candidate->dxBucket = RoundFloatToInt((maxs.x - mins.x) / kShapeBucketSize);
+			candidate->dyBucket = RoundFloatToInt((maxs.y - mins.y) / kShapeBucketSize);
+		}
+
+		for (int i = 0; i < candidates.Count(); ++i)
+		{
+			int shapeCount = 0;
+			for (int j = 0; j < candidates.Count(); ++j)
 			{
-				errMsg.Format("%s [%f %f %f],", errMsg.String(), vert->x, vert->y, vert->z);
+				if (candidates[i].heightBucket == candidates[j].heightBucket
+					&& candidates[i].baseZBucket == candidates[j].baseZBucket
+					&& candidates[i].dxBucket == candidates[j].dxBucket
+					&& candidates[i].dyBucket == candidates[j].dyBucket)
+				{
+					++shapeCount;
+				}
 			}
-			errMsg.SetLength(errMsg.Length() - 1); // remove final comma from the above loop
-			Warning("%s\n", errMsg.String());
+
+			if (shapeCount < kRepeatedShapeThreshold)
+			{
+				(void)LadderFromPolyhedron(candidates[i].polyhedron);
+			}
+			else if (nav_generate_debug_brushladders.GetBool())
+			{
+				DevMsg("%s: skipping brush %d/%d, shape repeated %d times - decorative element\n",
+					__FUNCTION__, i, candidates.Count(), shapeCount);
+			}
+
+			candidates[i].polyhedron->Release();
 		}
 	}
 
@@ -4279,7 +4341,9 @@ void CNavMesh::BeginVisibilityComputations( void )
 {
 	if ( !g_pNavVisPairHash )
 	{
-		g_pNavVisPairHash = new CUtlHash< NavVisPair_t, CVisPairHashFuncs, CVisPairHashFuncs >( 16*1024 );
+		// NEO: 65536 buckets is CUtlHash's structural ceiling (BuildHandle() packs bucket and item
+		// index into 16 bits each), not a tuning knob; see CVisPairHashFuncs for the hash change.
+		g_pNavVisPairHash = new CUtlHash< NavVisPair_t, CVisPairHashFuncs, CVisPairHashFuncs >( 65536 );
 	}
 	else
 	{
