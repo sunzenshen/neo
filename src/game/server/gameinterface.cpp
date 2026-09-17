@@ -138,6 +138,7 @@ extern ConVar tf_mm_servermode;
 #include "neo_player_shared.h"
 #include "bot/neo_bot_profile.h"
 #include "neo/neo_debugoverlay_budget.h"
+#include "neo_harness_bridge.h" // NEO-HARNESS-TEMP: event/command bridge, see ntre/harness/src/
 #endif
 
 extern IToolFrameworkServer *g_pToolFrameworkServer;
@@ -581,6 +582,21 @@ bool CServerGameDLL::DLLInit( CreateInterfaceFn appSystemFactory,
 		CreateInterfaceFn physicsFactory, CreateInterfaceFn fileSystemFactory, 
 		CGlobalVars *pGlobals)
 {
+#if defined(NEO) && defined(DBGFLAG_ASSERT)
+	// NEO: Unattended sessions (see harness/ at the repo root) cannot answer tier0's modal assert
+	// dialog, which blocks the game thread until a human clicks it. -noassertdlg suppresses the
+	// dialog only: _SpewMessage has already printed "file (line) : Assertion Failed: expr" by the
+	// time we get here, so -condebug's console.log still records every assert.
+	// This is what the dialog's own "Ignore All Asserts" button does. Do NOT instead try to make
+	// ShouldUseNewAssertDialog() return false; the Assert macro in public/tier0/dbg.h calls
+	// DebuggerBreak() outright in that case.
+	if (CommandLine()->FindParm("-noassertdlg"))
+	{
+		SetAllAssertsDisabled(true);
+		Msg("NEO: -noassertdlg set, assert dialogs suppressed. Asserts still print to the console.\n");
+	}
+#endif
+
 	ConnectTier1Libraries( &appSystemFactory, 1 );
 	ConnectTier2Libraries( &appSystemFactory, 1 );
 	ConnectTier3Libraries( &appSystemFactory, 1 );
@@ -1246,6 +1262,11 @@ void CServerGameDLL::GameFrame( bool simulating )
 	// Don't run frames until fully restored
 	if ( g_InRestore )
 		return;
+
+#ifdef NEO
+	// NEO-HARNESS-TEMP: ntre scenario bridge; inert without -harness_bridge. Body in ntre/harness/src/
+	NeoHarnessBridge::OnGameFrame();
+#endif
 
 	if ( CBaseEntity::IsSimulatingOnAlternateTicks() )
 	{

@@ -236,6 +236,16 @@ ConVar cl_neo_grenade_show_path("cl_neo_grenade_show_path", "0", FCVAR_ARCHIVE |
 
 	void CBaseGrenadeProjectile::ResolveFlyCollisionCustom( trace_t &trace, Vector &vecVelocity )
 	{
+		// NEO-HARNESS-TEMP: grenade bounce telemetry for the bot grenade accuracy research
+		extern ConVar sv_neo_forensic_log;
+		if ( sv_neo_forensic_log.GetBool() )
+		{
+			const Vector &pos = GetAbsOrigin();
+			Msg( "NEO_FORENSIC_GRENADE_BOUNCE t=%.2f g=%d pos=%.0f,%.0f,%.0f nz=%.2f speed=%.0f player=%d\n",
+				gpGlobals->curtime, entindex(), pos.x, pos.y, pos.z, trace.plane.normal.z,
+				GetAbsVelocity().Length(), ( trace.m_pEnt && trace.m_pEnt->IsPlayer() ) ? 1 : 0 );
+		}
+
 		//Assume all surfaces have the same elasticity
 		float flSurfaceElasticity = 1.0;
 
