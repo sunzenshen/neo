@@ -51,12 +51,69 @@ ConVar nav_generate_incremental_tolerance( "nav_generate_incremental_tolerance",
 ConVar nav_area_max_size( "nav_area_max_size", "50", FCVAR_CHEAT, "Max area size created in nav generation" );
 
 #ifdef NEO
+// Opt-in save-time passes, all default off; see RunPostGenerationPasses() at the end of this file.
+// ConnectGeneratedAreas() only links areas whose sampling nodes are grid neighbours, so a small
+// component beside a round or angled obstacle can sit a few units from the main mesh and never
+// connect. StitchSmallIslands() bridges those.
+ConVar nav_generate_stitch_islands( "nav_generate_stitch_islands", "0", FCVAR_CHEAT,
+	"If non-zero, bridge small disconnected mesh components into the main mesh when the nearest "
+	"main-mesh area is within nav_generate_stitch_islands_gap (XY) and "
+	"nav_generate_stitch_islands_height (Z) and a trace confirms walkable space between them." );
+ConVar nav_generate_stitch_islands_gap( "nav_generate_stitch_islands_gap", "64", FCVAR_CHEAT,
+	"Max XY gap (units) StitchSmallIslands() will bridge." );
+ConVar nav_generate_stitch_islands_height( "nav_generate_stitch_islands_height", "96", FCVAR_CHEAT,
+	"Max area-center height difference (units) StitchSmallIslands() will bridge." );
+ConVar nav_generate_stitch_islands_max_size( "nav_generate_stitch_islands_max_size", "200", FCVAR_CHEAT,
+	"A component with more areas than this is a real separate region, not an island." );
+
+// A one-way drop link whose area boundary stops short of the real ledge leaves a bot trying to
+// step down through floor that is still there. ExtendDropLedges() moves the boundary out.
+ConVar nav_generate_extend_drop_ledges( "nav_generate_extend_drop_ledges", "0", FCVAR_CHEAT,
+	"If non-zero, extend a one-way drop-link area's boundary out to the true ledge when the edge "
+	"is near-planar (see nav_generate_extend_drop_ledges_planarity)." );
+ConVar nav_generate_extend_drop_ledges_planarity( "nav_generate_extend_drop_ledges_planarity", "16", FCVAR_CHEAT,
+	"Max Z difference (units) between an edge's two corners for ExtendDropLedges() to extend it; "
+	"a more sloped edge is left alone." );
+ConVar nav_generate_extend_drop_ledges_min( "nav_generate_extend_drop_ledges_min", "24", FCVAR_CHEAT,
+	"Min measured extension (units) for ExtendDropLedges() to act on." );
+
 // Diagnostic only. SampleStep() accepts a climb of up to ClimbUpHeight between grid columns with no
 // check that a player's jump could cover it, so a mesh can hold pockets reachable out of but never
 // into. Report them at save time instead of at the first stuck bot.
 ConVar nav_generate_warn_unreachable( "nav_generate_warn_unreachable", "1", FCVAR_CHEAT,
 	"If non-zero, warn at save time about nav areas with no directed path in from any spawn or "
 	"objective entity, and about objectives no spawn can reach. Does not modify the mesh." );
+
+ConVar nav_generate_prune_unreachable( "nav_generate_prune_unreachable", "0", FCVAR_CHEAT,
+	"If non-zero, delete at save time every nav area pocket with no directed path in from any "
+	"spawn or objective entity, unless a spawn/objective sits within "
+	"nav_generate_prune_unreachable_margin of it. The mesh is re-analyzed automatically afterwards." );
+ConVar nav_generate_prune_unreachable_margin( "nav_generate_prune_unreachable_margin", "128", FCVAR_CHEAT,
+	"2D margin (units) around every spawn/objective entity inside which PruneUnreachableAreas() "
+	"keeps an unreachable pocket: GetNearestNavArea() can snap an entity to a neighbouring "
+	"reachable area instead of the pocket under it." );
+
+// A ladder unconnected at both ends (nav_ladder.cpp's load-time "Unconnected ladder top/bottom")
+// was never climbable and only adds noise to the file.
+ConVar nav_generate_prune_dangling_ladders( "nav_generate_prune_dangling_ladders", "0", FCVAR_CHEAT,
+	"If non-zero, delete at save time any ladder with no top area and no bottom area." );
+
+// Sampling only asks whether ground is walkable, so floor inside a trigger_waterydeath or damaging
+// trigger_hurt volume is meshed like any other floor and bots path through it and die
+// (ntre_rogue_ctg's canal: ~2.9 drownings per round with those areas, ~0.01 without).
+ConVar nav_generate_prune_hazard_areas( "nav_generate_prune_hazard_areas", "0", FCVAR_CHEAT,
+	"If non-zero, at save time delete every nav area whose floor lies inside an enabled "
+	"trigger_waterydeath or damaging trigger_hurt volume, splitting areas that straddle the volume's "
+	"edge so only the part inside is removed. The mesh is re-analyzed automatically afterwards "
+	"(same chain as nav_generate_prune_unreachable). Off by default like the other opt-in passes." );
+
+// Not a speed limit: COMPUTE_MESH_VISIBILITY runs on the full area count regardless. This only
+// keeps the opt-in save-time passes off a mesh already too big to iterate on, and says so.
+ConVar nav_generate_area_count_limit( "nav_generate_area_count_limit", "6000", FCVAR_CHEAT,
+	"If the area count after CreateNavAreasFromNodes() exceeds this, skip "
+	"nav_generate_stitch_islands, nav_generate_extend_drop_ledges and "
+	"nav_generate_prune_dangling_ladders for this run and warn. Sized between the largest map that "
+	"completed the full recipe (~5250 areas) and the smallest that did not (~7700)." );
 #endif
 
 // Common bounding box for traces
@@ -3484,6 +3541,10 @@ void CNavMesh::BeginGeneration( bool incremental )
 	m_sampleTick = 0;
 	m_generationMode = (incremental) ? GENERATE_INCREMENTAL : GENERATE_FULL;
 	lastMsgTime = 0.0f;
+#ifdef NEO
+	m_bOptInPassesSuppressed = false;
+	m_bReanalyzingAfterPrune = false;
+#endif
 
 	// clear any previous mesh
 	DestroyNavigationMesh( incremental );
@@ -3730,6 +3791,21 @@ bool CNavMesh::UpdateGeneration( float maxTime )
 
 			Msg( "Creating navigation areas from sampled data...DONE (%d areas)\n", TheNavAreas.Count() );
 
+#ifdef NEO
+			// See nav_generate_area_count_limit. Only the save-time passes are affected;
+			// nav_generate_bridge_jump_chains has already run inside CreateNavAreasFromNodes().
+			if ( TheNavAreas.Count() > nav_generate_area_count_limit.GetInt() )
+			{
+				m_bOptInPassesSuppressed = true;
+				if ( nav_generate_stitch_islands.GetBool() || nav_generate_extend_drop_ledges.GetBool() || nav_generate_prune_dangling_ladders.GetBool() )
+				{
+					Warning( "nav_generate: %d areas exceeds nav_generate_area_count_limit (%d) - skipping "
+						"nav_generate_stitch_islands/extend_drop_ledges/prune_dangling_ladders for this run\n",
+						TheNavAreas.Count(), nav_generate_area_count_limit.GetInt() );
+				}
+			}
+#endif
+
 			// And toggle the selection, so we end up with the new areas
 			if ( m_generationMode == GENERATE_INCREMENTAL )
 			{
@@ -3762,6 +3838,16 @@ bool CNavMesh::UpdateGeneration( float maxTime )
 		//---------------------------------------------------------------------------
 		case FIND_HIDING_SPOTS:
 		{
+#ifdef NEO
+			// First entry into analysis: prune kill-volume areas before any hiding-spot or visibility
+			// data exists to invalidate (CNavArea::OnDestroyNotify() wipes every area's visibility
+			// list on a deletion). The save-time call is a guard for areas created after this point.
+			if ( m_generationIndex == 0 )
+			{
+				PruneHazardAreas();
+			}
+#endif
+
 			while( m_generationIndex < TheNavAreas.Count() )
 			{
 				CNavArea *area = TheNavAreas[ m_generationIndex ];
@@ -4061,8 +4147,15 @@ bool CNavMesh::UpdateGeneration( float maxTime )
 				BuildBrushLadders();
 			}
 
-			WarnUnreachableAreas();
-			WarnUnreachableObjectives();
+			// Deleting areas after CustomAnalysis strips every survivor's hiding-spot and visibility
+			// data, so re-enter the analysis instead of saving; the re-entry skips the passes.
+			if ( !m_bReanalyzingAfterPrune && RunPostGenerationPasses() )
+			{
+				Msg( "nav_generate: areas were deleted after analysis - re-running nav_analyze\n" );
+				BeginAnalysis( m_bQuitWhenFinished );
+				m_bReanalyzingAfterPrune = true;
+				return true;
+			}
 #endif
 
 			// generation complete!
@@ -5035,8 +5128,8 @@ CON_COMMAND_F( nav_gen_cliffs_approx, "Mark cliff areas, post-processing approxi
 
 #ifdef NEO
 //--------------------------------------------------------------------------------------------------------------
-// NEO: reachability diagnostics, run from UpdateGeneration()'s SAVE_NAV_MESH case on the final
-// area set, gated by nav_generate_warn_unreachable.
+// NEO: save-time passes and reachability diagnostics, run from UpdateGeneration()'s SAVE_NAV_MESH
+// case on the final area set. Each pass is gated by the cvar declared at the top of this file.
 //--------------------------------------------------------------------------------------------------------------
 namespace
 {
@@ -5296,6 +5389,172 @@ namespace
 		WalkForwardReachable( queue, visited );
 		return true;
 	}
+
+	// One lateral hull trace at step height between two candidate bridge points, then a settle
+	// trace down at the far end. A stitched bridge is a small, near-flat quantization gap, so no
+	// climb search is needed (this runs inside an O(islands x areas) scan).
+	bool CanTraceIslandBridge( const Vector &fromPos, const Vector &toPos, float maxLandingDrop )
+	{
+		const float stepZ = MAX( fromPos.z, toPos.z ) + StepHeight;
+
+		trace_t result;
+		Vector from( fromPos.x, fromPos.y, stepZ );
+		Vector to( toPos.x, toPos.y, stepZ );
+
+		UTIL_TraceHull( from, to, NavTraceMins, NavTraceMaxs, TheNavMesh->GetGenerationTraceMask(), NULL, COLLISION_GROUP_NONE, &result );
+		if ( result.fraction != 1.0f || result.startsolid )
+		{
+			return false;
+		}
+
+		Vector settleTo( toPos.x, toPos.y, toPos.z - maxLandingDrop );
+		UTIL_TraceHull( to, settleTo, NavTraceMins, NavTraceMaxs, TheNavMesh->GetGenerationTraceMask(), NULL, COLLISION_GROUP_NONE, &result );
+		if ( result.fraction <= 0.0f || result.startsolid )
+		{
+			return false;
+		}
+
+		return fabsf( result.endpos.z - toPos.z ) <= maxLandingDrop;
+	}
+
+	// ExtendDropLedges() probe geometry.
+	constexpr float kLedgeProbeSlack = 48.0f;		// floor is searched this far above and below the corner's Z
+	constexpr float kLedgeProbeStep = 4.0f;			// outward step between floor samples
+	constexpr float kLedgeMaxExtension = 200.0f;	// give up past this distance from the recorded corner
+
+	// Nearest floor hit tracing straight down from (x,y,zTop) to (x,y,zBottom).
+	bool FindFloorZ( float x, float y, float zTop, float zBottom, float *outZ )
+	{
+		trace_t result;
+		Vector from( x, y, zTop );
+		Vector to( x, y, zBottom );
+		UTIL_TraceLine( from, to, TheNavMesh->GetGenerationTraceMask(), NULL, COLLISION_GROUP_NONE, &result );
+		if ( result.startsolid || result.fraction >= 1.0f || result.plane.normal.z < 0.5f )
+		{
+			return false;
+		}
+
+		*outZ = result.endpos.z;
+		return true;
+	}
+
+	// Walk outward from `corner` along (outwardX, outwardY) until the floor disappears or drops more
+	// than `settleDrop`, returning the last position still on solid ground: the true ledge.
+	Vector FindTrueLedgeCorner( const Vector &corner, float outwardX, float outwardY, float settleDrop )
+	{
+		const float baseZ = corner.z;
+		Vector lastGood = corner;
+
+		const int steps = (int)( kLedgeMaxExtension / kLedgeProbeStep );
+		for ( int i = 1; i <= steps; ++i )
+		{
+			const float x = corner.x + outwardX * i * kLedgeProbeStep;
+			const float y = corner.y + outwardY * i * kLedgeProbeStep;
+			float z;
+			if ( !FindFloorZ( x, y, baseZ + kLedgeProbeSlack, baseZ - settleDrop - kLedgeProbeSlack, &z ) || ( baseZ - z ) > settleDrop )
+			{
+				break;
+			}
+
+			lastGood.Init( x, y, z );
+		}
+
+		return lastGood;
+	}
+
+	// Extend `area`'s boundary on `dir` out to the true ledge. Only for a near-planar edge (both
+	// corners within `planarityThreshold` in Z); a sloped edge would need the extension to follow
+	// the slope, so it is left alone. Refuses an extension that would land within crouch height of
+	// another area's floor at the same XY - a plain XY overlap is normal on a multi-storey map.
+	bool ExtendAreaEdgeToLedge( CNavArea *area, NavDirType dir, float planarityThreshold, float settleDrop, float minExtension )
+	{
+		const Vector nw = area->GetCorner( NORTH_WEST );
+		const Vector ne = area->GetCorner( NORTH_EAST );
+		const Vector se = area->GetCorner( SOUTH_EAST );
+		const Vector sw = area->GetCorner( SOUTH_WEST );
+
+		Vector cornerA, cornerB;
+		float outwardX = 0.0f, outwardY = 0.0f;
+
+		switch ( dir )
+		{
+		case NORTH: cornerA = nw; cornerB = ne; outwardY = -1.0f; break;
+		case EAST:  cornerA = ne; cornerB = se; outwardX =  1.0f; break;
+		case SOUTH: cornerA = sw; cornerB = se; outwardY =  1.0f; break;
+		case WEST:  cornerA = nw; cornerB = sw; outwardX = -1.0f; break;
+		default: return false;
+		}
+
+		if ( fabsf( cornerA.z - cornerB.z ) > planarityThreshold )
+		{
+			return false;
+		}
+
+		const Vector trueA = FindTrueLedgeCorner( cornerA, outwardX, outwardY, settleDrop );
+		const Vector trueB = FindTrueLedgeCorner( cornerB, outwardX, outwardY, settleDrop );
+
+		// The shorter of the two measurements, so the new edge never overshoots either corner's floor.
+		const float extA = ( outwardX != 0.0f ) ? fabsf( trueA.x - cornerA.x ) : fabsf( trueA.y - cornerA.y );
+		const float extB = ( outwardX != 0.0f ) ? fabsf( trueB.x - cornerB.x ) : fabsf( trueB.y - cornerB.y );
+		const float extension = MIN( extA, extB );
+		if ( extension < minExtension )
+		{
+			return false;
+		}
+
+		const Vector offset = Vector( outwardX, outwardY, 0.0f ) * extension;
+		Vector newCornerA = cornerA + offset;
+		Vector newCornerB = cornerB + offset;
+
+		// Each new corner gets its own floor Z so both ends of the edge sit on real floor.
+		float zAtA, zAtB;
+		if ( !FindFloorZ( newCornerA.x, newCornerA.y, cornerA.z + kLedgeProbeSlack, cornerA.z - settleDrop - kLedgeProbeSlack, &zAtA ) ||
+			 !FindFloorZ( newCornerB.x, newCornerB.y, cornerB.z + kLedgeProbeSlack, cornerB.z - settleDrop - kLedgeProbeSlack, &zAtB ) )
+		{
+			return false;
+		}
+		newCornerA.z = zAtA;
+		newCornerB.z = zAtB;
+
+		Vector newNw = nw, newNe = ne, newSe = se, newSw = sw;
+		switch ( dir )
+		{
+		case NORTH: newNw = newCornerA; newNe = newCornerB; break;
+		case EAST:  newNe = newCornerA; newSe = newCornerB; break;
+		case SOUTH: newSw = newCornerA; newSe = newCornerB; break;
+		case WEST:  newNw = newCornerA; newSw = newCornerB; break;
+		default: return false;
+		}
+
+		const float newZ = 0.5f * ( newCornerA.z + newCornerB.z );
+		FOR_EACH_VEC( TheNavAreas, it )
+		{
+			CNavArea *other = TheNavAreas[it];
+			if ( other == area )
+			{
+				continue;
+			}
+
+			const Vector otherNw = other->GetCorner( NORTH_WEST );
+			const Vector otherSe = other->GetCorner( SOUTH_EAST );
+			if ( !( otherNw.x < newSe.x && otherSe.x > newNw.x && otherNw.y < newSe.y && otherSe.y > newNw.y ) )
+			{
+				continue;
+			}
+
+			Extent otherExtent;
+			other->GetExtent( &otherExtent );
+			if ( otherExtent.lo.z > newZ + HumanCrouchHeight || otherExtent.hi.z < newZ - HumanCrouchHeight )
+			{
+				continue;	// a different floor entirely
+			}
+
+			return false;
+		}
+
+		area->Build( newNw, newNe, newSe, newSw );
+		return true;
+	}
 }
 
 
@@ -5312,6 +5571,205 @@ void CNavMesh::BuildBrushLadders( void )
 	else
 	{
 		Warning( "Generating brush ladders...FAIL\n" );
+	}
+}
+
+
+//--------------------------------------------------------------------------------------------------------------
+/**
+ * Bridge each small disconnected component into the main component when a main-mesh area is within
+ * the gap/height thresholds and a trace confirms walkable space between them. Only bridges to the
+ * main component: two islands near each other would otherwise pair up and stay disconnected.
+ */
+void CNavMesh::StitchSmallIslands( void )
+{
+	if ( !nav_generate_stitch_islands.GetBool() || m_bOptInPassesSuppressed )
+	{
+		return;
+	}
+
+	const float maxGap = nav_generate_stitch_islands_gap.GetFloat();
+	const float maxDz = nav_generate_stitch_islands_height.GetFloat();
+	const int maxIslandSize = nav_generate_stitch_islands_max_size.GetInt();
+
+	NavAreaUnionFind groups( TheNavAreas.Count() );
+	FOR_EACH_VEC( TheNavAreas, it )
+	{
+		groups.Add( TheNavAreas[it] );
+	}
+	FOR_EACH_VEC( TheNavAreas, it )
+	{
+		groups.UnionAdjacent( TheNavAreas[it] );
+	}
+
+	std::unordered_map<CNavArea*, int> compIndexOfRoot;
+	std::vector< std::vector<CNavArea*> > components;
+	std::unordered_map<CNavArea*, int> componentOf;
+	componentOf.reserve( TheNavAreas.Count() );
+
+	FOR_EACH_VEC( TheNavAreas, it )
+	{
+		CNavArea *area = TheNavAreas[it];
+		auto inserted = compIndexOfRoot.emplace( groups.Find( area ), (int)components.size() );
+		if ( inserted.second )
+		{
+			components.emplace_back();
+		}
+		const int compIdx = inserted.first->second;
+		components[compIdx].push_back( area );
+		componentOf[area] = compIdx;
+	}
+
+	if ( components.size() <= 1 )
+	{
+		return;
+	}
+
+	int mainIdx = 0;
+	for ( int i = 1; i < (int)components.size(); ++i )
+	{
+		if ( components[i].size() > components[mainIdx].size() )
+		{
+			mainIdx = i;
+		}
+	}
+
+	int stitched = 0;
+	for ( int c = 0; c < (int)components.size(); ++c )
+	{
+		if ( c == mainIdx || (int)components[c].size() > maxIslandSize )
+		{
+			continue;
+		}
+
+		CNavArea *bestIslandArea = NULL;
+		CNavArea *bestOtherArea = NULL;
+		float bestGap = maxGap;
+
+		for ( CNavArea *islandArea : components[c] )
+		{
+			Extent islandExtent;
+			islandArea->GetExtent( &islandExtent );
+
+			FOR_EACH_VEC( TheNavAreas, it2 )
+			{
+				CNavArea *other = TheNavAreas[it2];
+				if ( componentOf[other] != mainIdx )
+				{
+					continue;
+				}
+
+				Extent otherExtent;
+				other->GetExtent( &otherExtent );
+
+				const float dx = MAX( 0.0f, MAX( otherExtent.lo.x - islandExtent.hi.x, islandExtent.lo.x - otherExtent.hi.x ) );
+				const float dy = MAX( 0.0f, MAX( otherExtent.lo.y - islandExtent.hi.y, islandExtent.lo.y - otherExtent.hi.y ) );
+				const float gap = sqrtf( dx * dx + dy * dy );
+				if ( gap >= bestGap )
+				{
+					continue;
+				}
+
+				const float dz = fabsf( other->GetCenter().z - islandArea->GetCenter().z );
+				if ( dz > maxDz )
+				{
+					continue;
+				}
+
+				Vector islandNear, otherNear;
+				islandArea->GetClosestPointOnArea( other->GetCenter(), &islandNear );
+				other->GetClosestPointOnArea( islandArea->GetCenter(), &otherNear );
+				if ( !CanTraceIslandBridge( islandNear, otherNear, maxDz ) )
+				{
+					continue;
+				}
+
+				bestGap = gap;
+				bestIslandArea = islandArea;
+				bestOtherArea = other;
+			}
+		}
+
+		if ( bestIslandArea && bestOtherArea )
+		{
+			const Vector delta = bestOtherArea->GetCenter() - bestIslandArea->GetCenter();
+			const NavDirType dir = ( fabsf( delta.x ) > fabsf( delta.y ) )
+				? ( delta.x > 0.0f ? EAST : WEST )
+				: ( delta.y > 0.0f ? SOUTH : NORTH );
+			bestIslandArea->ConnectTo( bestOtherArea, dir );
+			bestOtherArea->ConnectTo( bestIslandArea, OppositeDirection( dir ) );
+			++stitched;
+		}
+	}
+
+	if ( stitched > 0 )
+	{
+		Msg( "StitchSmallIslands: bridged %d small island(s) into the main mesh\n", stitched );
+	}
+}
+
+
+//--------------------------------------------------------------------------------------------------------------
+/**
+ * For every area edge that carries only a one-way drop (the lower area never links back), extend
+ * the edge out to the true ledge - see ExtendAreaEdgeToLedge() above.
+ */
+void CNavMesh::ExtendDropLedges( void )
+{
+	if ( !nav_generate_extend_drop_ledges.GetBool() || m_bOptInPassesSuppressed )
+	{
+		return;
+	}
+
+	const float planarityThreshold = nav_generate_extend_drop_ledges_planarity.GetFloat();
+	const float minExtension = nav_generate_extend_drop_ledges_min.GetFloat();
+	const float settleDrop = JumpCrouchHeight;
+
+	int extended = 0;
+
+	FOR_EACH_VEC( TheNavAreas, it )
+	{
+		CNavArea *area = TheNavAreas[it];
+
+		for ( int d = 0; d < NUM_DIRECTIONS; ++d )
+		{
+			bool isDropDirection = false;
+			const int count = area->GetAdjacentCount( (NavDirType)d );
+			for ( int i = 0; i < count && !isDropDirection; ++i )
+			{
+				CNavArea *other = area->GetAdjacentArea( (NavDirType)d, i );
+				if ( !other || other->GetCenter().z >= area->GetCenter().z - JumpCrouchHeight )
+				{
+					continue;
+				}
+
+				bool hasReturn = false;
+				for ( int d2 = 0; d2 < NUM_DIRECTIONS && !hasReturn; ++d2 )
+				{
+					const int backCount = other->GetAdjacentCount( (NavDirType)d2 );
+					for ( int j = 0; j < backCount; ++j )
+					{
+						if ( other->GetAdjacentArea( (NavDirType)d2, j ) == area )
+						{
+							hasReturn = true;
+							break;
+						}
+					}
+				}
+
+				isDropDirection = !hasReturn;
+			}
+
+			if ( isDropDirection && ExtendAreaEdgeToLedge( area, (NavDirType)d, planarityThreshold, settleDrop, minExtension ) )
+			{
+				++extended;
+			}
+		}
+	}
+
+	if ( extended > 0 )
+	{
+		Msg( "ExtendDropLedges: extended %d area edge(s) to the true ledge\n", extended );
 	}
 }
 
@@ -5409,5 +5867,302 @@ void CNavMesh::WarnUnreachableObjectives( void )
 	{
 		Msg( "WarnUnreachableObjectives: every objective is reachable from at least one spawn\n" );
 	}
+}
+
+
+//--------------------------------------------------------------------------------------------------------------
+/**
+ * Delete (or trim back) every nav area whose floor a player cannot stand on without touching an
+ * enabled kill volume - see nav_generate_prune_hazard_areas' declaration for the why. Returns true
+ * if the mesh changed, so the caller chains the same full re-analysis PruneUnreachableAreas() needs
+ * (both delete mid-CustomAnalysis; SplitEdit() additionally creates unanalyzed areas).
+ *
+ *   +----------+ area              An area straddling the volume edge is split at that edge
+ *   |    |#####| volume            (CNavArea::SplitEdit, which also re-links the neighbours) and
+ *   |    |#####|                   only the inside piece deleted. A corner overlap takes two
+ *   +----------+                   splits: the scan restarts after every mutation, so the inside
+ *        ^ split here              piece comes back around and is cut again along the other axis.
+ */
+bool CNavMesh::PruneHazardAreas( void )
+{
+	if ( !nav_generate_prune_hazard_areas.GetBool() )
+	{
+		return false;
+	}
+
+	struct Hazard
+	{
+		Extent extent;
+		const char *classname;
+	};
+	CUtlVector<Hazard> hazards;
+	static const char *hazardClasses[] = { "trigger_hurt", "trigger_waterydeath" };
+	for ( const char *classname : hazardClasses )
+	{
+		CBaseEntity *ent = NULL;
+		while ( ( ent = gEntList.FindEntityByClassname( ent, classname ) ) != NULL )
+		{
+			// CBaseTrigger::Disable() drops FSOLID_TRIGGER, so this is "enabled right now"
+			// (StartDisabled volumes are skipped; ones a map enables later are not seen).
+			if ( !ent->IsSolidFlagSet( FSOLID_TRIGGER ) )
+			{
+				continue;
+			}
+			// A parented trigger rides on something that moves (ntre_rogue_ctg's tank carries two
+			// trigger_hurt crush volumes) - its position now says nothing about where it kills.
+			if ( ent->GetMoveParent() != NULL )
+			{
+				continue;
+			}
+			if ( FClassnameIs( ent, "trigger_hurt" ) )
+			{
+				// CTriggerHurt's class is only visible to triggers.cpp; its "damage" keyfield is
+				// readable through the datadesc without the type.
+				char damage[32] = "";
+				if ( !ent->GetKeyValue( "damage", damage, sizeof( damage ) ) || atof( damage ) <= 0.0f )
+				{
+					continue;	// a healing or zero-damage trigger_hurt is not a hazard
+				}
+			}
+			Hazard h;
+			h.classname = classname;
+			ent->CollisionProp()->WorldSpaceAABB( &h.extent.lo, &h.extent.hi );
+			if ( h.extent.hi.x - h.extent.lo.x < 1.0f || h.extent.hi.y - h.extent.lo.y < 1.0f )
+			{
+				continue;	// point entity, no volume
+			}
+			hazards.AddToTail( h );
+		}
+	}
+	if ( hazards.Count() == 0 )
+	{
+		return false;
+	}
+
+	int deleted = 0;
+	int splits = 0;
+	const float edgeSlack = 1.0f;	// SplitEdit() refuses a cut within 1u of an edge; treat that as "at the edge"
+	bool changed = true;
+	int guard = 0;
+	while ( changed && guard++ < 100000 )
+	{
+		changed = false;
+		FOR_EACH_VEC( TheNavAreas, it )
+		{
+			CNavArea *area = TheNavAreas[ it ];
+			const Vector &nw = area->GetCorner( NORTH_WEST );
+			const Vector &se = area->GetCorner( SOUTH_EAST );
+
+			FOR_EACH_VEC( hazards, hit )
+			{
+				const Extent &h = hazards[hit].extent;
+				const float ox0 = MAX( nw.x, h.lo.x ), ox1 = MIN( se.x, h.hi.x );
+				const float oy0 = MAX( nw.y, h.lo.y ), oy1 = MIN( se.y, h.hi.y );
+				if ( ox1 - ox0 <= edgeSlack || oy1 - oy0 <= edgeSlack )
+				{
+					continue;	// no XY overlap worth acting on
+				}
+				// a player standing on the overlapped floor would touch the volume
+				const float floorZ = area->GetZ( ( ox0 + ox1 ) * 0.5f, ( oy0 + oy1 ) * 0.5f );
+				if ( floorZ < h.lo.z - HumanHeight || floorZ > h.hi.z )
+				{
+					continue;
+				}
+
+				const bool fullX = ( h.lo.x <= nw.x + edgeSlack ) && ( h.hi.x >= se.x - edgeSlack );
+				const bool fullY = ( h.lo.y <= nw.y + edgeSlack ) && ( h.hi.y >= se.y - edgeSlack );
+				if ( fullX && fullY )
+				{
+					TheNavAreas.FindAndRemove( area );
+					DestroyArea( area );
+					++deleted;
+				}
+				else
+				{
+					// cut at whichever volume edge crosses the area's interior; the inside piece
+					// is caught on the restarted scan
+					bool splitAlongX = false;	// false = cut at an x coordinate (west|east)
+					float splitEdge = 0.0f;
+					if ( !fullX && h.lo.x > nw.x + edgeSlack )
+					{
+						splitEdge = h.lo.x;
+					}
+					else if ( !fullX && h.hi.x < se.x - edgeSlack )
+					{
+						splitEdge = h.hi.x;
+					}
+					else if ( h.lo.y > nw.y + edgeSlack )
+					{
+						splitAlongX = true;
+						splitEdge = h.lo.y;
+					}
+					else
+					{
+						splitAlongX = true;
+						splitEdge = h.hi.y;
+					}
+					if ( !area->SplitEdit( splitAlongX, splitEdge ) )
+					{
+						continue;	// can't happen given the interior checks above, but never loop on it
+					}
+					++splits;
+				}
+				changed = true;
+				break;
+			}
+			if ( changed )
+			{
+				break;	// TheNavAreas changed under us - restart the scan
+			}
+		}
+	}
+
+	Msg( "PruneHazardAreas: %d hazard volume(s); deleted %d area(s), split %d straddling area(s)\n",
+		hazards.Count(), deleted, splits );
+	return ( deleted + splits ) > 0;
+}
+
+
+//--------------------------------------------------------------------------------------------------------------
+/**
+ * Delete every pocket WarnUnreachableAreas() would report, except a pocket with a spawn or objective
+ * entity within nav_generate_prune_unreachable_margin of any of its areas: GetNearestNavArea() can
+ * snap an entity to a neighbouring reachable area, so the pocket under it still shows up here.
+ * Returns true if anything was deleted; deleting after CustomAnalysis strips every surviving area's
+ * hiding-spot and visibility data, so the caller then chains a full re-analysis.
+ */
+bool CNavMesh::PruneUnreachableAreas( void )
+{
+	if ( !nav_generate_prune_unreachable.GetBool() )
+	{
+		return false;
+	}
+
+	std::vector< std::vector<CNavArea*> > pockets;
+	if ( !FindUnreachableAreaPockets( pockets ) || pockets.empty() )
+	{
+		return false;
+	}
+
+	const float margin = nav_generate_prune_unreachable_margin.GetFloat();
+
+	std::vector<CBaseEntity*> seedEntities;
+	auto collect = [&]( CBaseEntity *ent )
+	{
+		seedEntities.push_back( ent );
+	};
+	ForEachSeedEntity( NAV_SEED_SPAWNS_AND_OBJECTIVES, collect );
+
+	CUtlVector<CNavArea*> toDelete;
+	int protectedPockets = 0;
+
+	for ( auto &pocket : pockets )
+	{
+		bool protect = false;
+		for ( CNavArea *area : pocket )
+		{
+			for ( CBaseEntity *ent : seedEntities )
+			{
+				if ( area->IsOverlapping( ent->GetAbsOrigin(), margin ) )
+				{
+					protect = true;
+					break;
+				}
+			}
+			if ( protect )
+			{
+				break;
+			}
+		}
+
+		if ( protect )
+		{
+			++protectedPockets;
+			const Vector center = pocket[0]->GetCenter();
+			Warning( "PruneUnreachableAreas: %d area(s) near (%.0f,%.0f,%.0f) have no directed path in but sit within %.0fu of a spawn/objective - left alone, check by hand\n",
+				(int)pocket.size(), center.x, center.y, center.z, margin );
+			continue;
+		}
+
+		for ( CNavArea *area : pocket )
+		{
+			toDelete.AddToTail( area );
+		}
+	}
+
+	for ( int i = 0; i < toDelete.Count(); ++i )
+	{
+		CNavArea *areaToDelete = toDelete[i];
+		RemoveFromSelectedSet( areaToDelete );
+		OnEditDestroyNotify( areaToDelete );
+		TheNavAreas.FindAndRemove( areaToDelete );
+		DestroyArea( areaToDelete );
+	}
+
+	if ( toDelete.Count() > 0 )
+	{
+		StripNavigationAreas();
+		Msg( "PruneUnreachableAreas: removed %d unreachable area(s)%s\n", toDelete.Count(),
+			protectedPockets > 0 ? " (some pockets left alone near a spawn/objective, see above)" : "" );
+	}
+
+	return toDelete.Count() > 0;
+}
+
+
+//--------------------------------------------------------------------------------------------------------------
+/**
+ * Delete every ladder unconnected at both ends. Runs after area pruning so a ladder orphaned by it
+ * is caught in the same pass. Needs no re-analysis: a ladder carries no analysis data.
+ */
+void CNavMesh::PruneDanglingLadders( void )
+{
+	if ( !nav_generate_prune_dangling_ladders.GetBool() || m_bOptInPassesSuppressed )
+	{
+		return;
+	}
+
+	int removed = 0;
+	for ( int i = m_ladders.Count() - 1; i >= 0; --i )
+	{
+		CNavLadder *ladder = m_ladders[i];
+		const bool topDangling = !ladder->m_topForwardArea && !ladder->m_topLeftArea && !ladder->m_topRightArea;
+		const bool bottomDangling = !ladder->m_bottomArea;
+		if ( !topDangling || !bottomDangling )
+		{
+			continue;
+		}
+
+		DestroyLadder( ladder );
+		++removed;
+	}
+
+	if ( removed > 0 )
+	{
+		Msg( "PruneDanglingLadders: removed %d ladder record(s) unconnected at both top and bottom\n", removed );
+	}
+}
+
+
+//--------------------------------------------------------------------------------------------------------------
+/**
+ * Run the opt-in passes and diagnostics on the final area set, in dependency order: stitching
+ * changes which links are one-way, extension changes the geometry pruning reads, and a ladder can
+ * only be judged dangling once area pruning is done. Returns true if areas were deleted, which
+ * leaves the mesh needing a full re-analysis.
+ */
+bool CNavMesh::RunPostGenerationPasses( void )
+{
+	StitchSmallIslands();
+	ExtendDropLedges();
+
+	const bool hazardPruned = PruneHazardAreas();
+	const bool unreachablePruned = PruneUnreachableAreas();
+
+	WarnUnreachableAreas();
+	WarnUnreachableObjectives();
+	PruneDanglingLadders();
+
+	return hazardPruned || unreachablePruned;
 }
 #endif // NEO
