@@ -205,16 +205,12 @@ public:
 
 	unsigned int operator()( const NavVisPair_t &item ) const
 	{
-		COMPILE_TIME_ASSERT( sizeof(CNavArea *) == sizeof( intp ) );
-		intp key[2] = { (intp) ( (intp)item.pAreas[0] + item.pAreas[1]->GetID() ), (intp)( (intp)item.pAreas[1] + item.pAreas[0]->GetID() ) };
-		if ( sizeof( key ) >= 16 )
-		{
-			return Hash16( key );
-		}
-		else
-		{
-			return Hash8( key );
-		}
+		// NEO: keyed on area IDs, not pointers, and mixed by MurmurHash2. Pointer keys clustered
+		// into a single bucket on large meshes, and Hash16()/Hash8() are Pearson hashes capped at
+		// 16 bits of output, which overflowed CUtlHash's per-bucket limit on ~8000-area maps.
+		// SetPair() orders pAreas by pointer, so the ID order is stable for an unordered pair.
+		uint32 key[2] = { (uint32)item.pAreas[0]->GetID(), (uint32)item.pAreas[1]->GetID() };
+		return MurmurHash2( key, sizeof( key ), 0 );
 	}
 };
 
