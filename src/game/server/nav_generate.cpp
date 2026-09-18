@@ -4703,21 +4703,27 @@ void CNavMesh::AddWalkableSeed( const Vector &pos, const Vector &normal )
 //--------------------------------------------------------------------------------------------------------------
 /**
  * Return the next walkable seed as a node
+ *
+ * NEO: a seed whose position already has a node (a second nav_mark_walkable seed on ground the
+ * first flood fill reached) is skipped, not treated as the end of the list - returning NULL
+ * here tells SampleStep() every seed is exhausted, which abandoned the seeds after it.
  */
 CNavNode *CNavMesh::GetNextWalkableSeedNode( void )
-{	
-	if ( m_seedIdx >= m_walkableSeeds.Count() )
-		return NULL;
+{
+	while ( m_seedIdx < m_walkableSeeds.Count() )
+	{
+		WalkableSeedSpot spot = m_walkableSeeds[ m_seedIdx ];
+		++m_seedIdx;
 
-	WalkableSeedSpot spot = m_walkableSeeds[ m_seedIdx ];
-	++m_seedIdx;
+		// check if a node exists at this location
+		CNavNode *node = CNavNode::GetNode( spot.pos );
+		if ( node )
+			continue;	// already covered by an earlier seed - try the next one
 
-	// check if a node exists at this location
-	CNavNode *node = CNavNode::GetNode( spot.pos );
-	if ( node )
-		return NULL;
+		return new CNavNode( spot.pos, spot.normal, NULL, false );
+	}
 
-	return new CNavNode( spot.pos, spot.normal, NULL, false );
+	return NULL;
 }
 
 
