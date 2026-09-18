@@ -179,6 +179,9 @@ ConVar sv_neo_forensic_interval("sv_neo_forensic_interval", "0.5", FCVAR_REPLICA
 ConVar sv_neo_ghost_spawn_bias("sv_neo_ghost_spawn_bias", "0", FCVAR_REPLICATED, "Spawn ghost in the same location as the previous round on odd-indexed rounds (Round 1 = index 0)", true, 0, true, 1);
 ConVar sv_neo_ghost_spawn_force("sv_neo_ghost_spawn_force", "-1", FCVAR_REPLICATED | FCVAR_CHEAT,
 	"Pin the ghost to a fixed neo_ghostspawnpoint every round. -1 uses default random selection.", true, -1, false, 0);
+// NEO-HARNESS-TEMP: juggernaut counterpart of sv_neo_ghost_spawn_force
+ConVar sv_neo_jgr_spawn_force("sv_neo_jgr_spawn_force", "-1", FCVAR_REPLICATED | FCVAR_CHEAT,
+	"Pin the juggernaut to a fixed neo_juggernautspawnpoint (map entity order) every round. -1 uses default selection.", true, -1, false, 0);
 ConVar sv_neo_teamdamage_assists("sv_neo_teamdamage_assists", "0", FCVAR_REPLICATED, "Whether to drain XP when assisting the death of a teammate.", true, 0.0f, true, 1.0f);
 ConVar sv_neo_client_autorecord("sv_neo_client_autorecord", "0", FCVAR_REPLICATED | FCVAR_DONTRECORD, "Record demos clientside", true, 0, true, 1);
 #ifdef CLIENT_DLL
@@ -2229,6 +2232,36 @@ void CNEORules::SpawnTheJuggernaut(const Vector* origin)
 
 			desiredSpawn = roundNumber() % m_jgrSpawns.Count();
 		}
+
+		// NEO-HARNESS-TEMP: m_jgrSpawns is shuffled on round 1, so the pin counts in map entity
+		// order (the N-th lowest entity handle index), which the shuffle cannot change
+		if (sv_neo_jgr_spawn_force.GetInt() >= 0)
+		{
+			const int wantRank = sv_neo_jgr_spawn_force.GetInt() % m_jgrSpawns.Count();
+
+			for (int i = 0; i < m_jgrSpawns.Count(); ++i)
+			{
+				int rank = 0;
+
+				for (int j = 0; j < m_jgrSpawns.Count(); ++j)
+				{
+					if (m_jgrSpawns[j].GetEntryIndex() < m_jgrSpawns[i].GetEntryIndex())
+					{
+						++rank;
+					}
+				}
+
+				if (rank == wantRank)
+				{
+					desiredSpawn = i;
+					break;
+				}
+			}
+
+			Msg("sv_neo_jgr_spawn_force: pinned juggernaut spawn %d of %d for this map\n",
+				wantRank, m_jgrSpawns.Count());
+		}
+
 		Assert(desiredSpawn >= 0);
 		Assert(desiredSpawn < m_jgrSpawns.Count());
 
