@@ -77,6 +77,11 @@ ConVar nav_generate_extend_drop_ledges_planarity( "nav_generate_extend_drop_ledg
 ConVar nav_generate_extend_drop_ledges_min( "nav_generate_extend_drop_ledges_min", "24", FCVAR_CHEAT,
 	"Min measured extension (units) for ExtendDropLedges() to act on." );
 
+// Read by CNEORules::SetWinningTeam()/SetWinningDMPlayer(): a round ending mid-generation
+// discards the mesh built so far.
+ConVar nav_generate_suppress_round_end( "nav_generate_suppress_round_end", "1", FCVAR_CHEAT,
+	"If non-zero, a round or match cannot end while nav_generate is running." );
+
 // Diagnostic only. SampleStep() accepts a climb of up to ClimbUpHeight between grid columns with no
 // check that a player's jump could cover it, so a mesh can hold pockets reachable out of but never
 // into. Report them at save time instead of at the first stuck bot.

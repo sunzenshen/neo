@@ -1720,6 +1720,13 @@ void CNEORules::SetWinningDMPlayer(CNEO_Player *pWinner)
 		return;
 	}
 
+	// See nav_generate_suppress_round_end (nav_generate.cpp) - don't let a round/match end while
+	// nav_generate is actively building a mesh, or the work gets silently discarded.
+	if (nav_generate_suppress_round_end.GetBool() && TheNavMesh->IsGenerating())
+	{
+		return;
+	}
+
 	if (auto pEntGameCfg = GetActiveGameConfig())
 	{
 		pEntGameCfg->m_OnDMRoundEnd.FireOutput(pWinner, pEntGameCfg);
@@ -3760,6 +3767,13 @@ bool CNEORules::RoundIsDoOrDie() const
 void CNEORules::SetWinningTeam(int team, int iWinReason, bool bForceMapReset, bool bSwitchTeams, bool bDontAddScore, bool bFinal)
 {
 	if (IsRoundOver())
+	{
+		return;
+	}
+
+	// See nav_generate_suppress_round_end (nav_generate.cpp) - don't let a round/match end while
+	// nav_generate is actively building a mesh, or the work gets silently discarded.
+	if (nav_generate_suppress_round_end.GetBool() && TheNavMesh->IsGenerating())
 	{
 		return;
 	}
