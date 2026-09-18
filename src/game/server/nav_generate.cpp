@@ -101,7 +101,7 @@ public:
 /**
  * Start at given position and find first area in given direction
  */
-inline CNavArea *findFirstAreaInDirection( const Vector *start, NavDirType dir, float range, float beneathLimit, CBaseEntity *traceIgnore = NULL, Vector *closePos = NULL )
+inline CNavArea *findFirstAreaInDirection( const Vector *start, NavDirType dir, float range, float beneathLimit, CBaseEntity *traceIgnore = NULL, Vector *closePos = NULL, CNavArea *ignoreArea = NULL )
 {
 	CNavArea *area = NULL;
 
@@ -122,6 +122,15 @@ inline CNavArea *findFirstAreaInDirection( const Vector *start, NavDirType dir, 
 			break;
 
 		area = TheNavMesh->GetNavArea( pos, beneathLimit );
+
+		// NEO: a short ladder's own bottom area can reach up to its top; keep walking past it
+		// instead of stopping on it, so a real landing farther along the ray is still found.
+		if ( area == ignoreArea )
+		{
+			area = NULL;
+			continue;
+		}
+
 		if (area)
 		{
 			if (closePos)
@@ -401,24 +410,16 @@ void CNavLadder::ConnectGeneratedLadder( float maxHeightAboveTopArea )
 	float beneathLimit = MIN( 120.0f, m_top.z - m_bottom.z + HalfHumanWidth );
 
 	// find "ahead" area
-	m_topForwardArea = findFirstAreaInDirection( &center, OppositeDirection( m_dir ), nearLadderRange, beneathLimit, NULL );
-	if (m_topForwardArea == m_bottomArea)
-		m_topForwardArea = NULL;
+	m_topForwardArea = findFirstAreaInDirection( &center, OppositeDirection( m_dir ), nearLadderRange, beneathLimit, NULL, NULL, m_bottomArea );
 
 	// find "left" area
-	m_topLeftArea = findFirstAreaInDirection( &center, DirectionLeft( m_dir ), nearLadderRange, beneathLimit, NULL );
-	if (m_topLeftArea == m_bottomArea)
-		m_topLeftArea = NULL;
+	m_topLeftArea = findFirstAreaInDirection( &center, DirectionLeft( m_dir ), nearLadderRange, beneathLimit, NULL, NULL, m_bottomArea );
 
 	// find "right" area
-	m_topRightArea = findFirstAreaInDirection( &center, DirectionRight( m_dir ), nearLadderRange, beneathLimit, NULL );
-	if (m_topRightArea == m_bottomArea)
-		m_topRightArea = NULL;
+	m_topRightArea = findFirstAreaInDirection( &center, DirectionRight( m_dir ), nearLadderRange, beneathLimit, NULL, NULL, m_bottomArea );
 
 	// find "behind" area - must look farther, since ladder is against the wall away from this area
-	m_topBehindArea = findFirstAreaInDirection( &center, m_dir, 2.0f*nearLadderRange, beneathLimit, NULL );
-	if (m_topBehindArea == m_bottomArea)
-		m_topBehindArea = NULL;
+	m_topBehindArea = findFirstAreaInDirection( &center, m_dir, 2.0f*nearLadderRange, beneathLimit, NULL, NULL, m_bottomArea );
 
 	// can't include behind area, since it is not used when going up a ladder
 	if (!m_topForwardArea && !m_topLeftArea && !m_topRightArea)
@@ -3296,7 +3297,7 @@ int CNavMesh::BuildArea( CNavNode *node, int width, int height )
  * are connected to each other, proving information on know how to move from
  * area to area.
  *
- * This is a "greedy" algorithm that attempts to cover the walkable area 
+ * This is a "greedy" algorithm that attempts to cover the walkable area
  * with the fewest, largest, rectangles.
  */
 void CNavMesh::CreateNavAreasFromNodes( void )
@@ -3426,16 +3427,9 @@ void CNavMesh::AddWalkableSeeds( void )
 void CNavMesh::BeginGeneration( bool incremental )
 {
 #ifdef NEO
-	if (nav_generate_debug_brushladders.GetBool())
+	if ( nav_generate_debug_brushladders.GetBool() )
 	{
-		if (!BuildBrushLaddersFromBsp())
-		{
-			Warning("Generating brush ladders...FAIL\n");
-		}
-		else
-		{
-			Msg( "Generating brush ladders...DONE\n" );
-		}
+		BuildBrushLadders();
 		return;
 	}
 #endif
@@ -3485,6 +3479,12 @@ void CNavMesh::BeginGeneration( bool incremental )
 	if ( !incremental ) ///< @incremental update doesn't build ladders to avoid overlapping existing ones
 	{
 		BuildLadders();
+#ifdef NEO
+		// Brush ladders are built before sampling, not after: LadderEndSearch seeds the flood fill
+		// from every ladder's far end, which is how a roof reachable only by ladder gets any areas.
+		// CreateNavAreasFromNodes() reconnects every ladder once the areas exist.
+		BuildBrushLadders();
+#endif
 	}
 
 	// start sampling from a spawn point
@@ -4038,18 +4038,10 @@ bool CNavMesh::UpdateGeneration( float maxTime )
 			}
 
 #ifdef NEO
-			// This runs earlier during the generation for the debug==true case, so skip here.
-			if (!nav_generate_debug_brushladders.GetBool())
+			// nav_analyze never goes through BeginGeneration(), so its brush ladders are built here.
+			if ( !nav_generate_debug_brushladders.GetBool() && m_generationMode == GENERATE_ANALYSIS_ONLY )
 			{
-				// Post-gen because we want automatic merge with the final navmesh
-				if (!BuildBrushLaddersFromBsp())
-				{
-					Warning("Generating brush ladders...FAIL\n");
-				}
-				else
-				{
-					Msg( "Generating brush ladders...DONE\n" );
-				}
+				BuildBrushLadders();
 			}
 #endif
 
@@ -5013,3 +5005,22 @@ CON_COMMAND_F( nav_gen_cliffs_approx, "Mark cliff areas, post-processing approxi
 
 	TheNavMesh->PostProcessCliffAreas();
 }
+
+
+#ifdef NEO
+//--------------------------------------------------------------------------------------------------------------
+/**
+ * Build CNavLadders from the BSP's CONTENTS_LADDER brushes and report the result.
+ */
+void CNavMesh::BuildBrushLadders( void )
+{
+	if ( BuildBrushLaddersFromBsp() )
+	{
+		Msg( "Generating brush ladders...DONE\n" );
+	}
+	else
+	{
+		Warning( "Generating brush ladders...FAIL\n" );
+	}
+}
+#endif // NEO
