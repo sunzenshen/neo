@@ -1240,6 +1240,9 @@ private:
 #ifdef NEO
 	void BuildBrushLadders( void );								// BuildBrushLaddersFromBsp() plus the DONE/FAIL report
 	void DestroyLadder( CNavLadder *ladder );					// remove one ladder from m_ladders and delete it
+	// NEO: reachability diagnostics, see nav_generate.cpp
+	void WarnUnreachableAreas( void );							// report pockets no spawn/objective has a directed path into
+	void WarnUnreachableObjectives( void );						// report objectives no spawn has a directed path to
 #endif
 	void StitchAreaSet( CUtlVector< CNavArea * > *areas );		// Stitches an arbitrary set of areas into the existing mesh
 	void HandleObstacleTopAreas( void );						// Handles fixing/generating areas on top of slim obstacles such as fences and railings
