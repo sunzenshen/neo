@@ -94,7 +94,15 @@ ActionResult< CNEOBot > CNEOBotCtgSeek::Update( CNEOBot *me, float interval )
 				}
 				else
 				{
-					return SuspendFor(new CNEOBotCtgLoneWolf, "Capture target is blocked by some other entity, searching around the nearest areas");
+					// The use range is a straight line, so a wall can still stand between us: only
+					// on the last leg of the path is an unseen ghost one that is lodged somewhere
+					const Path::Segment *pathGoal = m_path.IsValid() ? m_path.GetCurrentGoal() : nullptr;
+					const bool bStillWalkingAround = pathGoal && ( pathGoal != m_path.LastSegment() );
+
+					if ( !bStillWalkingAround )
+					{
+						return SuspendFor(new CNEOBotCtgLoneWolf, "Capture target is blocked by some other entity, searching around the nearest areas");
+					}
 				}
 			}
 		}
