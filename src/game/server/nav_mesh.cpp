@@ -4337,7 +4337,9 @@ void CNavMesh::BeginVisibilityComputations( void )
 {
 	if ( !g_pNavVisPairHash )
 	{
-		g_pNavVisPairHash = new CUtlHash< NavVisPair_t, CVisPairHashFuncs, CVisPairHashFuncs >( 16*1024 );
+		// NEO: 65536 buckets is CUtlHash's structural ceiling (BuildHandle() packs bucket and item
+		// index into 16 bits each), not a tuning knob; see CVisPairHashFuncs for the hash change.
+		g_pNavVisPairHash = new CUtlHash< NavVisPair_t, CVisPairHashFuncs, CVisPairHashFuncs >( 65536 );
 	}
 	else
 	{
