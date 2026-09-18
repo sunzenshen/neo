@@ -1238,11 +1238,19 @@ private:
 	void ValidateNavAreaConnections( void );
 	void StitchGeneratedAreas( void );							// Stitches incrementally-generated areas into the existing mesh
 #ifdef NEO
+	// NEO: save-time passes and diagnostics, see RunPostGenerationPasses() in nav_generate.cpp
 	void BuildBrushLadders( void );								// BuildBrushLaddersFromBsp() plus the DONE/FAIL report
 	void DestroyLadder( CNavLadder *ladder );					// remove one ladder from m_ladders and delete it
-	// NEO: reachability diagnostics, see nav_generate.cpp
+	bool RunPostGenerationPasses( void );						// runs the passes below in order; true if areas were deleted
+	void StitchSmallIslands( void );							// bridge small disconnected components into the main mesh
+	void ExtendDropLedges( void );								// extend one-way drop edges out to the true ledge
 	void WarnUnreachableAreas( void );							// report pockets no spawn/objective has a directed path into
 	void WarnUnreachableObjectives( void );						// report objectives no spawn has a directed path to
+	bool PruneHazardAreas( void );								// delete/trim areas inside an enabled kill volume; true if changed
+	bool PruneUnreachableAreas( void );							// delete the pockets WarnUnreachableAreas() reports; true if changed
+	void PruneDanglingLadders( void );							// delete ladders unconnected at both ends
+	bool m_bOptInPassesSuppressed;								// set when nav_generate_area_count_limit trips; cleared by BeginGeneration()
+	bool m_bReanalyzingAfterPrune;								// true inside the re-analysis a prune chained; cleared by BeginGeneration()/Reset()
 #endif
 	void StitchAreaSet( CUtlVector< CNavArea * > *areas );		// Stitches an arbitrary set of areas into the existing mesh
 	void HandleObstacleTopAreas( void );						// Handles fixing/generating areas on top of slim obstacles such as fences and railings

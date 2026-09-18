@@ -141,6 +141,10 @@ void CNavMesh::Reset( void )
 	m_markedArea = NULL;
 	m_selectedArea = NULL;
 	m_bQuitWhenFinished = false;
+#ifdef NEO
+	m_bOptInPassesSuppressed = false;
+	m_bReanalyzingAfterPrune = false;
+#endif
 
 	m_editMode = NORMAL;
 
