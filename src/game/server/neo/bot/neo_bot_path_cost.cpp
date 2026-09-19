@@ -100,7 +100,9 @@ float CNEOBotPathCost::operator()(CNavArea* baseArea, CNavArea* fromArea, const 
 
 		if (deltaZ >= m_stepHeight)
 		{
-			if (deltaZ >= m_maxJumpHeight)
+			// strictly over, as PathFollower judges a ledge "too high": the buffered limit is
+			// climbable, and >= stranded Supports above transit's 40 u platform edges
+			if (deltaZ > m_maxJumpHeight)
 			{
 				// too high to reach
 				return -1.0f;
