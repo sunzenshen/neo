@@ -18,7 +18,8 @@ const float RETURN_FIRE_DURATION = 3.0f;
 // Unsuppressed muzzle bloom stays visible through smoke this long after a shot
 const float MUZZLE_FLASH_VISIBLE_TIME = 0.5f;
 const float RETURN_FIRE_TORSO_HEIGHT = 36.0f;
-const float RETURN_FIRE_BURST_TIME = 0.3f;
+// Short, so the line of fire is checked again before a teammate can run into a held burst
+const float RETURN_FIRE_BURST_TIME = 0.1f;
 // How often a bot emptying its clip at smoke picks a new spot in the cloud
 const float RETURN_FIRE_SWEEP_INTERVAL = 0.5f;
 const float RETURN_FIRE_AIM_TOLERANCE = 0.998f; // cos of ~3.6 degrees
