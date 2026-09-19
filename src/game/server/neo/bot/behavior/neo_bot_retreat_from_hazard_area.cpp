@@ -9,7 +9,7 @@
 extern ConVar sv_neo_smoke_blocker_size;
 
 ConVar sv_neo_bot_smoke_return_fire("sv_neo_bot_smoke_return_fire", "1", FCVAR_NONE,
-    "Bots hit while retreating from a hazard area return fire at an attacker they cannot see. 2 = also carry on a fight that smoke interrupted, 3 = as 2 and remember the attacker between retreats.", true, 0, true, 3);
+    "Bots retreating from a hazard area shoot back at an attacker they cannot see, and carry on a fight that smoke interrupted.", true, 0, true, 1);
 
 const int MAX_NON_HAZARD_AREA_CANDIDATES = 5;
 
@@ -22,16 +22,6 @@ const float RETURN_FIRE_BURST_TIME = 0.3f;
 // How often a bot emptying its clip at smoke picks a new spot in the cloud
 const float RETURN_FIRE_SWEEP_INTERVAL = 0.5f;
 const float RETURN_FIRE_AIM_TOLERANCE = 0.998f; // cos of ~3.6 degrees
-
-// A bot skirting a smoke hazard leaves and re-enters this action about once a second,
-// so what it knows about its attacker has to outlive one instance of the action
-struct ReturnFireMemory
-{
-    EHANDLE attacker;
-    Vector believedPos;
-    float expireTime;
-};
-static ReturnFireMemory s_returnFireMemory[MAX_PLAYERS + 1];
 
 class CSearchForSafeArea : public ISearchSurroundingAreasFunctor
 {
@@ -121,44 +111,12 @@ ActionResult<CNEOBot> CNEOBotRetreatFromHazardArea::OnStart(CNEOBot *me, Action<
     m_sweepTimer.Invalidate();
     m_bEmptyClipAtSmoke = false;
 
-    if (sv_neo_bot_smoke_return_fire.GetInt() >= 2)
+    if (sv_neo_bot_smoke_return_fire.GetBool())
     {
         ContinueInterruptedFight(me);
     }
 
-    if (sv_neo_bot_smoke_return_fire.GetInt() == 3)
-    {
-        RecallReturnFire(me);
-    }
-
     return Continue();
-}
-
-void CNEOBotRetreatFromHazardArea::OnEnd(CNEOBot *me, Action<CNEOBot> *nextAction)
-{
-    ReturnFireMemory &memory = s_returnFireMemory[me->entindex()];
-    memory.attacker = m_hAttacker;
-    memory.believedPos = m_vecAttackerBelievedPos;
-    memory.expireTime = m_bEmptyClipAtSmoke ? gpGlobals->curtime + RETURN_FIRE_DURATION : gpGlobals->curtime + m_returnFireTimer.GetRemainingTime();
-}
-
-// Pick up the return fire that my previous retreat was in the middle of
-void CNEOBotRetreatFromHazardArea::RecallReturnFire(CNEOBot *me)
-{
-    const ReturnFireMemory &memory = s_returnFireMemory[me->entindex()];
-    const float timeLeft = memory.expireTime - gpGlobals->curtime;
-    if (timeLeft <= 0.0f || timeLeft > RETURN_FIRE_DURATION)
-    {
-        return; // over, or left behind by an earlier map
-    }
-
-    CBaseEntity *attacker = memory.attacker.Get();
-    if (!attacker || !attacker->IsAlive() || !me->IsEnemy(attacker))
-    {
-        return;
-    }
-
-    StartReturnFire(me, attacker, memory.believedPos, timeLeft); // no new hint, so the window does not grow
 }
 
 ActionResult<CNEOBot> CNEOBotRetreatFromHazardArea::Update(CNEOBot *me, float interval)
@@ -234,10 +192,10 @@ bool CNEOBotRetreatFromHazardArea::CanSeeMuzzleFlash(CNEOBot *me, CBaseEntity *a
 }
 
 // Begin answering an enemy I cannot see, from where I believe it is
-void CNEOBotRetreatFromHazardArea::StartReturnFire(CNEOBot *me, CBaseEntity *attacker, const Vector &believedPos, float duration)
+void CNEOBotRetreatFromHazardArea::StartReturnFire(CNEOBot *me, CBaseEntity *attacker, const Vector &believedPos)
 {
     m_hAttacker = attacker;
-    m_returnFireTimer.Start(duration);
+    m_returnFireTimer.Start(RETURN_FIRE_DURATION);
     m_vecAttackerBelievedPos = believedPos;
 
     // Only a bot that smoke is hiding the enemy from keeps shooting until its clip is empty
@@ -261,7 +219,7 @@ void CNEOBotRetreatFromHazardArea::ContinueInterruptedFight(CNEOBot *me)
         return;
     }
 
-    StartReturnFire(me, threat->GetEntity(), threat->GetLastKnownPosition(), RETURN_FIRE_DURATION);
+    StartReturnFire(me, threat->GetEntity(), threat->GetLastKnownPosition());
 }
 
 //   from ----------> to      a point up to maxError to either side of 'to',
@@ -324,8 +282,7 @@ void CNEOBotRetreatFromHazardArea::UpdateReturnFire(CNEOBot *me)
     }
 
     const CKnownEntity *threat = me->GetVisionInterface()->GetPrimaryKnownThreat();
-    const bool bThreatInView = (sv_neo_bot_smoke_return_fire.GetInt() >= 2) ? threat && threat->IsVisibleInFOVNow() : threat && threat->IsVisibleRecently();
-    if (bThreatInView)
+    if (threat && threat->IsVisibleInFOVNow())
     {
         return; // CNEOBotMainAction::FireWeaponAtEnemy owns aiming and firing at threats I can see
     }
@@ -402,7 +359,7 @@ EventDesiredResult< CNEOBot > CNEOBotRetreatFromHazardArea::OnInjured( CNEOBot *
         return TryContinue(); // grenade damage says nothing about where the thrower is now
     }
 
-    StartReturnFire(me, attacker, attacker->GetAbsOrigin(), RETURN_FIRE_DURATION);
+    StartReturnFire(me, attacker, attacker->GetAbsOrigin());
 
     if (!CanSeeMuzzleFlash(me, attacker))
     {
