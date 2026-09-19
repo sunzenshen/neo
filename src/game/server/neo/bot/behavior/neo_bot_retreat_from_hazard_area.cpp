@@ -11,6 +11,9 @@ extern ConVar sv_neo_smoke_blocker_size;
 ConVar sv_neo_bot_smoke_return_fire("sv_neo_bot_smoke_return_fire", "1", FCVAR_NONE,
     "Bots retreating from a hazard area return fire at an unseen attacker. 0 = off, 1 = on, 2 = on without aim error for suppressed attackers, 3 = as 1 and keep sweeping the smoke until the clip is empty.", true, 0, true, 3);
 
+ConVar sv_neo_bot_smoke_return_fire_friend_cone("sv_neo_bot_smoke_return_fire_friend_cone", "1", FCVAR_NONE,
+    "Bots returning fire at an unseen attacker hold fire while a teammate is inside their weapon's spread cone.", true, 0, true, 1);
+
 const int MAX_NON_HAZARD_AREA_CANDIDATES = 5;
 
 // How long after being hit a bot keeps answering an attacker it cannot see
@@ -23,6 +26,8 @@ const float RETURN_FIRE_TORSO_HEIGHT = 36.0f;
 const float RETURN_FIRE_BURST_TIME = 0.3f;
 // How often a bot emptying its clip at smoke picks a new spot in the cloud
 const float RETURN_FIRE_SWEEP_INTERVAL = 0.5f;
+// Half width of a teammate as seen by the shooter, with a little margin
+const float RETURN_FIRE_FRIEND_RADIUS = 24.0f;
 const float RETURN_FIRE_AIM_TOLERANCE = 0.998f; // cos of ~3.6 degrees
 
 class CSearchForSafeArea : public ISearchSurroundingAreasFunctor
@@ -188,6 +193,44 @@ bool CNEOBotRetreatFromHazardArea::CanSeeMuzzleFlash(CNEOBot *me, CBaseEntity *a
     return me->IsLineOfSightClear(attacker, CBaseCombatCharacter::IGNORE_ACTORS);
 }
 
+// Teammates show through walls on the HUD, so a player knows when one is in the way.
+// No traces: compares the angle to each teammate with my weapon's current spread.
+//            . ' friend
+//   me -----------------> aim spot     blocked if angle < spread + friend's apparent radius
+static bool IsFriendInFireCone(CNEOBot *me, const Vector &aimSpot, CNEOBaseCombatWeapon *weapon)
+{
+    const Vector myEyes = me->EyePosition();
+    Vector toAim = aimSpot - myEyes;
+    toAim.NormalizeInPlace();
+
+    const float spreadSine = weapon->GetBulletSpread().x;
+
+    for (int i = 1; i <= gpGlobals->maxClients; ++i)
+    {
+        CBasePlayer *player = UTIL_PlayerByIndex(i);
+        if (!player || player == me || !player->IsAlive() || !me->IsFriend(player))
+        {
+            continue;
+        }
+
+        Vector toFriend = player->WorldSpaceCenter() - myEyes;
+        const float friendRange = toFriend.NormalizeInPlace();
+        if (DotProduct(toAim, toFriend) <= 0.0f)
+        {
+            continue; // behind me
+        }
+
+        // Shots that miss the believed position carry on, so a friend beyond it counts too
+        const float friendSine = RETURN_FIRE_FRIEND_RADIUS / MAX(friendRange, RETURN_FIRE_FRIEND_RADIUS);
+        if (CrossProduct(toAim, toFriend).Length() < spreadSine + friendSine)
+        {
+            return true;
+        }
+    }
+
+    return false;
+}
+
 // Shoot back at where I believe my unseen attacker is, while continuing to retreat
 void CNEOBotRetreatFromHazardArea::UpdateReturnFire(CNEOBot *me)
 {
@@ -278,6 +321,11 @@ void CNEOBotRetreatFromHazardArea::UpdateReturnFire(CNEOBot *me)
     Vector toAimSpot = aimSpot - myEyes;
     toAimSpot.NormalizeInPlace();
     if (DotProduct(forward, toAimSpot) < RETURN_FIRE_AIM_TOLERANCE)
+    {
+        return;
+    }
+
+    if (sv_neo_bot_smoke_return_fire_friend_cone.GetBool() && IsFriendInFireCone(me, aimSpot, myWeapon))
     {
         return;
     }
