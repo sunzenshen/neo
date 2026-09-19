@@ -13,6 +13,7 @@ public:
     virtual ActionResult<CNEOBot> OnStart(CNEOBot *me, Action<CNEOBot> *priorAction) OVERRIDE;
     virtual ActionResult<CNEOBot> Update(CNEOBot *me, float interval) OVERRIDE;
 
+    virtual void OnEnd(CNEOBot *me, Action<CNEOBot> *nextAction) OVERRIDE;
     virtual EventDesiredResult<CNEOBot> OnStuck(CNEOBot *me) OVERRIDE;
     virtual EventDesiredResult<CNEOBot> OnMoveToFailure(CNEOBot *me, const Path *path, MoveToFailureType reason) OVERRIDE;
     virtual EventDesiredResult<CNEOBot> OnInjured(CNEOBot *me, const CTakeDamageInfo &info) OVERRIDE;
@@ -35,7 +36,8 @@ private:
 
     bool CanSeeMuzzleFlash(CNEOBot *me, CBaseEntity *attacker) const;
     class CNEOBaseCombatWeapon *ReadyFirearm(CNEOBot *me, CBaseEntity *attacker);
-    void StartReturnFire(CNEOBot *me, CBaseEntity *attacker, const Vector &believedPos);
+    void StartReturnFire(CNEOBot *me, CBaseEntity *attacker, const Vector &believedPos, float duration);
     void ContinueInterruptedFight(CNEOBot *me);
+    void RecallReturnFire(CNEOBot *me);
     void UpdateReturnFire(CNEOBot *me);
 };
