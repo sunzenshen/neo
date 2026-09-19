@@ -9,10 +9,7 @@
 extern ConVar sv_neo_smoke_blocker_size;
 
 ConVar sv_neo_bot_smoke_return_fire("sv_neo_bot_smoke_return_fire", "1", FCVAR_NONE,
-    "Bots retreating from a hazard area return fire at an unseen attacker. 0 = off, 1 = on, 2 = on without aim error for suppressed attackers, 3 = as 1 and keep sweeping the smoke until the clip is empty.", true, 0, true, 3);
-
-ConVar sv_neo_bot_smoke_return_fire_friend_cone("sv_neo_bot_smoke_return_fire_friend_cone", "1", FCVAR_NONE,
-    "Bots returning fire at an unseen attacker hold fire while a teammate is inside their weapon's spread cone.", true, 0, true, 1);
+    "Bots hit while retreating from a hazard area return fire at an attacker they cannot see.", true, 0, true, 1);
 
 const int MAX_NON_HAZARD_AREA_CANDIDATES = 5;
 
@@ -20,14 +17,10 @@ const int MAX_NON_HAZARD_AREA_CANDIDATES = 5;
 const float RETURN_FIRE_DURATION = 3.0f;
 // Unsuppressed muzzle bloom stays visible through smoke this long after a shot
 const float MUZZLE_FLASH_VISIBLE_TIME = 0.5f;
-// Believed position error for an attacker whose muzzle flash was not seen, roughly half a smoke cloud
-const float RETURN_FIRE_POS_ERROR = 140.0f;
 const float RETURN_FIRE_TORSO_HEIGHT = 36.0f;
 const float RETURN_FIRE_BURST_TIME = 0.3f;
 // How often a bot emptying its clip at smoke picks a new spot in the cloud
 const float RETURN_FIRE_SWEEP_INTERVAL = 0.5f;
-// Half width of a teammate as seen by the shooter, with a little margin
-const float RETURN_FIRE_FRIEND_RADIUS = 24.0f;
 const float RETURN_FIRE_AIM_TOLERANCE = 0.998f; // cos of ~3.6 degrees
 
 class CSearchForSafeArea : public ISearchSurroundingAreasFunctor
@@ -193,42 +186,42 @@ bool CNEOBotRetreatFromHazardArea::CanSeeMuzzleFlash(CNEOBot *me, CBaseEntity *a
     return me->IsLineOfSightClear(attacker, CBaseCombatCharacter::IGNORE_ACTORS);
 }
 
-// Teammates show through walls on the HUD, so a player knows when one is in the way.
-// No traces: compares the angle to each teammate with my weapon's current spread.
-//            . ' friend
-//   me -----------------> aim spot     blocked if angle < spread + friend's apparent radius
-static bool IsFriendInFireCone(CNEOBot *me, const Vector &aimSpot, CNEOBaseCombatWeapon *weapon)
+//   from ----------> to      a point up to maxError to either side of 'to',
+//                 <--+-->    as seen from 'from'
+static Vector SidewaysOf(const Vector &from, const Vector &to, float maxError)
 {
-    const Vector myEyes = me->EyePosition();
-    Vector toAim = aimSpot - myEyes;
-    toAim.NormalizeInPlace();
+    Vector sideways(from.y - to.y, to.x - from.x, 0.0f);
+    sideways.NormalizeInPlace();
+    return to + sideways * RandomFloat(-maxError, maxError);
+}
 
-    const float spreadSine = weapon->GetBulletSpread().x;
-
-    for (int i = 1; i <= gpGlobals->maxClients; ++i)
+// Return my firearm if it can shoot right now, otherwise start fixing that and return nullptr
+CNEOBaseCombatWeapon *CNEOBotRetreatFromHazardArea::ReadyFirearm(CNEOBot *me, CBaseEntity *attacker)
+{
+    auto *myWeapon = static_cast<CNEOBaseCombatWeapon *>(me->GetActiveWeapon());
+    if (!myWeapon || !(myWeapon->GetNeoWepBits() & NEO_WEP_FIREARM))
     {
-        CBasePlayer *player = UTIL_PlayerByIndex(i);
-        if (!player || player == me || !player->IsAlive() || !me->IsFriend(player))
+        const CKnownEntity *knownAttacker = me->GetVisionInterface()->GetKnown(attacker);
+        if (knownAttacker)
         {
-            continue;
+            me->EquipBestWeaponForThreat(knownAttacker);
         }
-
-        Vector toFriend = player->WorldSpaceCenter() - myEyes;
-        const float friendRange = toFriend.NormalizeInPlace();
-        if (DotProduct(toAim, toFriend) <= 0.0f)
-        {
-            continue; // behind me
-        }
-
-        // Shots that miss the believed position carry on, so a friend beyond it counts too
-        const float friendSine = RETURN_FIRE_FRIEND_RADIUS / MAX(friendRange, RETURN_FIRE_FRIEND_RADIUS);
-        if (CrossProduct(toAim, toFriend).Length() < spreadSine + friendSine)
-        {
-            return true;
-        }
+        return nullptr;
     }
 
-    return false;
+    if (myWeapon->m_bInReload)
+    {
+        return nullptr;
+    }
+
+    if (myWeapon->Clip1() <= 0)
+    {
+        m_bEmptyClipAtSmoke = false;
+        me->ReloadIfLowClip(true);
+        return nullptr;
+    }
+
+    return myWeapon;
 }
 
 // Shoot back at where I believe my unseen attacker is, while continuing to retreat
@@ -265,67 +258,40 @@ void CNEOBotRetreatFromHazardArea::UpdateReturnFire(CNEOBot *me)
         m_vecAttackerBelievedPos = attacker->GetAbsOrigin();
     }
 
-    auto *myWeapon = static_cast<CNEOBaseCombatWeapon *>(me->GetActiveWeapon());
-    if (!myWeapon || !(myWeapon->GetNeoWepBits() & NEO_WEP_FIREARM))
-    {
-        const CKnownEntity *knownAttacker = me->GetVisionInterface()->GetKnown(attacker);
-        if (knownAttacker)
-        {
-            me->EquipBestWeaponForThreat(knownAttacker);
-        }
-        return;
-    }
-
-    if (myWeapon->m_bInReload)
+    CNEOBaseCombatWeapon *myWeapon = ReadyFirearm(me, attacker);
+    if (!myWeapon)
     {
         return;
     }
 
-    if (myWeapon->Clip1() <= 0)
-    {
-        m_bEmptyClipAtSmoke = false;
-        me->ReloadIfLowClip(true);
-        return;
-    }
-
+    const Vector torso(0, 0, RETURN_FIRE_TORSO_HEIGHT);
     if (bSawFlash || !m_returnFireTimer.IsElapsed())
     {
-        m_vecAimSpot = m_vecAttackerBelievedPos + Vector(0, 0, RETURN_FIRE_TORSO_HEIGHT);
+        m_vecAimSpot = m_vecAttackerBelievedPos + torso;
     }
     else if (m_sweepTimer.IsElapsed())
     {
-        // No fresh hint: sweep sideways across the cloud, wider as the clip runs down
-        //   me ----------> believed
-        //            <-----+-----> up to the cloud half width on an empty clip
+        // No fresh hint: sweep across the cloud, reaching its full width as the clip runs out
         m_sweepTimer.Start(RETURN_FIRE_SWEEP_INTERVAL);
         const float clipUsed = 1.0f - ((float)myWeapon->Clip1() / MAX(1, myWeapon->GetMaxClip1()));
         const float sweepWidth = clipUsed * sv_neo_smoke_blocker_size.GetFloat();
-        Vector toBelieved = m_vecAttackerBelievedPos - me->GetAbsOrigin();
-        Vector sideways(-toBelieved.y, toBelieved.x, 0.0f);
-        sideways.NormalizeInPlace();
-        m_vecAimSpot = m_vecAttackerBelievedPos + Vector(0, 0, RETURN_FIRE_TORSO_HEIGHT) + sideways * RandomFloat(-sweepWidth, sweepWidth);
+        m_vecAimSpot = SidewaysOf(me->GetAbsOrigin(), m_vecAttackerBelievedPos, sweepWidth) + torso;
     }
 
     // Players know the map: only shoot where geometry lets a bullet through, smoke aside
-    const Vector aimSpot = m_vecAimSpot;
     const Vector myEyes = me->EyePosition();
-    if (!me->IsLineOfFireClear(aimSpot, CNEOBot::LINE_OF_FIRE_FLAGS_DEFAULT) || !me->IsLineOfFireClearOfFriendlies(myEyes, aimSpot))
+    if (!me->IsLineOfFireClear(m_vecAimSpot, CNEOBot::LINE_OF_FIRE_FLAGS_DEFAULT) || !me->IsLineOfFireClearOfFriendlies(myEyes, m_vecAimSpot))
     {
         return;
     }
 
-    me->GetBodyInterface()->AimHeadTowards(aimSpot, IBody::CRITICAL, 0.5f, nullptr, "Returning fire at unseen attacker");
+    me->GetBodyInterface()->AimHeadTowards(m_vecAimSpot, IBody::CRITICAL, 0.5f, nullptr, "Returning fire at unseen attacker");
 
     Vector forward;
     me->EyeVectors(&forward);
-    Vector toAimSpot = aimSpot - myEyes;
+    Vector toAimSpot = m_vecAimSpot - myEyes;
     toAimSpot.NormalizeInPlace();
     if (DotProduct(forward, toAimSpot) < RETURN_FIRE_AIM_TOLERANCE)
-    {
-        return;
-    }
-
-    if (sv_neo_bot_smoke_return_fire_friend_cone.GetBool() && IsFriendInFireCone(me, aimSpot, myWeapon))
     {
         return;
     }
@@ -363,18 +329,12 @@ EventDesiredResult< CNEOBot > CNEOBotRetreatFromHazardArea::OnInjured( CNEOBot *
 
     // Only a bot that smoke is hiding the enemy from keeps shooting until its clip is empty
     const CNavArea *myArea = me->GetLastKnownArea();
-    m_bEmptyClipAtSmoke = (sv_neo_bot_smoke_return_fire.GetInt() == 3) && myArea
-        && CNEOBotPathReservations()->IsAreaSmokeHazard(myArea->GetID(), me);
+    m_bEmptyClipAtSmoke = myArea && CNEOBotPathReservations()->IsAreaSmokeHazard(myArea->GetID(), me);
 
-    if (sv_neo_bot_smoke_return_fire.GetInt() != 2 && !CanSeeMuzzleFlash(me, attacker))
+    if (!CanSeeMuzzleFlash(me, attacker))
     {
-        // Being hit only tells me the rough direction: slide the believed position sideways
-        //   me ----------> attacker
-        //                  <--+--> error
-        Vector toAttacker = m_vecAttackerBelievedPos - me->GetAbsOrigin();
-        Vector sideways(-toAttacker.y, toAttacker.x, 0.0f);
-        sideways.NormalizeInPlace();
-        m_vecAttackerBelievedPos += sideways * RandomFloat(-RETURN_FIRE_POS_ERROR, RETURN_FIRE_POS_ERROR);
+        // Being hit only gives a rough direction: the attacker is somewhere in that part of the cloud
+        m_vecAttackerBelievedPos = SidewaysOf(me->GetAbsOrigin(), m_vecAttackerBelievedPos, sv_neo_smoke_blocker_size.GetFloat());
     }
 
     return TryContinue();
