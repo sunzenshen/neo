@@ -541,3 +541,27 @@ bool CNEOBotPathReservationSystem::IsAreaHazardous(int navAreaID, const CNEOBot 
 {
    return GetAreaHazardousTime(navAreaID, me) > 0;
 }
+
+//-------------------------------------------------------------------------------------------------
+// Is this area exposed to a smoke cloud that my team has seen block a sightline?
+bool CNEOBotPathReservationSystem::IsAreaSmokeHazard(int navAreaID, const CNEOBot *me) const
+{
+    if (!me)
+    {
+        return false;
+    }
+
+    int teamID = me->GetTeamNumber();
+    if (teamID < 0 || teamID >= TEAM__TOTAL)
+    {
+        return false;
+    }
+
+    int index = m_HazardAreas[teamID].Find(navAreaID);
+    if (!m_HazardAreas[teamID].IsValidIndex(index))
+    {
+        return false;
+    }
+
+    return m_HazardAreas[teamID][index].smokeExpireTime > gpGlobals->curtime;
+}

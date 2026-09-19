@@ -29,6 +29,9 @@ private:
     EHANDLE m_hAttacker;
     Vector m_vecAttackerBelievedPos;
     CountdownTimer m_returnFireTimer;
+    CountdownTimer m_sweepTimer;
+    Vector m_vecAimSpot;
+    bool m_bEmptyClipAtSmoke;
 
     bool CanSeeMuzzleFlash(CNEOBot *me, CBaseEntity *attacker) const;
     void UpdateReturnFire(CNEOBot *me);

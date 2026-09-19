@@ -77,6 +77,7 @@ public:
     void AddSmokeHazard(int navAreaID, float expireTime, int teamID, bool propagatePVS = true);
     float GetAreaHazardousTime(int navAreaID, const CNEOBot *me) const;
     bool IsAreaHazardous(int navAreaID, const CNEOBot *me) const;
+    bool IsAreaSmokeHazard(int navAreaID, const CNEOBot *me) const;
 
     // Allow the global accessor to access private members if needed, though constructor handles init now.
     friend CNEOBotPathReservationSystem* CNEOBotPathReservations();
