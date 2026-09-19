@@ -15,6 +15,7 @@ public:
 
     virtual EventDesiredResult<CNEOBot> OnStuck(CNEOBot *me) OVERRIDE;
     virtual EventDesiredResult<CNEOBot> OnMoveToFailure(CNEOBot *me, const Path *path, MoveToFailureType reason) OVERRIDE;
+    virtual EventDesiredResult<CNEOBot> OnInjured(CNEOBot *me, const CTakeDamageInfo &info) OVERRIDE;
 
     virtual const char *GetName() const OVERRIDE { return "RetreatFromHazardArea"; }
 
@@ -23,4 +24,12 @@ private:
     PathFollower m_path;
 
     CNavArea *FindSafeArea(CNEOBot *me);
+
+    // Returning fire at an attacker hidden by smoke
+    EHANDLE m_hAttacker;
+    Vector m_vecAttackerBelievedPos;
+    CountdownTimer m_returnFireTimer;
+
+    bool CanSeeMuzzleFlash(CNEOBot *me, CBaseEntity *attacker) const;
+    void UpdateReturnFire(CNEOBot *me);
 };
