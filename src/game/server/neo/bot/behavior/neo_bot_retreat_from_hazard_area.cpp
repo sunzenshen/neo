@@ -9,7 +9,7 @@
 extern ConVar sv_neo_smoke_blocker_size;
 
 ConVar sv_neo_bot_smoke_return_fire("sv_neo_bot_smoke_return_fire", "1", FCVAR_NONE,
-    "Bots hit while retreating from a hazard area return fire at an attacker they cannot see.", true, 0, true, 1);
+    "Bots hit while retreating from a hazard area return fire at an attacker they cannot see. 2 = also carry on a fight that smoke interrupted.", true, 0, true, 2);
 
 const int MAX_NON_HAZARD_AREA_CANDIDATES = 5;
 
@@ -111,6 +111,11 @@ ActionResult<CNEOBot> CNEOBotRetreatFromHazardArea::OnStart(CNEOBot *me, Action<
     m_sweepTimer.Invalidate();
     m_bEmptyClipAtSmoke = false;
 
+    if (sv_neo_bot_smoke_return_fire.GetInt() == 2)
+    {
+        ContinueInterruptedFight(me);
+    }
+
     return Continue();
 }
 
@@ -186,6 +191,37 @@ bool CNEOBotRetreatFromHazardArea::CanSeeMuzzleFlash(CNEOBot *me, CBaseEntity *a
     return me->IsLineOfSightClear(attacker, CBaseCombatCharacter::IGNORE_ACTORS);
 }
 
+// Begin answering an enemy I cannot see, from where I believe it is
+void CNEOBotRetreatFromHazardArea::StartReturnFire(CNEOBot *me, CBaseEntity *attacker, const Vector &believedPos)
+{
+    m_hAttacker = attacker;
+    m_returnFireTimer.Start(RETURN_FIRE_DURATION);
+    m_vecAttackerBelievedPos = believedPos;
+
+    // Only a bot that smoke is hiding the enemy from keeps shooting until its clip is empty
+    const CNavArea *myArea = me->GetLastKnownArea();
+    m_bEmptyClipAtSmoke = myArea && CNEOBotPathReservations()->IsAreaSmokeHazard(myArea->GetID(), me);
+}
+
+// I was just trading fire with a threat I have now lost sight of: my position is no secret,
+// so keep shooting at where I last saw it
+void CNEOBotRetreatFromHazardArea::ContinueInterruptedFight(CNEOBot *me)
+{
+    const CKnownEntity *threat = me->GetVisionInterface()->GetPrimaryKnownThreat();
+    if (!threat || !threat->WasEverVisible() || threat->GetTimeSinceLastSeen() > RETURN_FIRE_DURATION)
+    {
+        return;
+    }
+
+    auto *myWeapon = static_cast<CNEOBaseCombatWeapon *>(me->GetActiveWeapon());
+    if (!myWeapon || gpGlobals->curtime - myWeapon->GetLastAttackTime() > RETURN_FIRE_DURATION)
+    {
+        return;
+    }
+
+    StartReturnFire(me, threat->GetEntity(), threat->GetLastKnownPosition());
+}
+
 //   from ----------> to      a point up to maxError to either side of 'to',
 //                 <--+-->    as seen from 'from'
 static Vector SidewaysOf(const Vector &from, const Vector &to, float maxError)
@@ -246,7 +282,8 @@ void CNEOBotRetreatFromHazardArea::UpdateReturnFire(CNEOBot *me)
     }
 
     const CKnownEntity *threat = me->GetVisionInterface()->GetPrimaryKnownThreat();
-    if (threat && threat->IsVisibleRecently())
+    const bool bThreatInView = (sv_neo_bot_smoke_return_fire.GetInt() == 2) ? threat && threat->IsVisibleInFOVNow() : threat && threat->IsVisibleRecently();
+    if (bThreatInView)
     {
         return; // CNEOBotMainAction::FireWeaponAtEnemy owns aiming and firing at threats I can see
     }
@@ -323,13 +360,7 @@ EventDesiredResult< CNEOBot > CNEOBotRetreatFromHazardArea::OnInjured( CNEOBot *
         return TryContinue(); // grenade damage says nothing about where the thrower is now
     }
 
-    m_hAttacker = attacker;
-    m_returnFireTimer.Start(RETURN_FIRE_DURATION);
-    m_vecAttackerBelievedPos = attacker->GetAbsOrigin();
-
-    // Only a bot that smoke is hiding the enemy from keeps shooting until its clip is empty
-    const CNavArea *myArea = me->GetLastKnownArea();
-    m_bEmptyClipAtSmoke = myArea && CNEOBotPathReservations()->IsAreaSmokeHazard(myArea->GetID(), me);
+    StartReturnFire(me, attacker, attacker->GetAbsOrigin());
 
     if (!CanSeeMuzzleFlash(me, attacker))
     {

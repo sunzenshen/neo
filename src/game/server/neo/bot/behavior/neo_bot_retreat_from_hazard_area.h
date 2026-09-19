@@ -35,5 +35,7 @@ private:
 
     bool CanSeeMuzzleFlash(CNEOBot *me, CBaseEntity *attacker) const;
     class CNEOBaseCombatWeapon *ReadyFirearm(CNEOBot *me, CBaseEntity *attacker);
+    void StartReturnFire(CNEOBot *me, CBaseEntity *attacker, const Vector &believedPos);
+    void ContinueInterruptedFight(CNEOBot *me);
     void UpdateReturnFire(CNEOBot *me);
 };
