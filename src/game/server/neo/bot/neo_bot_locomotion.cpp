@@ -6,6 +6,11 @@
 
 extern ConVar falldamage;
 
+// Margin under the theoretical crouch-jump heights (neo_player_shared.h) that bots plan with:
+// a cvar so the harness can measure what bots really clear before a value is settled
+ConVar neo_bot_jump_height_buffer( "neo_bot_jump_height_buffer", "7", FCVAR_CHEAT,
+	"Units subtracted from a class's theoretical crouch-jump height for bot climbs", true, 0.0f, true, 32.0f );
+
 //-----------------------------------------------------------------------------------------
 void CNEOBotLocomotion::Update( void )
 {

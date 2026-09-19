@@ -66,5 +66,6 @@ inline float CNEOBotLocomotion::GetMaxJumpHeight( void ) const
 			return 0.f;
 	}
 
-	return theoreticalJumpHeight - NEO_BOT_JUMP_HEIGHT_BUFFER;
+	extern ConVar neo_bot_jump_height_buffer;
+	return theoreticalJumpHeight - neo_bot_jump_height_buffer.GetFloat();
 }
