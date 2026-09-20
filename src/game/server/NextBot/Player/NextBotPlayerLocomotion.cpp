@@ -17,37 +17,6 @@
 
 ConVar NextBotPlayerMoveDirect( "nb_player_move_direct", "0" );
 
-// NEO: what to do when the engine has put a bot on a ladder its own path never asked for.
-// `CGameMovement::LadderMove()` grabs any ladder the player's wish direction points at, while
-// `TraverseLadder()` drops the move type straight back to walking - so a path that merely brushes
-// past a ladder leaves the two fighting every tick, and the bot hangs there making no progress
-// and firing no stuck event. Measured 2026-09-20: 85 such episodes over 200 matches.
-enum LadderReleaseMode
-{
-	LADDER_RELEASE_ENGINE = 0,		// unchanged behaviour: drop the move type and nothing else
-	LADDER_RELEASE_PUSHOFF,			// let go, then steer out of the ladder's face so it cannot re-grab
-	LADDER_RELEASE_ADOPT,			// stop arguing - ride it to the nearer end and dismount there
-	LADDER_RELEASE_SLIDE,			// keep going, but with the into-the-wall part of the heading removed
-	LADDER_RELEASE_HOLD,			// stop fighting altogether: leave the move type alone for a moment
-	LADDER_RELEASE_ADOPT_UP,		// adopt, but only when there is somewhere above to climb to
-	LADDER_RELEASE_ADOPT_STUCK,		// adopt by the nearer end, but only once the contact has persisted
-};
-
-ConVar neo_bot_ladder_release_mode( "neo_bot_ladder_release_mode", "0", FCVAR_CHEAT,
-	"How a bot leaves a ladder it never asked to be on: 0 engine behaviour, 1 push off, 2 adopt it, "
-	"3 slide along it, 4 hold and stop fighting, 5 adopt only upward, 6 adopt once the contact sticks.",
-	true, LADDER_RELEASE_ENGINE, true, LADDER_RELEASE_ADOPT_STUCK );
-
-ConVar neo_bot_ladder_release_time( "neo_bot_ladder_release_time", "0.5", FCVAR_CHEAT,
-	"Seconds a bot keeps steering away from a ladder it just let go of.", true, 0.0f, true, 5.0f );
-
-// Far enough out that the wish direction clearly leaves the brush LadderMove() traces against.
-static const float LADDER_PUSHOFF_RANGE = 100.0f;
-// A ladder further than this from the bot is not the one it is stuck on.
-static const float LADDER_TOUCH_RANGE = 64.0f;
-// A gap longer than this means the bot walked away and came back, so the bout starts over.
-static const float LADDER_CONTACT_RESET = 1.0f;
-
 //-----------------------------------------------------------------------------------------------------
 PlayerLocomotion::PlayerLocomotion( INextBot *bot ) : ILocomotion( bot )
 {
@@ -76,8 +45,6 @@ void PlayerLocomotion::Reset( void )
 	m_ladderDismountGoal = NULL;
 	m_ladderTimer.Invalidate();
 
-	m_unwantedLadderTimer.Invalidate();
-	m_unwantedLadderNormal.Init();
 	m_unwantedLadderSince = 0.0f;
 	m_unwantedLadderLastTouch = 0.0f;
 
@@ -87,6 +54,48 @@ void PlayerLocomotion::Reset( void )
 	BaseClass::Reset();
 }
 
+
+// NEO-HARNESS-TEMP: forensic instrumentation only (see harness/patches/README.md). Emits one
+// NEO_FORENSIC_LADDER line per ladder-state transition, so an offline tool can tell an arrested
+// climb (still ASCENDING_LADDER) from a bot that slipped off and is re-approaching. The position
+// log alone cannot separate those. Never part of a PR.
+extern ConVar sv_neo_forensic_log;
+
+// NEO: what to do when the engine has put a bot on a ladder its own path never asked for.
+// `CGameMovement::LadderMove()` grabs any ladder the player's wish direction points at, while
+// `TraverseLadder()` drops the move type straight back to walking - so a path that merely brushes
+// past a ladder leaves the two fighting every tick, and the bot hangs there making no progress
+// and firing no stuck event. Measured on ntre_subsurface_ctg 2026-09-20.
+// Collapsed 2026-09-20 to the one strategy that won: adopt the ladder by its nearer end once the
+// contact has persisted. The six research modes this replaces (push off, plain adopt, slide, hold,
+// adopt-upward) are in this branch's history and in notes/ladder-reachability-2026-09-20.md; they
+// are not shipped, and there is deliberately no convar to switch the fix off - see the commit.
+
+// How long a bot must be held against a ladder it did not ask for before taking it over. Short
+// enough that a real snag is caught within half a second, long enough that the ordinary release
+// still handles the many contacts that clear themselves immediately.
+static const float LADDER_ADOPT_TIME = 0.5f;
+// A ladder further than this from the bot is not the one it is stuck on.
+static const float LADDER_TOUCH_RANGE = 64.0f;
+// A gap longer than this means the bot walked away and came back, so the bout starts over.
+static const float LADDER_CONTACT_RESET = 1.0f;
+
+// Indexed by PlayerLocomotion::LadderState, which is private - hence the array rather than a
+// switch over the enumerators.
+static const char *s_neoHarnessLadderStateNames[] =
+{
+	"none", "approach_up", "approach_down", "ascend", "descend", "dismount_top", "dismount_bottom"
+};
+
+static const char *NEOHarnessLadderStateName( int state )
+{
+	if ( state < 0 || state >= ARRAYSIZE( s_neoHarnessLadderStateNames ) )
+	{
+		return "?";
+	}
+
+	return s_neoHarnessLadderStateNames[state];
+}
 
 //-----------------------------------------------------------------------------------------------------
 /**
@@ -134,81 +143,36 @@ const CNavLadder *PlayerLocomotion::FindTouchedLadder( void ) const
  */
 bool PlayerLocomotion::HandleUnwantedLadder( void )
 {
-	const int mode = neo_bot_ladder_release_mode.GetInt();
-
-	if ( mode == LADDER_RELEASE_ENGINE )
-	{
-		return false;
-	}
-
 	const CNavLadder *ladder = FindTouchedLadder();
 	if ( ladder == NULL )
 	{
 		return false;
 	}
 
-	if ( mode == LADDER_RELEASE_PUSHOFF || mode == LADDER_RELEASE_SLIDE )
+	// Most grabs sort themselves out within a second, and adopting every one of them buys a lot of
+	// climbing nobody asked for. Only take the ladder over once the bot has actually been held
+	// against it.
+	const float now = gpGlobals->curtime;
+
+	if ( now - m_unwantedLadderLastTouch > LADDER_CONTACT_RESET )
 	{
-		m_unwantedLadderNormal = ladder->GetNormal();
-		m_unwantedLadderTimer.Start( neo_bot_ladder_release_time.GetFloat() );
+		m_unwantedLadderSince = now;
+	}
+
+	m_unwantedLadderLastTouch = now;
+
+	if ( now - m_unwantedLadderSince < LADDER_ADOPT_TIME )
+	{
 		return false;
 	}
 
-	if ( mode == LADDER_RELEASE_HOLD )
-	{
-		// Stop fighting at all: leave the move type alone and let the engine's own ladder movement
-		// carry the bot for a moment. Nothing here steers, which is the point.
-		if ( m_unwantedLadderTimer.HasStarted() && m_unwantedLadderTimer.IsElapsed() )
-		{
-			// held long enough and still here - fall back to letting go
-			m_unwantedLadderTimer.Invalidate();
-			return false;
-		}
-
-		if ( !m_unwantedLadderTimer.HasStarted() )
-		{
-			m_unwantedLadderTimer.Start( neo_bot_ladder_release_time.GetFloat() );
-		}
-
-		return true;
-	}
-
-	if ( mode == LADDER_RELEASE_ADOPT_STUCK )
-	{
-		// Most grabs sort themselves out within a second, and adopting every one of them buys a
-		// lot of climbing nobody asked for. Only take the ladder over once the bot has actually
-		// been stuck against it.
-		const float now = gpGlobals->curtime;
-
-		if ( now - m_unwantedLadderLastTouch > LADDER_CONTACT_RESET )
-		{
-			m_unwantedLadderSince = now;
-		}
-
-		m_unwantedLadderLastTouch = now;
-
-		if ( now - m_unwantedLadderSince < neo_bot_ladder_release_time.GetFloat() )
-		{
-			return false;
-		}
-	}
-
-	// LADDER_RELEASE_ADOPT: leave by the nearer end rather than argue about being here at all.
-	// Whichever end the bot is closer to is the one it can reach soonest, and the dismount goal
-	// has to be a real area or DismountLadderTop/Bottom has nothing to walk to.
-	bool bGoUp = ( GetFeet().z - ladder->m_bottom.z ) > ( ladder->m_top.z - GetFeet().z );
-
-	if ( mode == LADDER_RELEASE_ADOPT_UP )
-	{
-		// Adopting a descent at the foot of a ladder is a wasted round trip: DescendLadder sees
-		// "reached bottom" at once, dismounts, and the engine grabs again. Only climb.
-		if ( GetFeet().z > ladder->m_top.z - GetStepHeight() )
-		{
-			return false;
-		}
-
-		bGoUp = true;
-	}
+	// Leave by the nearer end rather than argue about being here at all. Whichever end the bot is
+	// closer to is the one it can reach soonest, and the dismount goal has to be a real area or
+	// DismountLadderTop/Bottom has nothing to walk to.
+	//
+	// Climbing out upward only was measured and is worse: it sends the bot somewhere it then has
+	// to come back from, and costs captures even though it reads better on the ladder numbers.
+	const bool bGoUp = ( GetFeet().z - ladder->m_bottom.z ) > ( ladder->m_top.z - GetFeet().z );
 
 	// A ladder's top is recorded in whichever of the three slots the generator filled, and plenty
 	// of them leave m_topForwardArea empty - reading only that slot silently skips those ladders.
@@ -236,31 +200,36 @@ bool PlayerLocomotion::HandleUnwantedLadder( void )
 //-----------------------------------------------------------------------------------------------------
 bool PlayerLocomotion::TraverseLadder( void )
 {
+	const LadderState stateBefore = m_ladderState;
+	const CNavLadder *pLadderBefore = m_ladderInfo;
+
+	bool bTraversing = true;
+
 	switch( m_ladderState )
 	{
 	case APPROACHING_ASCENDING_LADDER:
 		m_ladderState = ApproachAscendingLadder();
-		return true;
+		break;
 
 	case APPROACHING_DESCENDING_LADDER:
 		m_ladderState = ApproachDescendingLadder();
-		return true;
+		break;
 
 	case ASCENDING_LADDER:
 		m_ladderState = AscendLadder();
-		return true;
+		break;
 
 	case DESCENDING_LADDER:
 		m_ladderState = DescendLadder();
-		return true;
+		break;
 
 	case DISMOUNTING_LADDER_TOP:
 		m_ladderState = DismountLadderTop();
-		return true;
+		break;
 
 	case DISMOUNTING_LADDER_BOTTOM:
 		m_ladderState = DismountLadderBottom();
-		return true;
+		break;
 
 	case NO_LADDER:
 	default:
@@ -272,47 +241,35 @@ bool PlayerLocomotion::TraverseLadder( void )
 			// instead, in which case the state machine drives from here and we are done.
 			if ( HandleUnwantedLadder() )
 			{
-				return true;
+				bTraversing = true;
+				break;
 			}
 
 			GetBot()->GetEntity()->SetMoveType( MOVETYPE_WALK );
 		}
 
-		// Keep steering out of the ladder's face for a moment after letting go. Dropping the move
-		// type alone leaves the bot's wish direction pointing at the brush, which is exactly what
-		// LadderMove() traces against, so it grabs again on the very next tick.
-		if ( !m_unwantedLadderTimer.IsElapsed() )
-		{
-			Vector steer = m_unwantedLadderNormal;
-
-			if ( neo_bot_ladder_release_mode.GetInt() == LADDER_RELEASE_SLIDE )
-			{
-				// Backing straight off just hands the path a reason to walk back in, so keep the
-				// heading and take out only the part pushing into the ladder - the bot slides
-				// along the wall instead of pressing against it.
-				//
-				//   wall ##|  heading ->\        becomes  ##|  ->----
-				//        ##|             v                 ##|
-				steer = GetGroundMotionVector();
-				const float into = -DotProduct( steer, m_unwantedLadderNormal );
-				if ( into > 0.0f )
-				{
-					steer += into * m_unwantedLadderNormal;
-				}
-
-				if ( steer.NormalizeInPlace() < 0.1f )
-				{
-					// heading was straight into the wall and nothing survived the projection
-					steer = m_unwantedLadderNormal;
-				}
-			}
-
-			// it is important to approach precisely, so use a very large weight to wash out all other Approaches
-			Approach( GetFeet() + LADDER_PUSHOFF_RANGE * steer, 9999999.9f );
-		}
-
-		return false;
+		bTraversing = false;
+		break;
 	}
+
+	// NEO-HARNESS-TEMP
+	if ( sv_neo_forensic_log.GetBool() && m_ladderState != stateBefore )
+	{
+		const CNavLadder *pLadder = m_ladderInfo ? m_ladderInfo : pLadderBefore;
+		const Vector &vecFeet = GetFeet();
+
+		Msg( "NEO_FORENSIC_LADDER t=%.2f p=%d from=%s to=%s ladder=%d pos=%.0f,%.0f,%.0f "
+			"ladderbottom=%.0f laddertop=%.0f movetype=%d onground=%d\n",
+			gpGlobals->curtime, GetBot()->GetEntity()->entindex(),
+			NEOHarnessLadderStateName( stateBefore ), NEOHarnessLadderStateName( m_ladderState ),
+			pLadder ? pLadder->GetID() : -1,
+			vecFeet.x, vecFeet.y, vecFeet.z,
+			pLadder ? pLadder->m_bottom.z : 0.0f, pLadder ? pLadder->m_top.z : 0.0f,
+			(int)GetBot()->GetEntity()->GetMoveType(),
+			( GetBot()->GetEntity()->GetGroundEntity() != NULL ) ? 1 : 0 );
+	}
+
+	return bTraversing;
 
 	return true;
 }
