@@ -27,11 +27,15 @@ enum LadderReleaseMode
 	LADDER_RELEASE_ENGINE = 0,		// unchanged behaviour: drop the move type and nothing else
 	LADDER_RELEASE_PUSHOFF,			// let go, then steer out of the ladder's face so it cannot re-grab
 	LADDER_RELEASE_ADOPT,			// stop arguing - ride it to the nearer end and dismount there
+	LADDER_RELEASE_SLIDE,			// keep going, but with the into-the-wall part of the heading removed
+	LADDER_RELEASE_HOLD,			// stop fighting altogether: leave the move type alone for a moment
+	LADDER_RELEASE_ADOPT_UP,		// adopt, but only when there is somewhere above to climb to
 };
 
 ConVar neo_bot_ladder_release_mode( "neo_bot_ladder_release_mode", "0", FCVAR_CHEAT,
-	"How a bot leaves a ladder it never asked to be on: 0 engine behaviour, 1 push off, 2 adopt it.",
-	true, LADDER_RELEASE_ENGINE, true, LADDER_RELEASE_ADOPT );
+	"How a bot leaves a ladder it never asked to be on: 0 engine behaviour, 1 push off, 2 adopt it, "
+	"3 slide along it, 4 hold and stop fighting, 5 adopt only upward.",
+	true, LADDER_RELEASE_ENGINE, true, LADDER_RELEASE_ADOPT_UP );
 
 ConVar neo_bot_ladder_release_time( "neo_bot_ladder_release_time", "0.5", FCVAR_CHEAT,
 	"Seconds a bot keeps steering away from a ladder it just let go of.", true, 0.0f, true, 5.0f );
@@ -91,11 +95,16 @@ const CNavLadder *PlayerLocomotion::FindTouchedLadder( void ) const
 	const CNavLadder *best = NULL;
 	float bestRangeSq = LADDER_TOUCH_RANGE * LADDER_TOUCH_RANGE;
 
+	// The hull reaches a standing height above the feet, and the grab only needs the hull to touch
+	// the brush - so a bot standing on the floor well *below* a ladder whose foot hangs over a
+	// walkway is exactly the case to catch here, not one to filter out.
+	const float below = GetBot()->GetBodyInterface()->GetStandHullHeight();
+
 	for ( int i = 0; i < TheNavMesh->GetLadders().Count(); ++i )
 	{
 		const CNavLadder *ladder = TheNavMesh->GetLadders()[i];
 
-		if ( feet.z < ladder->m_bottom.z - GetStepHeight() || feet.z > ladder->m_top.z + GetStepHeight() )
+		if ( feet.z < ladder->m_bottom.z - below || feet.z > ladder->m_top.z + GetStepHeight() )
 		{
 			continue;
 		}
@@ -133,18 +142,58 @@ bool PlayerLocomotion::HandleUnwantedLadder( void )
 		return false;
 	}
 
-	if ( mode == LADDER_RELEASE_PUSHOFF )
+	if ( mode == LADDER_RELEASE_PUSHOFF || mode == LADDER_RELEASE_SLIDE )
 	{
 		m_unwantedLadderNormal = ladder->GetNormal();
 		m_unwantedLadderTimer.Start( neo_bot_ladder_release_time.GetFloat() );
 		return false;
 	}
 
+	if ( mode == LADDER_RELEASE_HOLD )
+	{
+		// Stop fighting at all: leave the move type alone and let the engine's own ladder movement
+		// carry the bot for a moment. Nothing here steers, which is the point.
+		if ( m_unwantedLadderTimer.HasStarted() && m_unwantedLadderTimer.IsElapsed() )
+		{
+			// held long enough and still here - fall back to letting go
+			m_unwantedLadderTimer.Invalidate();
+			return false;
+		}
+
+		if ( !m_unwantedLadderTimer.HasStarted() )
+		{
+			m_unwantedLadderTimer.Start( neo_bot_ladder_release_time.GetFloat() );
+		}
+
+		return true;
+	}
+
 	// LADDER_RELEASE_ADOPT: leave by the nearer end rather than argue about being here at all.
 	// Whichever end the bot is closer to is the one it can reach soonest, and the dismount goal
 	// has to be a real area or DismountLadderTop/Bottom has nothing to walk to.
-	const bool bGoUp = ( GetFeet().z - ladder->m_bottom.z ) > ( ladder->m_top.z - GetFeet().z );
-	const CNavArea *dismount = bGoUp ? ladder->m_topForwardArea : ladder->m_bottomArea;
+	bool bGoUp = ( GetFeet().z - ladder->m_bottom.z ) > ( ladder->m_top.z - GetFeet().z );
+
+	if ( mode == LADDER_RELEASE_ADOPT_UP )
+	{
+		// Adopting a descent at the foot of a ladder is a wasted round trip: DescendLadder sees
+		// "reached bottom" at once, dismounts, and the engine grabs again. Only climb.
+		if ( GetFeet().z > ladder->m_top.z - GetStepHeight() )
+		{
+			return false;
+		}
+
+		bGoUp = true;
+	}
+
+	// A ladder's top is recorded in whichever of the three slots the generator filled, and plenty
+	// of them leave m_topForwardArea empty - reading only that slot silently skips those ladders.
+	const CNavArea *dismount = ladder->m_bottomArea;
+
+	if ( bGoUp )
+	{
+		dismount = ladder->m_topForwardArea ? ladder->m_topForwardArea :
+			( ladder->m_topLeftArea ? ladder->m_topLeftArea : ladder->m_topRightArea );
+	}
 
 	if ( dismount == NULL )
 	{
@@ -209,8 +258,32 @@ bool PlayerLocomotion::TraverseLadder( void )
 		// LadderMove() traces against, so it grabs again on the very next tick.
 		if ( !m_unwantedLadderTimer.IsElapsed() )
 		{
+			Vector steer = m_unwantedLadderNormal;
+
+			if ( neo_bot_ladder_release_mode.GetInt() == LADDER_RELEASE_SLIDE )
+			{
+				// Backing straight off just hands the path a reason to walk back in, so keep the
+				// heading and take out only the part pushing into the ladder - the bot slides
+				// along the wall instead of pressing against it.
+				//
+				//   wall ##|  heading ->\        becomes  ##|  ->----
+				//        ##|             v                 ##|
+				steer = GetGroundMotionVector();
+				const float into = -DotProduct( steer, m_unwantedLadderNormal );
+				if ( into > 0.0f )
+				{
+					steer += into * m_unwantedLadderNormal;
+				}
+
+				if ( steer.NormalizeInPlace() < 0.1f )
+				{
+					// heading was straight into the wall and nothing survived the projection
+					steer = m_unwantedLadderNormal;
+				}
+			}
+
 			// it is important to approach precisely, so use a very large weight to wash out all other Approaches
-			Approach( GetFeet() + LADDER_PUSHOFF_RANGE * m_unwantedLadderNormal, 9999999.9f );
+			Approach( GetFeet() + LADDER_PUSHOFF_RANGE * steer, 9999999.9f );
 		}
 
 		return false;
