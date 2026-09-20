@@ -134,6 +134,8 @@ private:
 	const CNavLadder *FindTouchedLadder( void ) const;
 	CountdownTimer m_unwantedLadderTimer;	// how long to keep steering out of the ladder's face
 	Vector m_unwantedLadderNormal;
+	float m_unwantedLadderSince;			// when the current bout of unwanted contact began
+	float m_unwantedLadderLastTouch;		// last tick we were on a ladder we did not ask for
 
 	bool IsClimbPossible( INextBot *me, const CBaseEntity *obstacle ) const;
 };
