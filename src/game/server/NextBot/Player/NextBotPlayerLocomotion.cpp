@@ -30,12 +30,13 @@ enum LadderReleaseMode
 	LADDER_RELEASE_SLIDE,			// keep going, but with the into-the-wall part of the heading removed
 	LADDER_RELEASE_HOLD,			// stop fighting altogether: leave the move type alone for a moment
 	LADDER_RELEASE_ADOPT_UP,		// adopt, but only when there is somewhere above to climb to
+	LADDER_RELEASE_ADOPT_STUCK,		// adopt by the nearer end, but only once the contact has persisted
 };
 
 ConVar neo_bot_ladder_release_mode( "neo_bot_ladder_release_mode", "0", FCVAR_CHEAT,
 	"How a bot leaves a ladder it never asked to be on: 0 engine behaviour, 1 push off, 2 adopt it, "
-	"3 slide along it, 4 hold and stop fighting, 5 adopt only upward.",
-	true, LADDER_RELEASE_ENGINE, true, LADDER_RELEASE_ADOPT_UP );
+	"3 slide along it, 4 hold and stop fighting, 5 adopt only upward, 6 adopt once the contact sticks.",
+	true, LADDER_RELEASE_ENGINE, true, LADDER_RELEASE_ADOPT_STUCK );
 
 ConVar neo_bot_ladder_release_time( "neo_bot_ladder_release_time", "0.5", FCVAR_CHEAT,
 	"Seconds a bot keeps steering away from a ladder it just let go of.", true, 0.0f, true, 5.0f );
@@ -44,6 +45,8 @@ ConVar neo_bot_ladder_release_time( "neo_bot_ladder_release_time", "0.5", FCVAR_
 static const float LADDER_PUSHOFF_RANGE = 100.0f;
 // A ladder further than this from the bot is not the one it is stuck on.
 static const float LADDER_TOUCH_RANGE = 64.0f;
+// A gap longer than this means the bot walked away and came back, so the bout starts over.
+static const float LADDER_CONTACT_RESET = 1.0f;
 
 //-----------------------------------------------------------------------------------------------------
 PlayerLocomotion::PlayerLocomotion( INextBot *bot ) : ILocomotion( bot )
@@ -75,6 +78,8 @@ void PlayerLocomotion::Reset( void )
 
 	m_unwantedLadderTimer.Invalidate();
 	m_unwantedLadderNormal.Init();
+	m_unwantedLadderSince = 0.0f;
+	m_unwantedLadderLastTouch = 0.0f;
 
 	m_minSpeedLimit = 0.0f;
 	m_maxSpeedLimit = 9999999.9f;
@@ -166,6 +171,26 @@ bool PlayerLocomotion::HandleUnwantedLadder( void )
 		}
 
 		return true;
+	}
+
+	if ( mode == LADDER_RELEASE_ADOPT_STUCK )
+	{
+		// Most grabs sort themselves out within a second, and adopting every one of them buys a
+		// lot of climbing nobody asked for. Only take the ladder over once the bot has actually
+		// been stuck against it.
+		const float now = gpGlobals->curtime;
+
+		if ( now - m_unwantedLadderLastTouch > LADDER_CONTACT_RESET )
+		{
+			m_unwantedLadderSince = now;
+		}
+
+		m_unwantedLadderLastTouch = now;
+
+		if ( now - m_unwantedLadderSince < neo_bot_ladder_release_time.GetFloat() )
+		{
+			return false;
+		}
 	}
 
 	// LADDER_RELEASE_ADOPT: leave by the nearer end rather than argue about being here at all.
