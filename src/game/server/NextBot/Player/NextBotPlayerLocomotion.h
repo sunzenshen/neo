@@ -127,6 +127,14 @@ private:
 	const CNavArea *m_ladderDismountGoal;
 	CountdownTimer m_ladderTimer;			// a "give up" timer if things go awry
 
+	// NEO: a ladder the engine put us on that our own path never asked for. Releasing it is not
+	// enough on its own - CGameMovement::LadderMove() re-grabs from the bot's wish direction, so
+	// the two toggle each other until something steers away. See TraverseLadder().
+	bool HandleUnwantedLadder( void );
+	const CNavLadder *FindTouchedLadder( void ) const;
+	CountdownTimer m_unwantedLadderTimer;	// how long to keep steering out of the ladder's face
+	Vector m_unwantedLadderNormal;
+
 	bool IsClimbPossible( INextBot *me, const CBaseEntity *obstacle ) const;
 };
 
