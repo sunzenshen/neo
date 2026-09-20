@@ -24,6 +24,15 @@ ConVar neo_bot_path_penalty_jump_multiplier("neo_bot_path_penalty_jump_multiplie
 ConVar neo_bot_path_penalty_ladder_multiplier("neo_bot_path_penalty_ladder_multiplier", "3.0", FCVAR_CHEAT,
 	"Penalty multiplier for ladder traversal in pathfinding", true, 0.1f, false, 0.0f);
 
+// Only Recon stands in a 64-71 u space; Assault (65) and Support (70) have to duck through one,
+// which is slow and leaves them unable to shoot well. 1.0 is the old behaviour, so this is off
+// until deliberately raised.
+ConVar neo_bot_path_penalty_crouch_multiplier("neo_bot_path_penalty_crouch_multiplier", "1.0", FCVAR_CHEAT,
+	"Penalty multiplier for entering a NAV_MESH_CROUCH area, applied to every class but Recon. "
+	"1.0 is no penalty. A large value makes other classes route around crouch spaces where any "
+	"alternative exists, while still allowing one when it is the only way through.",
+	true, 1.0f, false, 0.0f);
+
 ConVar neo_bot_path_penalty_exposure_base("neo_bot_path_penalty_exposure_base", "5.0", FCVAR_CHEAT,
 	"General additional penalty per visible area for bots to avoid exposed areas", true, 0.0f, false, 0.0f);
 
@@ -97,6 +106,18 @@ float CNEOBotPathCost::operator()(CNavArea* baseArea, CNavArea* fromArea, const 
 	else
 	{
 		dist = (area->GetCenter() - fromArea->GetCenter()).Length();
+	}
+
+	// Ducking through a crouch space is slow and leaves a bot unable to fight. Recon is the only
+	// class whose standing hull fits one, so every other class pays to enter. The cost stays
+	// finite on purpose: where a crouch area is the only way through - a spawn door built to stop
+	// the JGR class ducking under it, say - the bot still takes it.
+	if (area->HasAttributes(NAV_MESH_CROUCH) && !fromArea->HasAttributes(NAV_MESH_CROUCH))
+	{
+		if (m_me->GetClass() != NEO_CLASS_RECON)
+		{
+			dist *= neo_bot_path_penalty_crouch_multiplier.GetFloat();
+		}
 	}
 
 	// Only apply height restrictions for non-ladder jump paths
