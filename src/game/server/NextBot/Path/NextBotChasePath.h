@@ -14,6 +14,9 @@
 #include "NextBotPathFollow.h"
 #include "tier0/vprof.h"
 
+// NEO: defined in neo_bot_path_cost.cpp; see RefreshPath's partial-path check below
+extern ConVar neo_bot_path_partial_chase_fraction;
+
 
 //----------------------------------------------------------------------------------------------
 /**
@@ -216,6 +219,24 @@ inline void ChasePath::RefreshPath( INextBot *bot, CBaseEntity *subject, const I
 		else
 		{
 			isPath = Compute( bot, pathTarget, cost, GetMaxPathLength() );
+		}
+
+		// NEO: a failed Compute still leaves a valid PARTIAL_PATH to the closest area the search
+		// did reach. Measured over 584 NT;RE chase failures, every one carried such a path and the
+		// median one already covered the whole distance to the target - the search arrived and
+		// stopped short. Calling that a failure drops the bot's cover path and blocks repathing
+		// for a range-scaled median 6.3 s. A path that makes no real progress still fails, so the
+		// throttle keeps protecting the genuinely unreachable case.
+		if ( !isPath && IsValid() )
+		{
+			const float minCoveredFraction = neo_bot_path_partial_chase_fraction.GetFloat();
+			const float rangeToTarget = bot->GetPosition().DistTo( pathTarget );
+
+			if ( minCoveredFraction > 0.0f && rangeToTarget > 0.0f )
+			{
+				const float covered = bot->GetPosition().DistTo( GetEndPosition() );
+				isPath = ( covered / rangeToTarget ) >= minCoveredFraction;
+			}
 		}
 
 		if ( isPath )

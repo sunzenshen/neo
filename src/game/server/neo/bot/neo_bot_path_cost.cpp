@@ -11,6 +11,13 @@ extern ConVar neo_bot_path_reservation_enable;
 ConVar neo_bot_path_around_friendly_cooldown("neo_bot_path_around_friendly_cooldown", "2.0", FCVAR_CHEAT,
 	"How often to check for friendly path dispersion", true, 0, true, 60);
 
+// Read by ChasePath::RefreshPath, which has no neo header of its own to declare it in.
+ConVar neo_bot_path_partial_chase_fraction("neo_bot_path_partial_chase_fraction", "0", FCVAR_NONE,
+	"Fraction of the way to a chase target that a failed path's partial path must already cover "
+	"to count as a path instead of a move-to-failure. 0 keeps the engine default, where every "
+	"failed Path::Compute is a failure even when it built a partial path that arrives.",
+	true, 0, true, 1);
+
 ConVar neo_bot_path_penalty_jump_multiplier("neo_bot_path_penalty_jump_multiplier", "100000.0", FCVAR_CHEAT,
 	"Maximum penalty multiplier for jump height changes in pathfinding", true, 0.01f, false, 0.0f);
 
