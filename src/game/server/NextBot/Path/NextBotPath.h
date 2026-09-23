@@ -219,6 +219,16 @@ public:
 		if ( count == 1 )
 		{
 			BuildTrivialPath( bot, subjectPos );
+#ifdef NEO
+			// The goal is unreachable and no area the search reached is nearer to it than the bot's
+			// own, so this straight line is a fallback, not a route. BuildTrivialPath reports it as
+			// COMPLETE_PATH, and callers that accept only a complete path (seek and destroy, ghost and
+			// juggernaut seek, follow, health, ammo) would walk it into whatever cuts the goal off.
+			if ( !pathResult )
+			{
+				OnPathChanged( bot, PARTIAL_PATH );
+			}
+#endif
 			return pathResult;
 		}
 
@@ -347,6 +357,16 @@ public:
 		if ( count == 1 )
 		{
 			BuildTrivialPath( bot, goal );
+#ifdef NEO
+			// The goal is unreachable and no area the search reached is nearer to it than the bot's
+			// own, so this straight line is a fallback, not a route. BuildTrivialPath reports it as
+			// COMPLETE_PATH, and callers that accept only a complete path (seek and destroy, ghost and
+			// juggernaut seek, follow, health, ammo) would walk it into whatever cuts the goal off.
+			if ( !pathResult )
+			{
+				OnPathChanged( bot, PARTIAL_PATH );
+			}
+#endif
 			return pathResult;
 		}
 
