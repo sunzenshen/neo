@@ -13,6 +13,13 @@
 ConVar neo_bot_ladder_mount_hop( "neo_bot_ladder_mount_hop", "0", FCVAR_CHEAT,
 	"Research: 1 = a bot aligned at a ladder's foot that has pushed forward without attaching hops onto the ladder" );
 
+// NEO-HARNESS-TEMP research arm (2026-09-24, patch 73): a ladder whose top landings are only to its sides (no forward or
+// behind area - transit ladder 2, saitama 2, apparatus 4) cannot be mounted going down by walking at its top point: the
+// walk runs along the ladder's face, and the engine only grabs a ladder the wish direction points into (lc2: 146 of 246
+// down-approach timeouts on those three). Step out in front of the face first, then move into it.
+ConVar neo_bot_ladder_side_mount( "neo_bot_ladder_side_mount", "0", FCVAR_CHEAT,
+	"Research: going down a ladder whose top landings are only at its sides, approach its face from the front" );
+
 // NEO-HARNESS-TEMP forensic instrumentation (2026-09-24): see NEO_FORENSIC_LADDERBEH in neo_bot_ladder_climb.cpp
 extern ConVar sv_neo_forensic_log;
 static void NeoLogLadderApproach( CNEOBot *me, const CNavLadder *ladder, bool goingUp, const char *reason )
@@ -117,6 +124,14 @@ ActionResult<CNEOBot> CNEOBotLadderApproach::Update( CNEOBot *me, float )
 		targetPos += m_ladder->GetNormal() * ( body->GetHullWidth() * 0.5f + HANG_CLEARANCE );
 	}
 
+	// patch 73: side-landing ladders are mounted going down from in front of the face
+	const bool bSideMount = !m_bGoingUp && neo_bot_ladder_side_mount.GetBool()
+		&& !m_ladder->m_topForwardArea && !m_ladder->m_topBehindArea;
+	if ( bSideMount )
+	{
+		targetPos = m_ladder->m_top + m_ladder->GetNormal() * ( body->GetHullWidth() * 0.5f + 2.0f );
+	}
+
 	// Calculate 2D vector from bot to ladder mount point
 	Vector2D to = ( targetPos - myPos ).AsVector2D();
 	float range = to.NormalizeInPlace();
@@ -188,7 +203,8 @@ ActionResult<CNEOBot> CNEOBotLadderApproach::Update( CNEOBot *me, float )
 		
 		// Pull the goal point outwards along the ladder's normal
 		// to guide bot movement along approach
-		float offsetDist = Clamp( range * 0.8f, 10.0f, ALIGN_RANGE );
+		// (patch 73: not for a side-landing descent - out along the normal is the open shaft in front of the ladder)
+		float offsetDist = bSideMount ? 0.0f : Clamp( range * 0.8f, 10.0f, ALIGN_RANGE );
 		goal.x += alignNormal.x * offsetDist;
 		goal.y += alignNormal.y * offsetDist;
 
@@ -203,7 +219,8 @@ ActionResult<CNEOBot> CNEOBotLadderApproach::Update( CNEOBot *me, float )
 	{
 		// Aligned (or going down and off the top), push forward to attach to the ladder
 		me->PressForwardButton();
-		mover->Approach( targetPos );
+		// patch 73: in front of a side-landing ladder's face, move into the face so the engine grabs it
+		mover->Approach( bSideMount ? m_ladder->m_top - m_ladder->GetNormal() * 16.0f : targetPos );
 
 		if ( m_bGoingUp && neo_bot_ladder_mount_hop.GetBool() )
 		{
