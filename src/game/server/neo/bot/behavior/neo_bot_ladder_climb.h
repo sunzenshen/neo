@@ -47,6 +47,7 @@ private:
 	CountdownTimer m_dismountTimer;
 	CountdownTimer m_nudgeTimer;	// patch 72: shimmying sideways past a snag
 	int m_nNudges = 0;
+	float m_flLateralTarget = 0.0f;	// patch 75: where across the ladder to hold the bot
 
 	static constexpr float STUCK_CHECK_INTERVAL = 0.4f;
 	static constexpr float STUCK_Z_TOLERANCE = 2.0f;
