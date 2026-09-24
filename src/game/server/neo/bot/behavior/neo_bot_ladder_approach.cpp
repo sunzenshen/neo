@@ -16,7 +16,8 @@ ConVar neo_bot_ladder_mount_hop( "neo_bot_ladder_mount_hop", "0", FCVAR_CHEAT,
 // NEO-HARNESS-TEMP research arm (2026-09-24, patch 73): a ladder whose top landings are only to its sides (no forward or
 // behind area - transit ladder 2, saitama 2, apparatus 4) cannot be mounted going down by walking at its top point: the
 // walk runs along the ladder's face, and the engine only grabs a ladder the wish direction points into (lc2: 146 of 246
-// down-approach timeouts on those three). Step out in front of the face first, then move into it.
+// down-approach timeouts on those three). Step out in front of the face first, then move into it. v1 pushed into the
+// face from the usual 25 u mount range, while the bot still stood on the landing (lc45: timeouts 129 -> 113).
 ConVar neo_bot_ladder_side_mount( "neo_bot_ladder_side_mount", "0", FCVAR_CHEAT,
 	"Research: going down a ladder whose top landings are only at its sides, approach its face from the front" );
 
@@ -148,7 +149,9 @@ ActionResult<CNEOBot> CNEOBotLadderApproach::Update( CNEOBot *me, float )
 	}
 
 	// Are we aligned and close enough to mount the ladder?
-	if ( range >= MOUNT_RANGE )
+	// (patch 73 v2: a side-landing descent must first walk off the landing to the point in front of the face - that point
+	// is over the shaft, and at the usual 25 u mount range the bot was still on the landing, pushing into the wall)
+	if ( range >= ( bSideMount ? 6.0f : MOUNT_RANGE ) )
 	{
 		m_pushTimer.Invalidate();
 
