@@ -27,7 +27,7 @@ public:
 	virtual ActionResult<CNEOBot> OnResume( CNEOBot *me, Action<CNEOBot> *interruptingAction ) override;
 
 private:
-	void EnterDismountPhase( CNEOBot *me );
+	void EnterDismountPhase( CNEOBot *me, const char *why = "" );
 	void ResolveExitArea( CNEOBot *me );
 	bool IsDismountBlocked( CNEOBot *me, const Vector &toExit ) const;
 	void ClaimLadder( CNEOBot *me ) const;
