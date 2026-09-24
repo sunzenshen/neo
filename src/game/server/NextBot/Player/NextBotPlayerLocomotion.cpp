@@ -272,6 +272,10 @@ bool PlayerLocomotion::TraverseLadder( void )
 }
 
 
+#ifdef NEO
+extern ConVar neo_bot_ladder_claim;	// NEO-HARNESS-TEMP research arm, patch 71 (neo_bot_ladder_climb.cpp)
+#endif
+
 //-----------------------------------------------------------------------------------------------------
 /**
  * We're close, but not yet on, this ladder - approach it
