@@ -88,6 +88,13 @@ static void NeoClaimLadder( CNEOBot *me, const CNavLadder *ladder, bool goingUp,
 ConVar neo_bot_ladder_stall_nudge( "neo_bot_ladder_stall_nudge", "0", FCVAR_CHEAT,
 	"Research: a ladder climb that stalls part-way shimmies sideways before jumping off" );
 
+// NEO-HARNESS-TEMP research arm (2026-09-24, patch 74): a threat seen while climbing makes the bot jump backwards off the
+// ladder to fight - also at the very top and while stepping off onto the landing, where the jump drops it back down the
+// shaft and the traversal is lost (lcf: bullet ladders 4 / 3 and dawn ladder 2 ended 46 / 36 / 22 up-climbs that way at the
+// top). Past halfway, or once dismounting, finish the ladder and fight from the landing.
+ConVar neo_bot_ladder_commit( "neo_bot_ladder_commit", "0", FCVAR_CHEAT,
+	"Research: past halfway up or down a ladder (or dismounting), a threat does not make the bot jump off" );
+
 CNEOBotLadderClimb::CNEOBotLadderClimb( const CNavLadder *ladder, bool goingUp )
 	: m_ladder( ladder ), m_bGoingUp( goingUp ), m_flLastZ( 0.0f ),
 	m_bDismountPhase( false ), m_bJumpedOffLadder( false ), m_pExitArea( nullptr )
@@ -326,7 +333,15 @@ ActionResult<CNEOBot> CNEOBotLadderClimb::Update( CNEOBot *me, float /*interval*
 	}
 
 	const CKnownEntity *threat = me->GetVisionInterface()->GetPrimaryKnownThreat(true);
-	if ( threat )
+	// patch 74: past halfway (or dismounting) the ladder is finished first
+	bool bCommitted = false;
+	if ( threat && neo_bot_ladder_commit.GetBool() && m_ladder->m_top.z > m_ladder->m_bottom.z )
+	{
+		const float flFrac = ( me->GetLocomotionInterface()->GetFeet().z - m_ladder->m_bottom.z ) / ( m_ladder->m_top.z - m_ladder->m_bottom.z );
+		bCommitted = m_bDismountPhase || ( m_bGoingUp ? flFrac > 0.5f : flFrac < 0.5f );
+	}
+
+	if ( threat && !bCommitted )
 	{
 		if ( me->IsDebugging( NEXTBOT_PATH ) )
 		{
