@@ -7,7 +7,79 @@
 // memdbgon must be the last include file in a .cpp file!!!
 #include "tier0/memdbgon.h"
 
+
+// NEO-HARNESS-TEMP forensic instrumentation (2026-09-24): one NEO_FORENSIC_LADDERBEH line per ladder behaviour ending,
+// with its reason, so an offline tool can count how climbs end (see harness/patches/README.md). Never part of a PR.
+extern ConVar sv_neo_forensic_log;
+static void NeoLogLadderBeh( CNEOBot *me, const char *beh, const CNavLadder *ladder, bool goingUp, const char *reason )
+{
+	if ( !sv_neo_forensic_log.GetBool() || !me )
+	{
+		return;
+	}
+	const Vector &feet = me->GetLocomotionInterface()->GetFeet();
+	Msg( "NEO_FORENSIC_LADDERBEH t=%.2f p=%d beh=%s dir=%s ladder=%d pos=%.0f,%.0f,%.0f ladderbottom=%.0f laddertop=%.0f movetype=%d onground=%d reason=%s\n",
+		gpGlobals->curtime, me->entindex(), beh, goingUp ? "up" : "down", ladder ? ladder->GetID() : -1,
+		feet.x, feet.y, feet.z, ladder ? ladder->m_bottom.z : 0.0f, ladder ? ladder->m_top.z : 0.0f,
+		(int)me->GetMoveType(), me->GetGroundEntity() ? 1 : 0, reason );
+}
+#define NEO_LADDER_DONE( reason ) ( NeoLogLadderBeh( me, "climb", m_ladder, m_bGoingUp, reason ), Done( reason ) )
+
 //---------------------------------------------------------------------------------------------
+// NEO-HARNESS-TEMP research arm (2026-09-23, patch 52)
+ConVar neo_bot_ladder_exit_closest( "neo_bot_ladder_exit_closest", "0", FCVAR_CHEAT,
+	"Research: dismount towards the exit area's point nearest the ladder end instead of its centre" );
+
+// NEO-HARNESS-TEMP research arm (2026-09-24, patch 71): tell the locomotion's ladder state machine that this ladder is
+// wanted, and which way. Without it PlayerLocomotion sees a bot on a ladder it never asked for: TraverseLadder() forces
+// the move type back to walking for up to half a second (LADDER_ADOPT_TIME) and then adopts the ladder by its NEARER end
+// - at a ladder's foot that is the bottom, so a bot the behaviour just mounted to climb gets driven down and off
+// (fc3: 2,047 climbs began through that adoption against 270 through ClimbLadder). v2 claims only once the bot is on the
+// ladder (LadderClimb::OnStart): v1 also claimed during the approach, and on a ladder whose foot hangs above the floor the
+// locomotion's APPROACHING state (which has no timeout) then pinned the bot under it for good (lc1: x1.20, one subsurface
+// spot 619 events).
+ConVar neo_bot_ladder_claim( "neo_bot_ladder_claim", "0", FCVAR_CHEAT,
+	"Research: the ladder behaviours call ClimbLadder / DescendLadder so the locomotion treats the ladder as wanted" );
+
+static const CNavArea *NeoLadderExitArea( const CNavLadder *ladder, bool goingUp )
+{
+	if ( !ladder )
+	{
+		return NULL;
+	}
+	if ( !goingUp )
+	{
+		return ladder->m_bottomArea;
+	}
+	return ladder->m_topForwardArea ? ladder->m_topForwardArea :
+		( ladder->m_topLeftArea ? ladder->m_topLeftArea : ( ladder->m_topRightArea ? ladder->m_topRightArea : ladder->m_topBehindArea ) );
+}
+
+static void NeoClaimLadder( CNEOBot *me, const CNavLadder *ladder, bool goingUp, const CNavArea *exitArea )
+{
+	if ( !neo_bot_ladder_claim.GetBool() || !me || !ladder )
+	{
+		return;
+	}
+	ILocomotion *mover = me->GetLocomotionInterface();
+	if ( mover->IsUsingLadder() )
+	{
+		return;
+	}
+	if ( !exitArea )
+	{
+		exitArea = NeoLadderExitArea( ladder, goingUp );
+	}
+	if ( goingUp )
+	{
+		mover->ClimbLadder( ladder, exitArea );
+	}
+	else
+	{
+		mover->DescendLadder( ladder, exitArea );
+	}
+}
+
 CNEOBotLadderClimb::CNEOBotLadderClimb( const CNavLadder *ladder, bool goingUp )
 	: m_ladder( ladder ), m_bGoingUp( goingUp ), m_flLastZ( 0.0f ),
 	m_bDismountPhase( false ), m_bJumpedOffLadder( false ), m_pExitArea( nullptr )
@@ -103,6 +175,9 @@ ActionResult<CNEOBot> CNEOBotLadderClimb::OnStart( CNEOBot *me, Action<CNEOBot> 
 	// Try to resolve the exit area from the current path early
 	ResolveExitArea( me );
 
+	// patch 71: the locomotion must know this ladder is wanted (see neo_bot_ladder_claim)
+	NeoClaimLadder( me, m_ladder, m_bGoingUp, m_pExitArea );
+
 	return Continue();
 }
 
@@ -139,6 +214,54 @@ void CNEOBotLadderClimb::ResolveExitArea( CNEOBot *me )
 		{
 			m_pExitArea = seg->area;
 			m_exitAreaCenter = m_pExitArea->GetCenter();
+
+			// NEO-HARNESS-TEMP research arm (2026-09-23, patch 52): step off towards where the exit area
+			// meets this end of the ladder, not towards its centre - on a long, narrow landing (ghost's
+			// ladder-1 catwalk, 25 x 125 u) the centre lies off to one side, and the dismount kick
+			// along it carries the bot past the landing's edge
+			if ( neo_bot_ladder_exit_closest.GetBool() )
+			{
+				// The exit is the area this ladder lands on, not whatever the path follower has moved on to:
+				// by the time the dismount starts the path's current goal can already be the area after the
+				// landing (ghost ladder 1: 1499, south along the catwalk, instead of the landing 930)
+				CNavArea *ends[4] = { m_ladder->m_topForwardArea, m_ladder->m_topLeftArea, m_ladder->m_topRightArea, m_ladder->m_topBehindArea };
+				int nEnds = 4;
+				if ( !m_bGoingUp )
+				{
+					ends[0] = m_ladder->m_bottomArea;
+					nEnds = 1;
+				}
+				bool bIsLadderEnd = false;
+				CNavArea *pFirstEnd = NULL;
+				for ( int e = 0; e < nEnds; ++e )
+				{
+					bIsLadderEnd |= ( ends[e] == m_pExitArea );
+					if ( !pFirstEnd && ends[e] )
+						pFirstEnd = ends[e];
+				}
+				if ( !bIsLadderEnd && pFirstEnd )
+				{
+					// prefer a landing the path passes through
+					CNavArea *pOnPath = NULL;
+					for ( const Path::Segment *s = path->FirstSegment(); s && !pOnPath; s = path->NextSegment( s ) )
+						for ( int e = 0; e < nEnds && !pOnPath; ++e )
+							if ( ends[e] && s->area == ends[e] )
+								pOnPath = ends[e];
+					m_pExitArea = pOnPath ? pOnPath : pFirstEnd;
+					m_exitAreaCenter = m_pExitArea->GetCenter();
+				}
+
+				const Vector &ladderEnd = m_bGoingUp ? m_ladder->m_top : m_ladder->m_bottom;
+				Vector closest;
+				m_pExitArea->GetClosestPointOnArea( ladderEnd, &closest );
+				// into the wall at the top (where the landing is), away from it at the bottom
+				Vector inward = m_bGoingUp ? m_ladderForward : -m_ladderForward; inward.z = 0.0f;
+				if ( inward.NormalizeInPlace() > 0.0f )
+				{
+					closest += inward * 16.0f;
+				}
+				m_pExitArea->GetClosestPointOnArea( closest, &m_exitAreaCenter );
+			}
 		}
 	}
 }
@@ -150,7 +273,7 @@ ActionResult<CNEOBot> CNEOBotLadderClimb::Update( CNEOBot *me, float /*interval*
 {
 	if ( m_timeoutTimer.IsElapsed() )
 	{
-		return Done( "Ladder climb timeout" );
+		return NEO_LADDER_DONE( "Ladder climb timeout" );
 	}
 
 	const CKnownEntity *threat = me->GetVisionInterface()->GetPrimaryKnownThreat(true);
@@ -164,6 +287,7 @@ ActionResult<CNEOBot> CNEOBotLadderClimb::Update( CNEOBot *me, float /*interval*
 		me->PressJumpButton();
 		me->PressBackwardButton(0.1f);
 		// ChangeTo: We may move away from ladder when fighting, reevaluate later
+		NeoLogLadderBeh( me, "climb", m_ladder, m_bGoingUp, "threat" );
 		return ChangeTo( new CNEOBotAttack, "Interrupting climb to engage enemy" );
 	}
 
@@ -199,7 +323,7 @@ ActionResult<CNEOBot> CNEOBotLadderClimb::Update( CNEOBot *me, float /*interval*
 	{
 		if ( mover->IsOnGround() )
 		{
-			return Done( "Reached the ground, ending climb" );
+			return NEO_LADDER_DONE( "Reached the ground, ending climb" );
 		}
 		
 		if ( !m_bDismountPhase && !m_bJumpedOffLadder )
@@ -208,7 +332,7 @@ ActionResult<CNEOBot> CNEOBotLadderClimb::Update( CNEOBot *me, float /*interval*
 			CalcClosestPointOnLineSegment( myPos, m_ladder->m_bottom, m_ladder->m_top, ladderClosestPoint );
 			if ( myPos.DistToSqr( ladderClosestPoint ) > Square( MAX_DEVIATION_DIST ) )
 			{
-				return Done( "Fallen too far from ladder, resetting" );
+				return NEO_LADDER_DONE( "Fallen too far from ladder, resetting" );
 			}
 		}
 	}
@@ -244,7 +368,7 @@ ActionResult<CNEOBot> CNEOBotLadderClimb::Update( CNEOBot *me, float /*interval*
 					}
 					me->PressJumpButton();
 					me->PressBackwardButton(0.1f);
-					return Done( "Got stuck on something climbing the ladder, jumping off to reset." );
+					return NEO_LADDER_DONE( "Got stuck on something climbing the ladder, jumping off to reset." );
 				}
 			}
 			m_flLastZ = currentZ;
@@ -343,15 +467,20 @@ ActionResult<CNEOBot> CNEOBotLadderClimb::Update( CNEOBot *me, float /*interval*
 	if ( m_bDismountPhase )
 	{
 		// Reached the target NavArea after the ladder
-		if ( m_pExitArea && me->GetLastKnownArea() == m_pExitArea )
+		// NEO-HARNESS-TEMP research arm (patch 52): the last known area switches to the exit area while
+		// the bot is still in the air beside it (ghost ladder 1: 29 u off the catwalk's edge, over a
+		// drop); only finish once it stands on the exit area itself
+		const bool bOnExit = !neo_bot_ladder_exit_closest.GetBool()
+			|| ( mover->IsOnGround() && m_pExitArea && m_pExitArea->IsOverlapping( myPos, 0.0f ) );
+		if ( m_pExitArea && me->GetLastKnownArea() == m_pExitArea && bOnExit )
 		{
-			return Done( "Reached next NavArea after dismount" );
+			return NEO_LADDER_DONE( "Reached next NavArea after dismount" );
 		}
 
 		// Safety timeout
 		if ( m_dismountTimer.IsElapsed() )
 		{
-			return Done( "Dismount walk timed out" );
+			return NEO_LADDER_DONE( "Dismount walk timed out" );
 		}
 
 		// Build look target toward exit area center with vertical bias preserved
@@ -421,7 +550,7 @@ ActionResult<CNEOBot> CNEOBotLadderClimb::Update( CNEOBot *me, float /*interval*
 			
 			if ( mover->IsOnGround() )
 			{
-				return Done( "Dismounted to ground" );
+				return NEO_LADDER_DONE( "Dismounted to ground" );
 			}
 		}
 	}

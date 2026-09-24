@@ -33,6 +33,8 @@ private:
 	bool m_bGoingUp;
 	Vector m_ladderCenter;
 	CountdownTimer m_timeoutTimer;
+	IntervalTimer m_pushTimer;	// patch 63: pushing into the ladder's foot since
+	CountdownTimer m_hopTimer;
 
 	static constexpr float MOUNT_RANGE = 25.0f;         // Distance to start climbing
 	static constexpr float ALIGN_DOT_THRESHOLD = -0.9f;	// cos(~25 degrees) alignment tolerance

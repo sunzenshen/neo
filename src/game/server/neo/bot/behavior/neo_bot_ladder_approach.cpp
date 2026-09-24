@@ -7,6 +7,27 @@
 // memdbgon must be the last include file in a .cpp file!!!
 #include "tier0/memdbgon.h"
 
+// NEO research (patch 63): some ladders' climbable volume starts above the floor (a nodraw kick block at the foot),
+// so a bot standing at the foot pressing forward never attaches - it presses into the block until the approach times
+// out, then the path sends it back (skyline ladder 1, bullet ladder 1: every run). Players hop onto such ladders.
+ConVar neo_bot_ladder_mount_hop( "neo_bot_ladder_mount_hop", "0", FCVAR_CHEAT,
+	"Research: 1 = a bot aligned at a ladder's foot that has pushed forward without attaching hops onto the ladder" );
+
+// NEO-HARNESS-TEMP forensic instrumentation (2026-09-24): see NEO_FORENSIC_LADDERBEH in neo_bot_ladder_climb.cpp
+extern ConVar sv_neo_forensic_log;
+static void NeoLogLadderApproach( CNEOBot *me, const CNavLadder *ladder, bool goingUp, const char *reason )
+{
+	if ( !sv_neo_forensic_log.GetBool() || !me )
+	{
+		return;
+	}
+	const Vector &feet = me->GetLocomotionInterface()->GetFeet();
+	Msg( "NEO_FORENSIC_LADDERBEH t=%.2f p=%d beh=approach dir=%s ladder=%d pos=%.0f,%.0f,%.0f ladderbottom=%.0f laddertop=%.0f movetype=%d onground=%d reason=%s\n",
+		gpGlobals->curtime, me->entindex(), goingUp ? "up" : "down", ladder ? ladder->GetID() : -1,
+		feet.x, feet.y, feet.z, ladder ? ladder->m_bottom.z : 0.0f, ladder ? ladder->m_top.z : 0.0f,
+		(int)me->GetMoveType(), me->GetGroundEntity() ? 1 : 0, reason );
+}
+
 //---------------------------------------------------------------------------------------------
 CNEOBotLadderApproach::CNEOBotLadderApproach( const CNavLadder *ladder, bool goingUp )
 	: m_ladder( ladder ), m_bGoingUp( goingUp )
@@ -47,11 +68,13 @@ ActionResult<CNEOBot> CNEOBotLadderApproach::Update( CNEOBot *me, float )
 {
 	if ( !m_ladder )
 	{
+		NeoLogLadderApproach( me, m_ladder, m_bGoingUp, "Ladder is invalid" );
 		return Done( "Ladder is invalid" );
 	}
 
 	if ( m_timeoutTimer.IsElapsed() )
 	{
+		NeoLogLadderApproach( me, m_ladder, m_bGoingUp, "Ladder approach timeout" );
 		return Done( "Ladder approach timeout" );
 	}
 
@@ -63,6 +86,7 @@ ActionResult<CNEOBot> CNEOBotLadderApproach::Update( CNEOBot *me, float )
 			DevMsg( "%s: Threat detected during ladder approach - engaging\n", me->GetDebugIdentifier() );
 		}
 		// ChangeTo: We may move away from ladder when fighting, so don't want to get stuck in ladder approach behavior
+		NeoLogLadderApproach( me, m_ladder, m_bGoingUp, "threat" );
 		return ChangeTo( new CNEOBotAttack(), "Engaging enemy before climbing" );
 	}
 
@@ -80,6 +104,7 @@ ActionResult<CNEOBot> CNEOBotLadderApproach::Update( CNEOBot *me, float )
 
 	if ( distToExitSq < distToEntrySq )
 	{
+		NeoLogLadderApproach( me, m_ladder, m_bGoingUp, "Closer to ladder exit than entry, assuming goal reached accidentally" );
 		return Done( "Closer to ladder exit than entry, assuming goal reached accidentally" );
 	}
 
@@ -110,6 +135,8 @@ ActionResult<CNEOBot> CNEOBotLadderApproach::Update( CNEOBot *me, float )
 	// Are we aligned and close enough to mount the ladder?
 	if ( range >= MOUNT_RANGE )
 	{
+		m_pushTimer.Invalidate();
+
 		// Perpendicular alignment line
 		Vector2D alignNormal = ladderNormal2D;
 		if ( dot > 0.0f )
@@ -147,6 +174,7 @@ ActionResult<CNEOBot> CNEOBotLadderApproach::Update( CNEOBot *me, float )
 			// there can be a delay in the state change, so momentum can cause a fall
 			me->SetAbsVelocity( vec3_origin );
 			// ChangeTo: if something goes wrong during climb, reevaluate situation
+			NeoLogLadderApproach( me, m_ladder, m_bGoingUp, "mounted" );
 			return ChangeTo( new CNEOBotLadderClimb( m_ladder, m_bGoingUp ), "Mounting ladder" );
 		}
 		else if ( !m_bGoingUp || dot < ALIGN_DOT_THRESHOLD )
@@ -154,6 +182,20 @@ ActionResult<CNEOBot> CNEOBotLadderApproach::Update( CNEOBot *me, float )
 			// Aligned (or going down), push forward to attach to the ladder
 			me->PressForwardButton();
 			mover->Approach( targetPos );
+
+			if ( m_bGoingUp && neo_bot_ladder_mount_hop.GetBool() )
+			{
+				// pushed into the foot without attaching: hop onto the rungs
+				if ( !m_pushTimer.HasStarted() )
+				{
+					m_pushTimer.Start();
+				}
+				else if ( m_pushTimer.IsGreaterThen( 0.4f ) && mover->IsOnGround() && ( !m_hopTimer.HasStarted() || m_hopTimer.IsElapsed() ) )
+				{
+					me->PressJumpButton();
+					m_hopTimer.Start( 0.8f );
+				}
+			}
 		}
 		else
 		{
