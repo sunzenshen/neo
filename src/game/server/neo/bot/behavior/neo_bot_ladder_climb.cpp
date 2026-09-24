@@ -80,6 +80,14 @@ static void NeoClaimLadder( CNEOBot *me, const CNavLadder *ladder, bool goingUp,
 	}
 }
 
+// NEO-HARNESS-TEMP research arm (2026-09-24, patch 72): a climb that stops rising part-way is usually snagged on
+// something at the ladder's edge rather than blocked outright - subsurface ladder 1's landing plate overlaps the column
+// by ~1 u, so a bot centred on the nav ladder heads into its underside at the same height every time while one 2 u off
+// centre climbs past (lc2: 169 of 198 mid-climb stall endings there). Before giving up, shimmy sideways - right, then
+// back left past the start, then right again - and only jump off if none of that restores the climb.
+ConVar neo_bot_ladder_stall_nudge( "neo_bot_ladder_stall_nudge", "0", FCVAR_CHEAT,
+	"Research: a ladder climb that stalls part-way shimmies sideways before jumping off" );
+
 CNEOBotLadderClimb::CNEOBotLadderClimb( const CNavLadder *ladder, bool goingUp )
 	: m_ladder( ladder ), m_bGoingUp( goingUp ), m_flLastZ( 0.0f ),
 	m_bDismountPhase( false ), m_bJumpedOffLadder( false ), m_pExitArea( nullptr )
@@ -358,6 +366,14 @@ ActionResult<CNEOBot> CNEOBotLadderClimb::Update( CNEOBot *me, float /*interval*
 					EnterDismountPhase( me );
 					return Continue();
 				}
+				else if ( neo_bot_ladder_stall_nudge.GetBool() && m_nNudges < 3 )
+				{
+					// patch 72: snagged part-way - shimmy sideways (right, left past the start, right) before giving up
+					++m_nNudges;
+					m_nudgeTimer.Start( 0.3f * m_nNudges );
+					m_flLastZ = currentZ;
+					m_stuckTimer.Start( STUCK_CHECK_INTERVAL + 0.3f * m_nNudges );
+				}
 				else
 				{
 					// We are stuck mid-climb. Reset scenario by jumping backwards and ending condition
@@ -459,6 +475,19 @@ ActionResult<CNEOBot> CNEOBotLadderClimb::Update( CNEOBot *me, float /*interval*
 		body->AimHeadTowards( lookTarget, IBody::MANDATORY, 0.1f, nullptr,
 			m_bGoingUp ? "Climbing up (looking at dismount position)" : "Climbing down (looking at dismount position)" );
 		me->PressForwardButton(0.1f);
+
+		// patch 72: shimmy sideways while a nudge is running
+		if ( onLadder && m_nudgeTimer.HasStarted() && !m_nudgeTimer.IsElapsed() )
+		{
+			if ( m_nNudges % 2 )
+			{
+				me->PressRightButton( 0.1f );
+			}
+			else
+			{
+				me->PressLeftButton( 0.1f );
+			}
+		}
 	}
 
 	//------------------------------------------------------------

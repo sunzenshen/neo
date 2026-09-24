@@ -45,6 +45,8 @@ private:
 	CountdownTimer m_timeoutTimer;
 	CountdownTimer m_stuckTimer;
 	CountdownTimer m_dismountTimer;
+	CountdownTimer m_nudgeTimer;	// patch 72: shimmying sideways past a snag
+	int m_nNudges = 0;
 
 	static constexpr float STUCK_CHECK_INTERVAL = 0.4f;
 	static constexpr float STUCK_Z_TOLERANCE = 2.0f;
