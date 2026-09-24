@@ -95,6 +95,13 @@ ConVar neo_bot_ladder_stall_nudge( "neo_bot_ladder_stall_nudge", "0", FCVAR_CHEA
 ConVar neo_bot_ladder_commit( "neo_bot_ladder_commit", "0", FCVAR_CHEAT,
 	"Research: past halfway up or down a ladder (or dismounting), a threat does not make the bot jump off" );
 
+// NEO-HARNESS-TEMP research arm (2026-09-24, patch 75): bots drift sideways off a ladder's edge and slip off part-way -
+// on the 16 u ladders (sentinel 7, apparatus 22) 14 of 16 and 8 of 14 mid-climb slips happened beyond the half-width, and
+// patch 72's timed strafes overshot subsurface ladder 1 by ~21 u. Hold the bot across the ladder: steer it back towards a
+// lateral target inside the ladder's width (the centre; with patch 72, its shimmy moves the target to +4 / -4 / +8 u).
+ConVar neo_bot_ladder_lateral_hold( "neo_bot_ladder_lateral_hold", "0", FCVAR_CHEAT,
+	"Research: keep a climbing bot within the ladder's width (and make the stall shimmy move to fixed offsets)" );
+
 CNEOBotLadderClimb::CNEOBotLadderClimb( const CNavLadder *ladder, bool goingUp )
 	: m_ladder( ladder ), m_bGoingUp( goingUp ), m_flLastZ( 0.0f ),
 	m_bDismountPhase( false ), m_bJumpedOffLadder( false ), m_pExitArea( nullptr )
@@ -440,7 +447,15 @@ ActionResult<CNEOBot> CNEOBotLadderClimb::Update( CNEOBot *me, float /*interval*
 				{
 					// patch 72: snagged part-way - shimmy sideways (right, left past the start, right) before giving up
 					++m_nNudges;
-					m_nudgeTimer.Start( 0.3f * m_nNudges );
+					if ( neo_bot_ladder_lateral_hold.GetBool() )
+					{
+						// patch 75: to fixed offsets across the ladder rather than timed strafes
+						m_flLateralTarget = ( m_nNudges == 1 ) ? 4.0f : ( m_nNudges == 2 ? -4.0f : 8.0f );
+					}
+					else
+					{
+						m_nudgeTimer.Start( 0.3f * m_nNudges );
+					}
 					m_flLastZ = currentZ;
 					m_stuckTimer.Start( STUCK_CHECK_INTERVAL + 0.3f * m_nNudges );
 				}
@@ -561,8 +576,26 @@ ActionResult<CNEOBot> CNEOBotLadderClimb::Update( CNEOBot *me, float /*interval*
 			me->PressForwardButton(0.1f);
 		}
 
+		// patch 75: hold the bot across the ladder, at m_flLateralTarget inside its width
+		if ( onLadder && neo_bot_ladder_lateral_hold.GetBool() )
+		{
+			const Vector normal = m_ladder->GetNormal();
+			const Vector lateral( -normal.y, normal.x, 0.0f );	// the right hand of a bot facing into the ladder
+			const Vector center = m_ladder->GetPosAtHeight( myPos.z );
+			const float flLat = DotProduct( myPos - center, lateral );
+			const float flHalf = MAX( 0.0f, m_ladder->m_width * 0.5f - 2.0f );
+			const float flErr = flLat - Clamp( m_flLateralTarget, -flHalf, flHalf );
+			if ( flErr > 3.0f )
+			{
+				me->PressLeftButton( 0.1f );
+			}
+			else if ( flErr < -3.0f )
+			{
+				me->PressRightButton( 0.1f );
+			}
+		}
 		// patch 72: shimmy sideways while a nudge is running
-		if ( onLadder && m_nudgeTimer.HasStarted() && !m_nudgeTimer.IsElapsed() )
+		else if ( onLadder && m_nudgeTimer.HasStarted() && !m_nudgeTimer.IsElapsed() )
 		{
 			if ( m_nNudges % 2 )
 			{
