@@ -127,6 +127,21 @@ ConVar neo_bot_ladder_moveup( "neo_bot_ladder_moveup", "0", FCVAR_CHEAT,
 	"Research: the ladder climb's MoveUp / MoveDown presses actually reach the user command (climb along the ladder, not the view)" );
 static constexpr float NEO_LADDER_VERTICAL_PRESS = 0.25f;
 
+// NEO-HARNESS-TEMP research arm (2026-09-24, patch 77): OnStart's teleport fallback leaves the hull 2 u off the ladder face
+// - exactly CGameMovement::LadderDistance(), so the engine's next ladder trace ends on the face, misses, and drops the bot
+// to walking before its first climbing update (lcg: teleported mounts go ascend -> none 0.14 s later, bullet ladder 2 97
+// of 301). Place it half the grab distance off the face instead.
+ConVar neo_bot_ladder_teleport_grab( "neo_bot_ladder_teleport_grab", "0", FCVAR_CHEAT,
+	"Research: the ladder climb's teleport fallback places the bot inside the engine's ladder grab distance" );
+static constexpr float NEO_LADDER_GRAB_DIST = 2.0f;	// CGameMovement::LadderDistance()
+
+// NEO-HARNESS-TEMP research arm (2026-09-24, patch 78): the locomotion drops its claim the moment the engine reports the bot
+// off the ladder, even for a tick; when the climb carries on and the engine re-attaches it, the locomotion sees a ladder it
+// never asked for, forces walking every update and after half a second adopts the ladder by its nearer end - mid-climb
+// often the bottom (lcg: subsurface ladder 1, 33 of its 41 such climbs failed). Re-claim while climbing.
+ConVar neo_bot_ladder_reclaim( "neo_bot_ladder_reclaim", "0", FCVAR_CHEAT,
+	"Research: a climbing bot the engine has on the ladder re-claims it when the locomotion has let go" );
+
 CNEOBotLadderClimb::CNEOBotLadderClimb( const CNavLadder *ladder, bool goingUp )
 	: m_ladder( ladder ), m_bGoingUp( goingUp ), m_flLastZ( 0.0f ),
 	m_bDismountPhase( false ), m_bJumpedOffLadder( false ), m_pExitArea( nullptr )
@@ -192,7 +207,9 @@ ActionResult<CNEOBot> CNEOBotLadderClimb::OnStart( CNEOBot *me, Action<CNEOBot> 
 
 			Vector idealPos = m_ladder->GetPosAtHeight( m_flLastZ );
 			// Offset slightly from the ladder surface based on the bot's collision box
-			float offsetDist = me->CollisionProp()->OBBSize().x / 2.0f + 2.0f;
+			// (patch 77: inside the engine's grab distance, see neo_bot_ladder_teleport_grab)
+			const float flFaceGap = neo_bot_ladder_teleport_grab.GetBool() ? NEO_LADDER_GRAB_DIST * 0.5f : 2.0f;
+			float offsetDist = me->CollisionProp()->OBBSize().x / 2.0f + flFaceGap;
 			idealPos += m_ladder->GetNormal() * offsetDist;
 			idealPos.z = m_flLastZ;
 
