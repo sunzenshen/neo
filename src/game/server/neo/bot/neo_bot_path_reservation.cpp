@@ -29,6 +29,22 @@ ConVar neo_bot_path_reservation_avoid_penalty_enable("neo_bot_path_reservation_a
 ConVar neo_bot_path_reservation_killed_penalty("neo_bot_path_reservation_killed_penalty", "10", FCVAR_NONE,
     "Path selection penalty added to a nav area each time a bot dies moving through that area.", true, 0, false, 0);
 
+// NEO-HARNESS-TEMP research arm (2026-09-23): crossing memory; 0 = off (upstream behaviour)
+ConVar neo_bot_path_crossing_stuck_penalty("neo_bot_path_crossing_stuck_penalty", "0", FCVAR_CHEAT,
+    "Research: path cost added to a nav crossing each time a bot gets stuck making it (0 = off)", true, 0, false, 0);
+ConVar neo_bot_path_crossing_stuck_memory("neo_bot_path_crossing_stuck_memory", "60", FCVAR_CHEAT,
+    "Research: seconds a failed crossing stays penalised after its last failure", true, 0, false, 0);
+
+// NEO-HARNESS-TEMP research arm (2026-09-23, patch 50): soft path cost for areas under physics props
+ConVar neo_bot_path_prop_obstacle_cost("neo_bot_path_prop_obstacle_cost", "0", FCVAR_CHEAT,
+    "Research: an area's path cost is multiplied by 1 + this x the share of it covered by solid physics props (0 = off)", true, 0, false, 0);
+ConVar neo_bot_path_prop_obstacle_min_size("neo_bot_path_prop_obstacle_min_size", "16", FCVAR_CHEAT,
+    "Research: physics props smaller than this in both horizontal extents are ignored", true, 0, false, 0);
+ConVar neo_bot_path_prop_obstacle_all_entities("neo_bot_path_prop_obstacle_all_entities", "0", FCVAR_CHEAT,
+    "Research: prop_dynamic and func_physbox count as obstacles too, not only prop_physics");
+ConVar neo_bot_path_prop_obstacle_log("neo_bot_path_prop_obstacle_log", "0", FCVAR_CHEAT,
+    "Research: log each covered area (NEO_FORENSIC_PROPOBST) when the coverage is refreshed");
+
 ConVar neo_bot_path_reservation_onstuck_penalty("neo_bot_path_reservation_onstuck_penalty", "1000", FCVAR_NONE,
     "Path selection penalty added to a nav area each time a bot gets stuck moving through that area.", true, 0, false, 0);
 
@@ -193,6 +209,13 @@ void CNEOBotPathReservationSystem::Clear()
 {
     ClearRound();
     m_AreaAvoidPenalties.RemoveAll();
+    m_CrossingAvoidPenalties.RemoveAll();
+    for (int team = 0; team < TEAM__TOTAL; ++team)
+    {
+        m_DoorCrossingExpiry[team].RemoveAll();
+    }
+    m_PropObstacleFraction.RemoveAll();
+    m_flNextPropObstacleUpdate = 0.0f;
 }
 
 //--------------------------------------------------------------------------------------------------------------
@@ -263,6 +286,100 @@ float CNEOBotPathReservationSystem::GetAreaAvoidPenalty(unsigned int navAreaID) 
         return m_AreaAvoidPenalties[index];
     }
     return 0.0f;
+}
+
+//-------------------------------------------------------------------------------------------------
+static uint64 CrossingKey( unsigned int fromAreaID, unsigned int toAreaID )
+{
+    return ( (uint64)fromAreaID << 32 ) | toAreaID;
+}
+
+//-------------------------------------------------------------------------------------------------
+void CNEOBotPathReservationSystem::IncrementCrossingAvoidPenalty(unsigned int fromAreaID, unsigned int toAreaID, float penaltyAmount)
+{
+    const uint64 key = CrossingKey( fromAreaID, toAreaID );
+    unsigned short index = m_CrossingAvoidPenalties.Find( key );
+    if ( index == m_CrossingAvoidPenalties.InvalidIndex() )
+    {
+        CrossingAvoidInfo_t info = { 0.0f, 0.0f };
+        index = m_CrossingAvoidPenalties.Insert( key, info );
+    }
+    else if ( gpGlobals->curtime - m_CrossingAvoidPenalties[index].lastFailTime > neo_bot_path_crossing_stuck_memory.GetFloat() )
+    {
+        m_CrossingAvoidPenalties[index].penalty = 0.0f; // expired: start over
+    }
+
+    m_CrossingAvoidPenalties[index].penalty += penaltyAmount;
+    m_CrossingAvoidPenalties[index].lastFailTime = gpGlobals->curtime;
+}
+
+//-------------------------------------------------------------------------------------------------
+ConVar neo_bot_stuck_door_penalty("neo_bot_stuck_door_penalty", "0", FCVAR_CHEAT,
+    "Research: path cost added to a crossing where a bot got stuck against a closed, motionless door, for its team (0 = off)");
+ConVar neo_bot_stuck_door_memory("neo_bot_stuck_door_memory", "30", FCVAR_CHEAT,
+    "Research: seconds a stuck-door crossing stays penalised for the team (refreshed by each new stuck)");
+
+void CNEOBotPathReservationSystem::BlockDoorCrossing(unsigned int fromAreaID, unsigned int toAreaID, int teamID)
+{
+    if ( teamID < 0 || teamID >= TEAM__TOTAL )
+        return;
+    const uint64 key = CrossingKey( fromAreaID, toAreaID );
+    const float expiry = gpGlobals->curtime + neo_bot_stuck_door_memory.GetFloat();
+    unsigned short index = m_DoorCrossingExpiry[teamID].Find( key );
+    if ( index == m_DoorCrossingExpiry[teamID].InvalidIndex() )
+        m_DoorCrossingExpiry[teamID].Insert( key, expiry );
+    else
+        m_DoorCrossingExpiry[teamID][index] = expiry;
+}
+
+void CNEOBotPathReservationSystem::RelieveDoorCrossing(unsigned int fromAreaID, unsigned int toAreaID, int teamID)
+{
+    if ( teamID < 0 || teamID >= TEAM__TOTAL || m_DoorCrossingExpiry[teamID].Count() == 0 )
+        return;
+    m_DoorCrossingExpiry[teamID].Remove( CrossingKey( fromAreaID, toAreaID ) );
+}
+
+float CNEOBotPathReservationSystem::GetDoorCrossingPenalty(unsigned int fromAreaID, unsigned int toAreaID, int teamID) const
+{
+    if ( teamID < 0 || teamID >= TEAM__TOTAL || m_DoorCrossingExpiry[teamID].Count() == 0 )
+        return 0.0f;
+    unsigned short index = m_DoorCrossingExpiry[teamID].Find( CrossingKey( fromAreaID, toAreaID ) );
+    if ( index == m_DoorCrossingExpiry[teamID].InvalidIndex() || gpGlobals->curtime > m_DoorCrossingExpiry[teamID][index] )
+        return 0.0f;
+    return neo_bot_stuck_door_penalty.GetFloat();
+}
+
+//-------------------------------------------------------------------------------------------------
+void CNEOBotPathReservationSystem::RelieveCrossingAvoidPenalty(unsigned int fromAreaID, unsigned int toAreaID)
+{
+    if ( m_CrossingAvoidPenalties.Count() == 0 )
+    {
+        return;
+    }
+
+    m_CrossingAvoidPenalties.Remove( CrossingKey( fromAreaID, toAreaID ) );
+}
+
+//-------------------------------------------------------------------------------------------------
+float CNEOBotPathReservationSystem::GetCrossingAvoidPenalty(unsigned int fromAreaID, unsigned int toAreaID) const
+{
+    if ( m_CrossingAvoidPenalties.Count() == 0 )
+    {
+        return 0.0f;
+    }
+
+    unsigned short index = m_CrossingAvoidPenalties.Find( CrossingKey( fromAreaID, toAreaID ) );
+    if ( index == m_CrossingAvoidPenalties.InvalidIndex() )
+    {
+        return 0.0f;
+    }
+
+    const CrossingAvoidInfo_t &info = m_CrossingAvoidPenalties[index];
+    if ( gpGlobals->curtime - info.lastFailTime > neo_bot_path_crossing_stuck_memory.GetFloat() )
+    {
+        return 0.0f;
+    }
+    return info.penalty;
 }
 
 //-------------------------------------------------------------------------------------------------
@@ -505,4 +622,124 @@ float CNEOBotPathReservationSystem::GetAreaHazardousTime(int navAreaID, const CN
 bool CNEOBotPathReservationSystem::IsAreaHazardous(int navAreaID, const CNEOBot *me) const
 {
    return GetAreaHazardousTime(navAreaID, me) > 0;
+}
+
+//-------------------------------------------------------------------------------------------------
+// NEO-HARNESS-TEMP research arm (2026-09-23, patch 50). Physics props are not in the nav mesh and move,
+// so their footprint is re-projected onto the mesh every second: each solid prop_physics* whose box
+// reaches into a player's body space (step height to standing height above an area's floor) marks the
+// share of the area it covers, its box grown by a hull half-width (a player's centre cannot come
+// closer) and lowered to the floor, so props hanging over a passage claim the floor under them too.
+void CNEOBotPathReservationSystem::UpdatePropObstacles()
+{
+    if ( neo_bot_path_prop_obstacle_cost.GetFloat() <= 0.0f )
+    {
+        if ( m_PropObstacleFraction.Count() )
+        {
+            m_PropObstacleFraction.RemoveAll();
+        }
+        return;
+    }
+
+    if ( gpGlobals->curtime < m_flNextPropObstacleUpdate && gpGlobals->curtime >= m_flNextPropObstacleUpdate - 2.0f )
+    {
+        return;
+    }
+    m_flNextPropObstacleUpdate = gpGlobals->curtime + 1.0f;
+    m_PropObstacleFraction.RemoveAll();
+
+    const float flHalfHull = 16.0f;
+    const float flStep = StepHeight;
+    const float flBody = HumanHeight;
+    const float flMinSize = neo_bot_path_prop_obstacle_min_size.GetFloat();
+    const bool bLog = neo_bot_path_prop_obstacle_log.GetBool();
+    const bool bAllEnts = neo_bot_path_prop_obstacle_all_entities.GetBool();
+
+    CUtlVector< CNavArea * > areas;
+    for ( CBaseEntity *pEnt = gEntList.FirstEnt(); pEnt; pEnt = gEntList.NextEnt( pEnt ) )
+    {
+        // physics props, or with _all_entities also the other movable / map-toggled solid props the mesh
+        // was not built round (prop_dynamic: e.g. rogue's competition-mode container, APC and fences)
+        const bool bPhys = FClassnameIs( pEnt, "prop_physics*" );
+        if ( !bPhys && !( bAllEnts && ( FClassnameIs( pEnt, "prop_dynamic*" ) || FClassnameIs( pEnt, "func_physbox*" ) ) ) )
+        {
+            continue;
+        }
+        if ( pEnt->IsSolidFlagSet( FSOLID_NOT_SOLID ) || !pEnt->IsSolid() )
+        {
+            continue;
+        }
+        const int iGroup = pEnt->GetCollisionGroup();
+        if ( iGroup == COLLISION_GROUP_DEBRIS || iGroup == COLLISION_GROUP_DEBRIS_TRIGGER || iGroup == COLLISION_GROUP_INTERACTIVE_DEBRIS )
+        {
+            continue;
+        }
+
+        Vector vecMins, vecMaxs;
+        pEnt->CollisionProp()->WorldSpaceAABB( &vecMins, &vecMaxs );
+        if ( ( vecMaxs.x - vecMins.x ) < flMinSize && ( vecMaxs.y - vecMins.y ) < flMinSize )
+        {
+            continue;
+        }
+        if ( ( vecMaxs.x - vecMins.x ) > 512.0f || ( vecMaxs.y - vecMins.y ) > 512.0f )
+        {
+            continue;	// structural: the mesh was built round it
+        }
+        if ( vecMaxs.z - vecMins.z < flStep )
+        {
+            continue;
+        }
+
+        Extent ext;
+        ext.lo = Vector( vecMins.x - flHalfHull, vecMins.y - flHalfHull, vecMins.z - flBody );
+        ext.hi = Vector( vecMaxs.x + flHalfHull, vecMaxs.y + flHalfHull, vecMaxs.z );
+        areas.RemoveAll();
+        TheNavMesh->CollectAreasOverlappingExtent( ext, &areas );
+
+        for ( int i = 0; i < areas.Count(); ++i )
+        {
+            CNavArea *pArea = areas[i];
+            const Vector &lo = pArea->GetCorner( NORTH_WEST );
+            const Vector &hi = pArea->GetCorner( SOUTH_EAST );
+            const float flFloor = pArea->GetZ( clamp( ( vecMins.x + vecMaxs.x ) * 0.5f, lo.x, hi.x ), clamp( ( vecMins.y + vecMaxs.y ) * 0.5f, lo.y, hi.y ) );
+            // the prop has to occupy the body space over this floor: above a step, below head height
+            if ( vecMins.z > flFloor + flBody || vecMaxs.z < flFloor + flStep )
+            {
+                continue;
+            }
+            const float flOverX = MIN( ext.hi.x, hi.x ) - MAX( ext.lo.x, lo.x );
+            const float flOverY = MIN( ext.hi.y, hi.y ) - MAX( ext.lo.y, lo.y );
+            const float flAreaSize = MAX( ( hi.x - lo.x ) * ( hi.y - lo.y ), 1.0f );
+            if ( flOverX <= 0.0f || flOverY <= 0.0f )
+            {
+                continue;
+            }
+            const float flFrac = ( flOverX * flOverY ) / flAreaSize;
+            unsigned short idx = m_PropObstacleFraction.Find( pArea->GetID() );
+            if ( idx == m_PropObstacleFraction.InvalidIndex() )
+            {
+                idx = m_PropObstacleFraction.Insert( pArea->GetID(), 0.0f );
+            }
+            m_PropObstacleFraction[idx] = MIN( 1.0f, m_PropObstacleFraction[idx] + flFrac );
+        }
+    }
+
+    if ( bLog )
+    {
+        FOR_EACH_MAP_FAST( m_PropObstacleFraction, i )
+        {
+            Msg( "NEO_FORENSIC_PROPOBST t=%.2f area=%u frac=%.2f\n", gpGlobals->curtime, m_PropObstacleFraction.Key( i ), m_PropObstacleFraction[i] );
+        }
+    }
+}
+
+//-------------------------------------------------------------------------------------------------
+float CNEOBotPathReservationSystem::GetPropObstacleFraction( unsigned int navAreaID ) const
+{
+    if ( m_PropObstacleFraction.Count() == 0 )
+    {
+        return 0.0f;
+    }
+    const unsigned short idx = m_PropObstacleFraction.Find( navAreaID );
+    return ( idx == m_PropObstacleFraction.InvalidIndex() ) ? 0.0f : m_PropObstacleFraction[idx];
 }
