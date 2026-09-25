@@ -48,6 +48,11 @@ public:
  * Not only does this encapsulate a path to get from point A to point B,
  * but also the selecting the decision algorithm for how to build that path.
  */
+#ifdef NEO
+extern ConVar neo_bot_trivial_fallback_partial;
+extern ConVar neo_bot_trivial_fallback_log;
+#endif
+
 class Path
 {
 public:
@@ -219,6 +224,21 @@ public:
 		if ( count == 1 )
 		{
 			BuildTrivialPath( bot, subjectPos );
+#ifdef NEO
+			// NEO-HARNESS-TEMP research arm (2026-09-23, patch 55): the search never left the start area, so
+			// this straight line is a fallback, not a route - BuildTrivialPath calls it COMPLETE_PATH, which
+			// lets callers that insist on a complete path (seek, roam) walk it into a wall
+			if ( !pathResult && neo_bot_trivial_fallback_partial.GetBool() )
+			{
+				OnPathChanged( bot, PARTIAL_PATH );
+			}
+			if ( !pathResult && neo_bot_trivial_fallback_log.GetBool() )
+			{
+				Msg( "NEO_FORENSIC_TRIVIAL t=%.2f p=%d area=%d goal=%.0f,%.0f,%.0f dist=%.0f dz=%.0f partial=%d\n",
+					gpGlobals->curtime, bot->GetEntity()->entindex(), startArea->GetID(), subjectPos.x, subjectPos.y, subjectPos.z,
+					( subjectPos - start ).Length(), subjectPos.z - start.z, neo_bot_trivial_fallback_partial.GetInt() );
+			}
+#endif
 			return pathResult;
 		}
 
@@ -347,6 +367,21 @@ public:
 		if ( count == 1 )
 		{
 			BuildTrivialPath( bot, goal );
+#ifdef NEO
+			// NEO-HARNESS-TEMP research arm (2026-09-23, patch 55): the search never left the start area, so
+			// this straight line is a fallback, not a route - BuildTrivialPath calls it COMPLETE_PATH, which
+			// lets callers that insist on a complete path (seek, roam) walk it into a wall
+			if ( !pathResult && neo_bot_trivial_fallback_partial.GetBool() )
+			{
+				OnPathChanged( bot, PARTIAL_PATH );
+			}
+			if ( !pathResult && neo_bot_trivial_fallback_log.GetBool() )
+			{
+				Msg( "NEO_FORENSIC_TRIVIAL t=%.2f p=%d area=%d goal=%.0f,%.0f,%.0f dist=%.0f dz=%.0f partial=%d\n",
+					gpGlobals->curtime, bot->GetEntity()->entindex(), startArea->GetID(), goal.x, goal.y, goal.z,
+					( goal - start ).Length(), goal.z - start.z, neo_bot_trivial_fallback_partial.GetInt() );
+			}
+#endif
 			return pathResult;
 		}
 

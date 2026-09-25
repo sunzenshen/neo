@@ -153,6 +153,8 @@ void CNEOBotManager::Update()
 
 	DrawStuckBotData();
 
+	CNEOBotPathReservations()->UpdatePropObstacles(); // NEO-HARNESS-TEMP research arm (patch 50)
+
 	NextBotManager::Update();
 }
 

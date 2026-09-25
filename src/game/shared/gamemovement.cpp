@@ -3068,6 +3068,16 @@ ConVar sv_ladder_angle( "sv_ladder_angle", "-0.707", FCVAR_REPLICATED, "Cos of a
 // HPE_END
 //=============================================================================
 
+#ifdef GAME_DLL
+// NEO-HARNESS-TEMP research arm (2026-09-25, patch 106): LadderMove grabs a ladder when a 2 u player-hull sweep towards it
+// meets ladder contents. Where the floor at the foot slopes up to the ladder (skyline ladder 1's metal trim), the sweep's
+// bottom edge meets the slope first, the hit is the trim, and a bot standing at the foot pressing into the face is never
+// grabbed (la7: 3 of 4 up-approaches there time out). Bots only, for the research: players predict this code client-side.
+ConVar neo_bot_ladder_grab_lift( "neo_bot_ladder_grab_lift", "0", FCVAR_CHEAT,
+	"Research: a bot's ladder grab sweep that meets something other than the ladder is retried a few units higher" );
+static constexpr float NEO_LADDER_GRAB_LIFT = 4.0f;	// clears a 2 u sweep over a floor rising up to ~60 deg
+#endif
+
 //-----------------------------------------------------------------------------
 // Purpose:
 //-----------------------------------------------------------------------------
@@ -3110,6 +3120,21 @@ bool CGameMovement::LadderMove( void )
 	// wishdir points toward the ladder if any exists
 	VectorMA( mv->GetAbsOrigin(), LadderDistance(), wishdir, end );
 	TracePlayerBBox( mv->GetAbsOrigin(), end, LadderMask(), COLLISION_GROUP_PLAYER_MOVEMENT, pm );
+#ifdef GAME_DLL
+	// patch 106: a floor sloping up to the ladder takes the sweep first (or starts it in solid, with the slope's normal) -
+	// look for the ladder a few units higher
+	if ( neo_bot_ladder_grab_lift.GetBool() && player->IsFakeClient() && player->GetMoveType() != MOVETYPE_LADDER
+		&& ( pm.startsolid || ( pm.fraction < 1.0f && !OnLadder( pm ) ) ) )
+	{
+		const Vector vecLift( 0.0f, 0.0f, NEO_LADDER_GRAB_LIFT );
+		trace_t pmLifted;
+		TracePlayerBBox( mv->GetAbsOrigin() + vecLift, end + vecLift, LadderMask(), COLLISION_GROUP_PLAYER_MOVEMENT, pmLifted );
+		if ( !pmLifted.startsolid && pmLifted.fraction < 1.0f && OnLadder( pmLifted ) )
+		{
+			pm = pmLifted;
+		}
+	}
+#endif
 
 	// no ladder in that direction, return
 	if ( pm.fraction == 1.0f || !OnLadder( pm ) )

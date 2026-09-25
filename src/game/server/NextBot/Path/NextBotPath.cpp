@@ -41,6 +41,15 @@ static bool IsLinkAcrossGap( const CNavArea *from, const Vector &fromPos, const 
 
 	return ( closeFrom - closeTo ).AsVector2D().IsLengthGreaterThan( GapSeparationTolerance );
 }
+
+#ifdef NEO
+// NEO-HARNESS-TEMP research arm (2026-09-23, patch 55)
+ConVar neo_bot_trivial_fallback_partial( "neo_bot_trivial_fallback_partial", "0", FCVAR_CHEAT,
+	"Research: a straight-line fallback path (search never left the start area) reports PARTIAL_PATH, not COMPLETE_PATH" );
+ConVar neo_bot_drop_search_lateral( "neo_bot_drop_search_lateral", "0", FCVAR_CHEAT,
+	"Research: when no clear drop column lies straight past a drop-down crossing, search along the portal for one (2 = also log NEO_FORENSIC_DROPSEARCH)" );
+ConVar neo_bot_trivial_fallback_log( "neo_bot_trivial_fallback_log", "0", FCVAR_CHEAT,
+	"Research: log NEO_FORENSIC_TRIVIAL each time Path::Compute falls back to a straight line because the goal is unreachable" );
 #endif
 
 //--------------------------------------------------------------------------------------------------------------

@@ -60,6 +60,7 @@ public:
 
 	void OnStuck() override;
 	void OnMoveToFailure( const Path *path, MoveToFailureType reason ) override;
+	void OnNavAreaChanged( CNavArea *enteredArea, CNavArea *leftArea ) override; // NEO-HARNESS-TEMP research arm
 
 	QueryResultType ShouldWalk(const CNEOBot *me, const QueryResultType qShouldAimQuery) const final;
 	QueryResultType ShouldAim(const CNEOBot *me, const bool bWepHasClip) const final;
@@ -76,6 +77,10 @@ private:
 class CNEOBot : public NextBotPlayer< CNEO_Player >, public CGameEventListener
 {
 public:
+	// NEO-HARNESS-TEMP research arm (2026-09-23, patch 53): after falling off a path onto something the
+	// mesh does not cover, take the nav area underneath as the last known area
+	bool ReanchorLastKnownAreaBelow( float flMaxDrop );
+
 	DECLARE_CLASS(CNEOBot, NextBotPlayer< CNEO_Player >);
 
 	DECLARE_ENT_SCRIPTDESC();

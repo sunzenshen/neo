@@ -68,11 +68,14 @@ public:
     CNEOBotPathReservationSystem()
         : m_BotReservedAreas(DefLessFunc(int))
         , m_AreaPenalties(DefLessFunc(unsigned int))
+        , m_CrossingAvoidPenalties(DefLessFunc(uint64))
+        , m_PropObstacleFraction(DefLessFunc(unsigned int))
     {
         for (int i = 0; i < TEAM__TOTAL; ++i)
         {
             m_Reservations[i].SetLessFunc(AreaIDLessFunc);
             m_HazardAreas[i].SetLessFunc(AreaIDLessFunc);
+            m_DoorCrossingExpiry[i].SetLessFunc(DefLessFunc(uint64));
         }
     }
 
@@ -86,6 +89,23 @@ public:
     void IncrementAreaAvoidPenalty(unsigned int navAreaID, float penaltyAmount);
     void IncrementAreaDeathPenalty(unsigned int navAreaID, float penaltyAmount);
     AreaPenalty_t GetAreaPenalty(unsigned int navAreaID) const;
+
+    // NEO-HARNESS-TEMP research arm (2026-09-23): penalise the crossing a stuck bot failed, not only its area
+    void IncrementCrossingAvoidPenalty(unsigned int fromAreaID, unsigned int toAreaID, float penaltyAmount);
+    void RelieveCrossingAvoidPenalty(unsigned int fromAreaID, unsigned int toAreaID);
+    float GetCrossingAvoidPenalty(unsigned int fromAreaID, unsigned int toAreaID) const;
+
+    // NEO-HARNESS-TEMP research arm (2026-09-23, patch 57): a crossing a bot got stuck on against a closed,
+    // motionless door is closed to its team for a while (sentinel_jgr's team spawn doors: the map hands door
+    // ownership over at run time and its func_nav_blockers do not follow)
+    void BlockDoorCrossing(unsigned int fromAreaID, unsigned int toAreaID, int teamID);
+    void RelieveDoorCrossing(unsigned int fromAreaID, unsigned int toAreaID, int teamID);
+    float GetDoorCrossingPenalty(unsigned int fromAreaID, unsigned int toAreaID, int teamID) const;
+
+    // NEO-HARNESS-TEMP research arm (2026-09-23, patch 50): share of each nav area covered by solid
+    // physics props, refreshed every second, for a soft path-cost penalty
+    void UpdatePropObstacles();
+    float GetPropObstacleFraction(unsigned int navAreaID) const;
 
     void AddDeadlyHazard(int navAreaID, float expireTime, int teamID, bool propagatePVS = false);
     void AddFragHazard(int navAreaID, float expireTime, int teamID);
@@ -103,6 +123,16 @@ private:
     AreaPenalty_t *FindOrAddAreaPenalty(unsigned int navAreaID);
 
     CUtlMap<unsigned int, AreaPenalty_t> m_AreaPenalties;          // keyed by nav area ID
+
+    struct CrossingAvoidInfo_t
+    {
+        float penalty;
+        float lastFailTime;
+    };
+    CUtlMap<uint64, CrossingAvoidInfo_t> m_CrossingAvoidPenalties;
+    CUtlMap<uint64, float> m_DoorCrossingExpiry[TEAM__TOTAL];
+    CUtlMap<unsigned int, float> m_PropObstacleFraction;
+    float m_flNextPropObstacleUpdate = 0.0f;
     CUtlMap<int, HazardInfo> m_HazardAreas[TEAM__TOTAL];
 };
 
