@@ -24,6 +24,19 @@ static void NeoLogLadderBeh( CNEOBot *me, const char *beh, const CNavLadder *lad
 		(int)me->GetMoveType(), me->GetGroundEntity() ? 1 : 0, reason );
 }
 #define NEO_LADDER_DONE( reason ) ( NeoLogLadderBeh( me, "climb", m_ladder, m_bGoingUp, reason ), Done( reason ) )
+static void NeoLogLadderEvent( CNEOBot *me, const char *beh, const CNavLadder *ladder, bool goingUp, PRINTF_FORMAT_STRING const char *fmt, ... )
+{
+	if ( !sv_neo_forensic_log.GetBool() )
+	{
+		return;
+	}
+	char buf[256];
+	va_list args;
+	va_start( args, fmt );
+	V_vsnprintf( buf, sizeof( buf ), fmt, args );
+	va_end( args );
+	NeoLogLadderBeh( me, beh, ladder, goingUp, buf );
+}
 
 //---------------------------------------------------------------------------------------------
 // NEO-HARNESS-TEMP research arm (2026-09-23, patch 52)
@@ -102,6 +115,18 @@ ConVar neo_bot_ladder_commit( "neo_bot_ladder_commit", "0", FCVAR_CHEAT,
 ConVar neo_bot_ladder_lateral_hold( "neo_bot_ladder_lateral_hold", "0", FCVAR_CHEAT,
 	"Research: keep a climbing bot within the ladder's width (and make the stall shimmy move to fixed offsets)" );
 
+// NEO-HARNESS-TEMP research arm (2026-09-24, patch 76): the climb presses MoveUp / MoveDown so that NEO's ladder movement
+// (gamemovement LadderMove, upstream #1802) climbs straight along the ladder whatever the bot is looking at - the intent of
+// upstream #1830, "decouple climbing with look direction". But PressMoveUpButton() / PressMoveDownButton() take a timer
+// duration defaulting to -1, and unlike the other buttons they set no input bit of their own: the timer has expired
+// before the user command is built, so the press never happens and bots climb on forward + view pitch, which drifts them
+// sideways or off the face whenever the view is not square to the ladder. Hold the press past the next bot update
+// (updates come every ~0.13 s), and let go on ticks that strafe (patches 72 / 75 - LadderMove ignores strafing while
+// upmove is set) and before the dismount, whose forward step over the top upmove would also override.
+ConVar neo_bot_ladder_moveup( "neo_bot_ladder_moveup", "0", FCVAR_CHEAT,
+	"Research: the ladder climb's MoveUp / MoveDown presses actually reach the user command (climb along the ladder, not the view)" );
+static constexpr float NEO_LADDER_VERTICAL_PRESS = 0.25f;
+
 CNEOBotLadderClimb::CNEOBotLadderClimb( const CNavLadder *ladder, bool goingUp )
 	: m_ladder( ladder ), m_bGoingUp( goingUp ), m_flLastZ( 0.0f ),
 	m_bDismountPhase( false ), m_bJumpedOffLadder( false ), m_pExitArea( nullptr )
@@ -131,6 +156,8 @@ ActionResult<CNEOBot> CNEOBotLadderClimb::OnStart( CNEOBot *me, Action<CNEOBot> 
 	m_flLastZ = mover->GetFeet().z;
 	m_stuckTimer.Start( STUCK_CHECK_INTERVAL );
 
+	bool bTeleported = false;
+	const Vector vecStartVel = me->GetAbsVelocity();
 	if ( m_bGoingUp )
 	{
 		// Hull trace check: Ensure clear path to climb in the intended direction.
@@ -159,6 +186,7 @@ ActionResult<CNEOBot> CNEOBotLadderClimb::OnStart( CNEOBot *me, Action<CNEOBot> 
 			}
 
 			// Fallback: Teleport to a center position on the ladder.
+			bTeleported = true;
 			mover->Reset(); // clear velocity cache in locomotion interface
 			me->SetAbsVelocity( vec3_origin );
 
@@ -200,6 +228,10 @@ ActionResult<CNEOBot> CNEOBotLadderClimb::OnStart( CNEOBot *me, Action<CNEOBot> 
 	ClaimLadder( me );
 	// patch 71: the locomotion must know this ladder is wanted (see neo_bot_ladder_claim)
 	NeoClaimLadder( me, m_ladder, m_bGoingUp, m_pExitArea );
+
+	NeoLogLadderEvent( me, "climbstart", m_ladder, m_bGoingUp, "tele=%d exit=%d exitz=%.0f vel=%.0f,%.0f,%.0f ang=%.0f,%.0f",
+		bTeleported ? 1 : 0, m_pExitArea ? m_pExitArea->GetID() : -1, m_pExitArea ? m_exitAreaCenter.z : 0.0f,
+		vecStartVel.x, vecStartVel.y, vecStartVel.z, me->EyeAngles().x, me->EyeAngles().y );
 
 	return Continue();
 }
@@ -440,7 +472,7 @@ ActionResult<CNEOBot> CNEOBotLadderClimb::Update( CNEOBot *me, float /*interval*
 				float distToTarget = fabsf( currentZ - targetZ );
 				if ( distToTarget < mover->GetStepHeight() * 2.0f )
 				{
-					EnterDismountPhase( me );
+					EnterDismountPhase( me, "stall-near-end" );
 					return Continue();
 				}
 				else if ( neo_bot_ladder_stall_nudge.GetBool() && m_nNudges < 3 )
@@ -479,6 +511,7 @@ ActionResult<CNEOBot> CNEOBotLadderClimb::Update( CNEOBot *me, float /*interval*
 		// Early jump-off. Going down, only once a standing height below the top: from any higher, the
 		// kick towards the exit lands the bot back on the floor the descent started from.
 		bool bWantsDismount = false;
+		bool bEarlyDismount = false;
 		if ( m_pExitArea )
 		{
 			float zDistToExit = currentZ - m_exitAreaCenter.z;
@@ -487,6 +520,7 @@ ActionResult<CNEOBot> CNEOBotLadderClimb::Update( CNEOBot *me, float /*interval*
 			if ( zDistToExit > 0.0f && zDistToExit <= SAFE_FALL_DIST && bBelowTopFloor )
 			{
 				bWantsDismount = true;
+				bEarlyDismount = true;
 			}
 		}
 
@@ -516,6 +550,7 @@ ActionResult<CNEOBot> CNEOBotLadderClimb::Update( CNEOBot *me, float /*interval*
 		if ( m_bGoingUp ? ( currentZ >= dismountZ ) : ( currentZ <= dismountZ ) )
 		{
 			bWantsDismount = true;
+			bEarlyDismount = false;
 		}
 
 		// A parapet between the ladder and a roof exit blocks the step off at floor height:
@@ -525,7 +560,7 @@ ActionResult<CNEOBot> CNEOBotLadderClimb::Update( CNEOBot *me, float /*interval*
 
 		if ( bWantsDismount && !bLipInTheWay )
 		{
-			EnterDismountPhase( me );
+			EnterDismountPhase( me, bEarlyDismount ? "early" : "reached" );
 			return Continue();
 		}
 
@@ -544,13 +579,15 @@ ActionResult<CNEOBot> CNEOBotLadderClimb::Update( CNEOBot *me, float /*interval*
 				bShouldGoUp = true;
 			}
 
+			// patch 76: a duration that reaches the user command (see neo_bot_ladder_moveup); -1 is the stock no-op
+			const float flVerticalPress = neo_bot_ladder_moveup.GetBool() ? NEO_LADDER_VERTICAL_PRESS : -1.0f;
 			if ( bShouldGoUp )
 			{
-				me->PressMoveUpButton();
+				me->PressMoveUpButton( flVerticalPress );
 			}
 			else
 			{
-				me->PressMoveDownButton();
+				me->PressMoveDownButton( flVerticalPress );
 				bIsClimbingDown = true;
 			}
 		}
@@ -577,6 +614,7 @@ ActionResult<CNEOBot> CNEOBotLadderClimb::Update( CNEOBot *me, float /*interval*
 		}
 
 		// patch 75: hold the bot across the ladder, at m_flLateralTarget inside its width
+		bool bStrafing = false;
 		if ( onLadder && neo_bot_ladder_lateral_hold.GetBool() )
 		{
 			const Vector normal = m_ladder->GetNormal();
@@ -588,10 +626,12 @@ ActionResult<CNEOBot> CNEOBotLadderClimb::Update( CNEOBot *me, float /*interval*
 			if ( flErr > 3.0f )
 			{
 				me->PressLeftButton( 0.1f );
+				bStrafing = true;
 			}
 			else if ( flErr < -3.0f )
 			{
 				me->PressRightButton( 0.1f );
+				bStrafing = true;
 			}
 		}
 		// patch 72: shimmy sideways while a nudge is running
@@ -605,6 +645,14 @@ ActionResult<CNEOBot> CNEOBotLadderClimb::Update( CNEOBot *me, float /*interval*
 			{
 				me->PressLeftButton( 0.1f );
 			}
+			bStrafing = true;
+		}
+
+		// patch 76: LadderMove drops strafing while upmove is set - let go of MoveUp / MoveDown while moving sideways
+		if ( bStrafing && neo_bot_ladder_moveup.GetBool() )
+		{
+			me->ReleaseMoveUpButton();
+			me->ReleaseMoveDownButton();
 		}
 	}
 
@@ -661,6 +709,8 @@ ActionResult<CNEOBot> CNEOBotLadderClimb::Update( CNEOBot *me, float /*interval*
 				// Velocity kick to simulate a jump to the next NavArea
 				if ( !m_bJumpedOffLadder )
 				{
+					NeoLogLadderEvent( me, "climbkick", m_ladder, m_bGoingUp, "dot=%.2f early=%d onladder=%d exit=%d exitz=%.0f",
+						dot, bDroppingEarly ? 1 : 0, onLadder ? 1 : 0, m_pExitArea->GetID(), m_exitAreaCenter.z );
 					me->PressJumpButton(); // mostly to trigger animation if possible
 
 					mover->Reset(); // clear velocity cache in locomotion interface
@@ -718,12 +768,21 @@ bool CNEOBotLadderClimb::IsDismountBlocked( CNEOBot *me, const Vector &toExit ) 
 	return tr.DidHit();
 }
 //---------------------------------------------------------------------------------------------
-void CNEOBotLadderClimb::EnterDismountPhase( CNEOBot *me )
+void CNEOBotLadderClimb::EnterDismountPhase( CNEOBot *me, const char *why )
 {
 	me->SetAbsVelocity( vec3_origin ); // stop momentum
 	m_bDismountPhase = true;
 	m_dismountTimer.Start( DISMOUNT_TIMEOUT );
 	ResolveExitArea( me );
+
+	// patch 76: the step off over the top is a forward move, which upmove would override on the ladder
+	if ( neo_bot_ladder_moveup.GetBool() )
+	{
+		me->ReleaseMoveUpButton();
+		me->ReleaseMoveDownButton();
+	}
+	NeoLogLadderEvent( me, "climbdismount", m_ladder, m_bGoingUp, "why=%s exit=%d exitz=%.0f",
+		why, m_pExitArea ? m_pExitArea->GetID() : -1, m_pExitArea ? m_exitAreaCenter.z : 0.0f );
 
 	if ( me->IsDebugging( NEXTBOT_PATH ) )
 	{
@@ -738,6 +797,13 @@ void CNEOBotLadderClimb::OnEnd( CNEOBot *me, Action<CNEOBot> *nextAction )
 {
 	me->StartLookingAroundForEnemies();
 	me->ClearAttribute( CNEOBot::IGNORE_ENEMIES );
+
+	// patch 76: do not carry a held MoveUp / MoveDown into whatever comes next
+	if ( neo_bot_ladder_moveup.GetBool() )
+	{
+		me->ReleaseMoveUpButton();
+		me->ReleaseMoveDownButton();
+	}
 
 	if ( me->IsDebugging( NEXTBOT_PATH ) )
 	{
