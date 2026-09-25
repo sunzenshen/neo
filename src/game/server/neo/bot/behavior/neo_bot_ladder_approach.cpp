@@ -36,6 +36,7 @@ ConVar neo_bot_ladder_align_clamp( "neo_bot_ladder_align_clamp", "0", FCVAR_CHEA
 ConVar neo_bot_ladder_mount_on_contact( "neo_bot_ladder_mount_on_contact", "0", FCVAR_CHEAT,
 	"Research: a bot the engine has put on the approached ladder starts the climb at once, whatever its range to the mount point" );
 static constexpr float NEO_LADDER_CONTACT_RANGE = 48.0f;	// xy from the ladder's line: this ladder, not a neighbour
+static constexpr float NEO_LADDER_APPROACH_TIMEOUT = 3.0f;
 
 // NEO-HARNESS-TEMP research arm (2026-09-24, patch 84): a descent approached from the landing behind the ladder's plane (its top
 // forward area - bullet's shafts) pushes into the back of the ladder brush; the engine grabs the bot while it still stands on
@@ -44,6 +45,117 @@ static constexpr float NEO_LADDER_CONTACT_RANGE = 48.0f;	// xy from the ladder's
 // in front of the face - over the shaft - then push into the face.
 ConVar neo_bot_ladder_front_mount( "neo_bot_ladder_front_mount", "0", FCVAR_CHEAT,
 	"Research: every descent is mounted from the point in front of the ladder's face (patch 73's approach for all ladders)" );
+
+// NEO-HARNESS-TEMP research arm (2026-09-25, patch 89): the engine lets go of a player on the ground moving away from the face,
+// so a descent mounted while the bot still stands on the top landing is dropped at once and the climb ends "reached the
+// ground" (46 % of descents over lcn / vp89 / vp90; 82 % of those mounted on the ground vs 22 % airborne,
+// scratch/rr/ladder_audit.md 3.6). Do not mount a descent until the bot is off the landing.
+ConVar neo_bot_ladder_descent_airborne( "neo_bot_ladder_descent_airborne", "0", FCVAR_CHEAT,
+	"Research: a descent is mounted only once the bot has left the top landing (airborne, or a step below the top)" );
+
+// NEO-HARNESS-TEMP research arm (2026-09-25, patch 103): inside mount range but not lined up, the approach walked straight at
+// the ladder's foot - from the side that is the ladder's edge (lt1: the leaning sentinel ladder 7's up-climbs that slip off
+// began 16-26 u to the side of a 16 u ladder). Keep lining up in front of the face instead.
+ConVar neo_bot_ladder_close_align( "neo_bot_ladder_close_align", "0", FCVAR_CHEAT,
+	"Research: an up-approach inside mount range but not lined up steps to the front of the face instead of walking at the foot" );
+static constexpr float NEO_LADDER_FRONT_STANDOFF = 20.0f;	// the point in front of the foot the approach lines up on
+
+// NEO-HARNESS-TEMP research arm (2026-09-25, patch 105): a bot walking a narrow landing along the wall meets the side of the
+// ladder brush where it stands proud of the wall (sentinel ladder 4: a solid 2 u grate on a 24 u ledge), the engine grabs it
+// by that side, and the descent never starts (23 of 24 failed descents from its top began 32 u to the side). Beside the
+// ladder and close to its wall, step out from the wall first; do not mount there.
+ConVar neo_bot_ladder_clear_edge( "neo_bot_ladder_clear_edge", "0", FCVAR_CHEAT,
+	"Research: a descent approach beside the ladder and close to its wall steps out past the ladder's edge before going on"
+	" (1 = on the ground, 2 = also stepping down onto the landing, and behind the face's plane at side-landing ladders)" );
+static constexpr float NEO_LADDER_EDGE_CLEARANCE = 4.0f;	// beyond the hull's half width, out from the face's plane
+static constexpr float NEO_LADDER_LANDING_FLOOR = 24.0f;	// v3: floor this close under the feet is still the landing
+
+// v3: on the landing or stepping down onto it - not falling into the gap beside the ladder
+static bool NeoOnLadderLanding( CNEOBot *me )
+{
+	ILocomotion *mover = me->GetLocomotionInterface();
+	if ( mover->IsOnGround() )
+	{
+		return true;
+	}
+	if ( neo_bot_ladder_clear_edge.GetInt() < 2 )
+	{
+		return false;
+	}
+
+	const Vector &feet = mover->GetFeet();
+	trace_t tr;
+	UTIL_TraceHull( feet, feet - Vector( 0.0f, 0.0f, NEO_LADDER_LANDING_FLOOR ), me->WorldAlignMins() * Vector( 1.0f, 1.0f, 0.0f ),
+		me->WorldAlignMaxs() * Vector( 1.0f, 1.0f, 0.0f ) + Vector( 0.0f, 0.0f, 1.0f ), MASK_PLAYERSOLID, me, COLLISION_GROUP_PLAYER_MOVEMENT, &tr );
+	return tr.fraction < 1.0f;
+}
+
+// NEO-HARNESS-TEMP research arm (2026-09-25, patch 107): the same trap at a ladder's foot - a bot coming along the wall runs
+// past the front of the face and ends up beside the ladder, pressed between the wall and the ladder's side (ghost 1: every
+// up-approach timeout there starts 31 u aside, behind the face's plane, wedged against the solid ladder prop). Beside the
+// foot and close to the wall, not yet on the ladder, step out from the wall first.
+ConVar neo_bot_ladder_clear_edge_up( "neo_bot_ladder_clear_edge_up", "0", FCVAR_CHEAT,
+	"Research: an up-approach beside the ladder's foot and close to its wall, not yet on the ladder, steps out past the ladder's edge first" );
+
+// patch 105: standing in front of the face's plane but beside the ladder, with the hull reaching the ladder brush's side
+// (v2: only on the landing - a bot dropping into the gap beside the ladder is about to grab it; v3: see the cvar)
+static bool NeoBesideLadderEdge( CNEOBot *me, const CNavLadder *ladder, bool bGoingUp, Vector *pvecOut )
+{
+	Vector2D vecNormal = ladder->GetNormal().AsVector2D();
+	const bool bStanding = bGoingUp ? me->GetLocomotionInterface()->IsOnGround() : NeoOnLadderLanding( me );
+	if ( !bStanding || vecNormal.NormalizeInPlace() <= 0.0f )
+	{
+		return false;
+	}
+
+	const Vector &feet = me->GetLocomotionInterface()->GetFeet();
+	const Vector2D vecRel = ( feet - ( bGoingUp ? ladder->m_bottom : ladder->m_top ) ).AsVector2D();
+	const float flDepth = DotProduct2D( vecRel, vecNormal );
+	const float flSide = fabsf( vecRel.x * vecNormal.y - vecRel.y * vecNormal.x );
+	const float flClear = me->GetBodyInterface()->GetHullWidth() * 0.5f + NEO_LADDER_EDGE_CLEARANCE;
+
+	// behind the plane is the landing only where the ladder has no landing behind or in front of it (v3); at the foot
+	// (107) behind the plane is the wall beside the ladder
+	const bool bSideLanding = !ladder->m_topForwardArea && !ladder->m_topBehindArea;
+	const float flMinDepth = ( bGoingUp || ( neo_bot_ladder_clear_edge.GetInt() >= 2 && bSideLanding ) ) ? -flClear : 0.0f;
+	if ( flSide <= ladder->m_width * 0.5f || flDepth < flMinDepth || flDepth >= flClear )
+	{
+		return false;
+	}
+
+	// straight out from the wall, a little past where the hull clears the brush
+	*pvecOut = feet;
+	pvecOut->x += vecNormal.x * ( flClear + NEO_LADDER_EDGE_CLEARANCE - flDepth );
+	pvecOut->y += vecNormal.y * ( flClear + NEO_LADDER_EDGE_CLEARANCE - flDepth );
+	return true;
+}
+
+// la1: where the walk out over the edge is blocked (a clip or wall beside the top), never mounting on the landing is a
+// deadlock, so after the first 1.2 s of an approach a ground mount is allowed again
+static constexpr float NEO_LADDER_AIRBORNE_MOUNT_WINDOW = 1.2f;
+
+// NEO-HARNESS-TEMP research arm (2026-09-25, patch 99): the 1.2 s window lets a ground mount through on ladders whose walk
+// off the landing is not blocked at all, only slower (sentinel 3 / 6, top level with the shaft floor: 52-79 % of descents
+// started at the top end there). Allow the ground mount only once the bot has stopped making progress - the deadlock case
+// the window was for.
+ConVar neo_bot_ladder_airborne_until_stall( "neo_bot_ladder_airborne_until_stall", "0", FCVAR_CHEAT,
+	"Research: a descent may mount on the top landing only after the approach has made no progress for a while (not after 1.2 s)" );
+static constexpr float NEO_LADDER_STALL_TIME = 0.6f;		// no progress this long = the walk off the landing is blocked
+static constexpr float NEO_LADDER_PROGRESS_STEP = 4.0f;	// a move this far (xy) counts as progress
+
+static bool NeoStillOnTopLanding( CNEOBot *me, const CNavLadder *ladder, bool bGoingUp, float flApproachAge, float flSinceProgress )
+{
+	// patch 99: the window ends when the walk off stalls, not at a fixed age
+	const bool bWindowOver = neo_bot_ladder_airborne_until_stall.GetBool() ? flSinceProgress > NEO_LADDER_STALL_TIME
+		: flApproachAge > NEO_LADDER_AIRBORNE_MOUNT_WINDOW;
+	if ( bGoingUp || !neo_bot_ladder_descent_airborne.GetBool() || bWindowOver )
+	{
+		return false;
+	}
+
+	ILocomotion *mover = me->GetLocomotionInterface();
+	return mover->IsOnGround() && mover->GetFeet().z > ladder->m_top.z - mover->GetStepHeight();
+}
 
 // patch 79: how far out from the ladder, along alignOut, the bot's hull still fits at its own floor height
 static float NeoFreeAlignDistance( CNEOBot *me, const Vector &ladderPoint, const Vector2D &alignOut, float maxDist )
@@ -88,7 +200,7 @@ static void NeoLogLadderApproach( CNEOBot *me, const CNavLadder *ladder, bool go
 
 //---------------------------------------------------------------------------------------------
 CNEOBotLadderApproach::CNEOBotLadderApproach( const CNavLadder *ladder, bool goingUp )
-	: m_ladder( ladder ), m_bGoingUp( goingUp )
+	: m_ladder( ladder ), m_bGoingUp( goingUp ), m_vecLastProgressPos( vec3_origin ), m_flLastProgressTime( 0.0f )
 {
 	m_ladderCenter = ladder ? ( ladder->m_top + ladder->m_bottom ) * 0.5f : vec3_origin;
 }
@@ -102,7 +214,9 @@ ActionResult<CNEOBot> CNEOBotLadderApproach::OnStart( CNEOBot *me, Action<CNEOBo
 	}
 
 	// Timeout for approach phase
-	m_timeoutTimer.Start( 3.0f );
+	m_timeoutTimer.Start( NEO_LADDER_APPROACH_TIMEOUT );
+	m_vecLastProgressPos = me->GetLocomotionInterface()->GetFeet();
+	m_flLastProgressTime = gpGlobals->curtime;
 
 	if ( me->IsDebugging( NEXTBOT_PATH ) )
 	{
@@ -136,8 +250,24 @@ ActionResult<CNEOBot> CNEOBotLadderApproach::Update( CNEOBot *me, float )
 		return Done( "Ladder approach timeout" );
 	}
 
+	// patch 99: progress along the approach
+	const Vector &vecFeetNow = me->GetLocomotionInterface()->GetFeet();
+	if ( ( vecFeetNow - m_vecLastProgressPos ).AsVector2D().IsLengthGreaterThan( NEO_LADDER_PROGRESS_STEP ) )
+	{
+		m_vecLastProgressPos = vecFeetNow;
+		m_flLastProgressTime = gpGlobals->curtime;
+	}
+
+	// patch 105: beside the top, against the wall - held by the ladder's side, which is no mount
+	Vector vecEdgeOut;
+	// (107: only while the step out makes progress - in a slot shallower than the step the bot would press the far wall)
+	const bool bBesideEdge = m_bGoingUp
+		? ( neo_bot_ladder_clear_edge_up.GetBool() && !me->IsOnLadder() && gpGlobals->curtime - m_flLastProgressTime < NEO_LADDER_STALL_TIME
+			&& NeoBesideLadderEdge( me, m_ladder, true, &vecEdgeOut ) )
+		: ( neo_bot_ladder_clear_edge.GetBool() && NeoBesideLadderEdge( me, m_ladder, false, &vecEdgeOut ) );
+
 	// patch 82: already on this ladder - climb it, before the locomotion adopts it the other way
-	if ( neo_bot_ladder_mount_on_contact.GetBool() && me->IsOnLadder() )
+	if ( neo_bot_ladder_mount_on_contact.GetBool() && me->IsOnLadder() && !bBesideEdge && !NeoStillOnTopLanding( me, m_ladder, m_bGoingUp, NEO_LADDER_APPROACH_TIMEOUT - m_timeoutTimer.GetRemainingTime(), gpGlobals->curtime - m_flLastProgressTime ) )
 	{
 		const Vector &feet = me->GetLocomotionInterface()->GetFeet();
 		if ( ( m_ladder->GetPosAtHeight( feet.z ) - feet ).AsVector2D().IsLengthLessThan( NEO_LADDER_CONTACT_RANGE ) )
@@ -172,7 +302,10 @@ ActionResult<CNEOBot> CNEOBotLadderApproach::Update( CNEOBot *me, float )
 	float distToEntrySq = myPos.DistToSqr( entryPos );
 	float distToExitSq = myPos.DistToSqr( exitPos );
 
-	if ( distToExitSq < distToEntrySq )
+	// patch 89: a descent that has just stepped off its landing is falling past the face it means to grab, not done
+	const bool bMountingInAir = !m_bGoingUp && neo_bot_ladder_descent_airborne.GetBool() && !mover->IsOnGround()
+		&& ( m_ladder->GetPosAtHeight( myPos.z ) - myPos ).AsVector2D().IsLengthLessThan( NEO_LADDER_CONTACT_RANGE );
+	if ( distToExitSq < distToEntrySq && !bMountingInAir )
 	{
 		NeoLogLadderApproach( me, m_ladder, m_bGoingUp, "Closer to ladder exit than entry, assuming goal reached accidentally" );
 		return Done( "Closer to ladder exit than entry, assuming goal reached accidentally" );
@@ -219,6 +352,13 @@ ActionResult<CNEOBot> CNEOBotLadderApproach::Update( CNEOBot *me, float )
 
 	body->AimHeadTowards( lookTarget, IBody::MANDATORY, 0.1f, nullptr, "Stare at ladder center" );
 
+	// patch 105: out from the wall first, then round the ladder's edge to the front of its face
+	if ( bBesideEdge )
+	{
+		mover->Approach( vecEdgeOut );
+		return Continue();
+	}
+
 	if ( me->IsDebugging( NEXTBOT_PATH ) )
 	{
 		NDebugOverlay::Cross3D( targetPos, 5.0f, 255, 255, 0, true, 0.1f );
@@ -232,7 +372,8 @@ ActionResult<CNEOBot> CNEOBotLadderApproach::Update( CNEOBot *me, float )
 		&& ( myPos.z >= flTopZ || ( mover->IsOnGround() && myPos.z > flTopZ - mover->GetStepHeight() ) );
 
 	// Within mount range and on the ladder: start climbing
-	if ( range < MOUNT_RANGE && me->IsOnLadder() && !bOnTop )
+	if ( range < MOUNT_RANGE && me->IsOnLadder() && !bOnTop
+		&& !NeoStillOnTopLanding( me, m_ladder, m_bGoingUp, NEO_LADDER_APPROACH_TIMEOUT - m_timeoutTimer.GetRemainingTime(), gpGlobals->curtime - m_flLastProgressTime ) )
 	{
 		if ( me->IsDebugging( NEXTBOT_PATH ) )
 		{
@@ -311,6 +452,16 @@ ActionResult<CNEOBot> CNEOBotLadderApproach::Update( CNEOBot *me, float )
 				m_hopTimer.Start( 0.8f );
 			}
 		}
+	}
+	else if ( m_bGoingUp && neo_bot_ladder_close_align.GetBool() )
+	{
+		// patch 103: close but off to the side - step round to the front of the face first; walking straight at the
+		// foot from the side touches the ladder's edge, the engine grabs it there, and on a narrow ladder the climb
+		// then slips off the side
+		Vector front = targetPos;
+		front.x += ladderNormal2D.x * NEO_LADDER_FRONT_STANDOFF;
+		front.y += ladderNormal2D.y * NEO_LADDER_FRONT_STANDOFF;
+		mover->Approach( front );
 	}
 	else
 	{

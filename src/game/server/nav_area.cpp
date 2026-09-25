@@ -4893,6 +4893,11 @@ void CNavArea::UnblockArea( int teamID )
  * Updates the (un)blocked status of the nav area
  * The semantics of this method have gotten very muddled - needs refactoring (MSB 5/7/09)
  */
+#ifdef NEO
+// NEO-HARNESS-TEMP: forensic instrumentation only (harness patch 33). Never part of a PR.
+extern ConVar sv_neo_forensic_log;
+#endif
+
 void CNavArea::UpdateBlocked( bool force, int teamID )
 {
 	VPROF( "CNavArea::UpdateBlocked" );
@@ -4995,6 +5000,14 @@ void CNavArea::UpdateBlocked( bool force, int teamID )
 
 	if ( wasBlocked != isBlocked )
 	{
+#ifdef NEO
+		if ( sv_neo_forensic_log.GetBool() )
+		{
+			const Vector vecCenter = GetCenter();
+			Msg( "NEO_FORENSIC_NAVBLOCK t=%.2f area=%d blocked=%d force=%d pos=%.0f,%.0f,%.0f\n",
+				gpGlobals->curtime, m_id, isBlocked ? 1 : 0, force ? 1 : 0, vecCenter.x, vecCenter.y, vecCenter.z );
+		}
+#endif
 		VPROF( "CNavArea::UpdateBlocked-Event" );
 		IGameEvent * event = gameeventmanager->CreateEvent( "nav_blocked" );
 		if ( event )

@@ -30,6 +30,29 @@ ConVar neo_bot_path_penalty_crouch_multiplier("neo_bot_path_penalty_crouch_multi
 	"alternative exists, while still allowing one when it is the only way through.",
 	true, 1.0f, false, 0.0f);
 
+// NEO-HARNESS-TEMP research arm (2026-09-25, patch 85): risk annotations as path cost. The meshes keep
+// every reachable place and every ladder connected; a risky one is marked and made expensive instead,
+// finite so it stays usable when it is the only way (user rule, 2026-09-25)
+ConVar neo_bot_path_avoid_multiplier("neo_bot_path_avoid_multiplier", "1.0", FCVAR_CHEAT,
+	"Research: path cost multiplier for a step into a NAV_MESH_AVOID area (1 = off)", true, 1.0f, false, 0.0f);
+ConVar neo_bot_path_cliff_multiplier("neo_bot_path_cliff_multiplier", "1.0", FCVAR_CHEAT,
+	"Research: path cost multiplier for a step into a NAV_MESH_CLIFF area (1 = off)", true, 1.0f, false, 0.0f);
+// NEO-HARNESS-TEMP research arm (2026-09-25, patch 91): AVOID on a ladder's foot only charges the short walk into it, so a
+// risky ladder climbed up from its AVOID foot stayed cheap (skyline 1: 84 of 146 up-approaches timed out with the foot AVOID
+// on); charge the climb itself when either end of the ladder is AVOID
+ConVar neo_bot_path_avoid_ladder_ends("neo_bot_path_avoid_ladder_ends", "0", FCVAR_CHEAT,
+	"Research: a ladder crossing that starts or ends in a NAV_MESH_AVOID area pays the AVOID multiplier");
+ConVar neo_bot_path_ladder_crossing_cost("neo_bot_path_ladder_crossing_cost", "0", FCVAR_CHEAT,
+	"Research: distance-equivalent cost added to every ladder crossing, for the risk of any climb (0 = off)", true, 0.0f, false, 0.0f);
+
+// NEO-HARNESS-TEMP research arm (2026-09-24, patch 68): nav_generate keeps a space walkable where
+// HumanCrouchHeight (55 u) of clearance exists, but a ducked Support is 59 u tall and a ducked
+// Juggernaut 75 u, so a crouch passage can be one they do not fit through at all (ridgeline's
+// catwalk railings: every bot stuck under them was a Support). With this on, a step into or out of
+// a crouch area is closed to such a class when its ducked hull does not fit on the portal.
+ConVar neo_bot_path_duck_clearance("neo_bot_path_duck_clearance", "0", FCVAR_CHEAT,
+	"Research: close crouch-area portals too low for this bot's ducked hull (Support, Juggernaut)");
+
 ConVar neo_bot_path_penalty_exposure_base("neo_bot_path_penalty_exposure_base", "5.0", FCVAR_CHEAT,
 	"General additional penalty per visible area for bots to avoid exposed areas", true, 0.0f, false, 0.0f);
 
@@ -62,6 +85,76 @@ CNEOBotPathCost::CNEOBotPathCost(CNEOBot* me, RouteType routeType)
 }
 
 //-------------------------------------------------------------------------------------------------
+// Only the world and static props: the answer below is cached for the map, so nothing that moves
+// may decide it.
+class CNeoStaticGeometryFilter : public CTraceFilter
+{
+public:
+	virtual bool ShouldHitEntity( IHandleEntity *pHandleEntity, int contentsMask ) override
+	{
+		if ( staticpropmgr->IsStaticProp( pHandleEntity ) )
+		{
+			return true;
+		}
+		CBaseEntity *pEntity = EntityFromEntityHandle( pHandleEntity );
+		return pEntity && pEntity->IsWorld();
+	}
+};
+
+// Does this ducked hull fit standing on the portal between two adjacent areas? On a slope a hull
+// rests on the highest floor under its footprint, so its base is the highest of the two areas'
+// floors under the footprint's corners.
+static bool NeoDuckHullFitsPortal( const CNavArea *from, const CNavArea *to, const Vector &vecMins, const Vector &vecMaxs )
+{
+	static CUtlMap<uint64, bool> s_cache( DefLessFunc( uint64 ) );
+	static string_t s_mapName = NULL_STRING;
+	if ( s_mapName != gpGlobals->mapname )
+	{
+		s_cache.RemoveAll();
+		s_mapName = gpGlobals->mapname;
+	}
+	const uint64 key = ( (uint64)from->GetID() << 32 ) | ( (uint64)to->GetID() << 1 ) | ( vecMaxs.z > 70.0f ? 1 : 0 );
+	const unsigned short idx = s_cache.Find( key );
+	if ( idx != s_cache.InvalidIndex() )
+	{
+		return s_cache[idx];
+	}
+
+	bool bFits = true;
+	for ( int d = 0; d < NUM_DIRECTIONS; ++d )
+	{
+		if ( !from->IsConnected( to, (NavDirType)d ) )
+		{
+			continue;
+		}
+		Vector center;
+		float halfWidth;
+		from->ComputePortal( to, (NavDirType)d, &center, &halfWidth );
+		float zBase = MAX( from->GetZ( center ), to->GetZ( center ) );
+		for ( int c = 0; c < 4; ++c )
+		{
+			const Vector corner( center.x + ( ( c & 1 ) ? vecMaxs.x : vecMins.x ), center.y + ( ( c & 2 ) ? vecMaxs.y : vecMins.y ), center.z );
+			if ( to->IsOverlapping( corner ) )
+			{
+				zBase = MAX( zBase, to->GetZ( corner ) );
+			}
+			else if ( from->IsOverlapping( corner ) )
+			{
+				zBase = MAX( zBase, from->GetZ( corner ) );
+			}
+		}
+		CNeoStaticGeometryFilter filter;
+		trace_t tr;
+		const Vector pos( center.x, center.y, zBase + 1.0f );
+		UTIL_TraceHull( pos, pos, vecMins, vecMaxs, MASK_PLAYERSOLID, &filter, &tr );
+		bFits = !tr.startsolid && !tr.allsolid;
+		break;
+	}
+	s_cache.Insert( key, bFits );
+	return bFits;
+}
+
+//-------------------------------------------------------------------------------------------------
 float CNEOBotPathCost::operator()(CNavArea* baseArea, CNavArea* fromArea, const CNavLadder* ladder, const CFuncElevator* elevator, float length) const
 {
 	VPROF_BUDGET("CNEOBotPathCost::operator()", "NextBot");
@@ -77,6 +170,18 @@ float CNEOBotPathCost::operator()(CNavArea* baseArea, CNavArea* fromArea, const 
 	if (!m_me->GetLocomotionInterface()->IsAreaTraversable(area))
 	{
 		return -1.0f;
+	}
+
+	// NEO-HARNESS-TEMP research arm (patch 68): see neo_bot_path_duck_clearance
+	if ( !ladder && neo_bot_path_duck_clearance.GetBool()
+		&& ( area->HasAttributes( NAV_MESH_CROUCH ) || fromArea->HasAttributes( NAV_MESH_CROUCH ) ) )
+	{
+		const Vector vecDuckMins = VEC_DUCK_HULL_MIN_SCALED( m_me );
+		const Vector vecDuckMaxs = VEC_DUCK_HULL_MAX_SCALED( m_me );
+		if ( vecDuckMaxs.z - vecDuckMins.z > HumanCrouchHeight && !NeoDuckHullFitsPortal( fromArea, area, vecDuckMins, vecDuckMaxs ) )
+		{
+			return -1.0f;
+		}
 	}
 
 	if ( !m_bIgnoreHazards && CNEOBotPathReservations()->IsAreaHazardous(area->GetID(), m_me) )
@@ -100,6 +205,9 @@ float CNEOBotPathCost::operator()(CNavArea* baseArea, CNavArea* fromArea, const 
 		// ladders leave bots exposed, but can be a shortcut
 		const float ladderPenalty = neo_bot_path_penalty_ladder_multiplier.GetFloat();
 		dist *= ladderPenalty;
+
+		// patch 85: a climb can fail however short the ladder is
+		dist += neo_bot_path_ladder_crossing_cost.GetFloat();
 	}
 	else if (length > 0.0)
 	{
@@ -127,6 +235,17 @@ float CNEOBotPathCost::operator()(CNavArea* baseArea, CNavArea* fromArea, const 
 		{
 			dist *= neo_bot_path_penalty_crouch_multiplier.GetFloat();
 		}
+	}
+
+	// patch 85: marked risk - AVOID (a spot bots should not favour), CLIFF (a lethal fall beside it)
+	if (area->HasAttributes(NAV_MESH_AVOID)
+		|| ( ladder && neo_bot_path_avoid_ladder_ends.GetBool() && fromArea->HasAttributes(NAV_MESH_AVOID) ))
+	{
+		dist *= neo_bot_path_avoid_multiplier.GetFloat();
+	}
+	if (area->HasAttributes(NAV_MESH_CLIFF))
+	{
+		dist *= neo_bot_path_cliff_multiplier.GetFloat();
 	}
 
 	// Only apply height restrictions for non-ladder jump paths
@@ -180,6 +299,18 @@ float CNEOBotPathCost::operator()(CNavArea* baseArea, CNavArea* fromArea, const 
 
 
 	float cost = (dist * preference);
+
+	// NEO-HARNESS-TEMP research arm (2026-09-23, patch 50): physics props standing in an area make
+	// crossing it slower (pushing, squeezing past), in proportion to how much of it they cover; finite,
+	// so an area stays usable when it is the only way
+	{
+		extern ConVar neo_bot_path_prop_obstacle_cost;
+		const float flPropFrac = CNEOBotPathReservations()->GetPropObstacleFraction( area->GetID() );
+		if ( flPropFrac > 0.0f )
+		{
+			cost *= 1.0f + neo_bot_path_prop_obstacle_cost.GetFloat() * flPropFrac;
+		}
+	}
 
 	// ------------------------------------------------------------------------------------------------
 	// New path reservation related cost adjustments
@@ -260,6 +391,11 @@ float CNEOBotPathCost::operator()(CNavArea* baseArea, CNavArea* fromArea, const 
 		}
 	}
 	// ------------------------------------------------------------------------------------------------
+
+	// NEO-HARNESS-TEMP research arm (2026-09-23): a crossing bots recently got stuck making costs more,
+	// for every route type - it is about whether the way is passable, not about tactics
+	cost += CNEOBotPathReservations()->GetCrossingAvoidPenalty( fromArea->GetID(), area->GetID() );
+	cost += CNEOBotPathReservations()->GetDoorCrossingPenalty( fromArea->GetID(), area->GetID(), m_me->GetTeamNumber() );
 
 	if (area->HasAttributes(NAV_MESH_FUNC_COST))
 	{

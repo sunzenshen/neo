@@ -11,6 +11,23 @@
 #include "nav_mesh.h"
 #include "debugoverlay_shared.h"
 
+extern ConVar neo_bot_strafe_gapcheck;
+extern bool NeoBotOnPreciseArea( CNEOBot *me );
+
+// NEO-HARNESS-TEMP: research arm switch for the combat stuck A/B (2026-09-22); not for a PR as is.
+ConVar neo_bot_attack_clear_stuck( "neo_bot_attack_clear_stuck", "0", FCVAR_CHEAT,
+	"Research: reset the stuck monitor while Attack circles a visible threat in range and is moving" );
+ConVar neo_bot_attack_clear_stuck_speed( "neo_bot_attack_clear_stuck_speed", "60", FCVAR_CHEAT,
+	"Research: minimum 2-D speed for neo_bot_attack_clear_stuck" );
+
+// NEO-HARNESS-TEMP: research arm (2026-09-23): clear the stuck monitor only while deliberately circling
+ConVar neo_bot_attack_circle_clear_stuck( "neo_bot_attack_circle_clear_stuck", "0", FCVAR_CHEAT,
+	"Research: reset the stuck monitor while Attack circle-strafes a close, visible victim" );
+
+// NEO-HARNESS-TEMP: research arm switch for the stuck repath A/B (2026-09-23); the PR form has no cvar.
+ConVar neo_bot_chase_stuck_repath( "neo_bot_chase_stuck_repath", "0", FCVAR_CHEAT,
+	"Research: chase behaviours (Attack, ctgEnemy, jgrEnemy, jgrEscort) replan their chase when stuck" );
+
 ConVar sv_neo_bot_attack_cover_search_interval("sv_neo_bot_attack_cover_search_interval", "1.0", FCVAR_CHEAT,
 	"Timer throttle (in seconds) for attempts between cover searches", true, 0, false, 0);
 
@@ -286,6 +303,15 @@ ActionResult< CNEOBot >	CNEOBotAttack::Update( CNEOBot *me, float interval )
 		}
 	}
 
+	// NEO-HARNESS-TEMP research arm (2026-09-22): circling a visible threat keeps a bot inside the
+	// stuck monitor's 100 u for its ~5 s escape time with nothing in its way; a moving bot is not stuck
+	if ( neo_bot_attack_clear_stuck.GetBool() && threat->IsVisibleRecently()
+		&& me->IsRangeLessThan( threatLastKnownPos, me->GetMaxAttackRange() )
+		&& me->GetAbsVelocity().Length2D() >= neo_bot_attack_clear_stuck_speed.GetFloat() )
+	{
+		me->GetLocomotionInterface()->ClearStuckStatus( "circling a visible threat" );
+	}
+
 	CNEO_Player *pThreatPlayer = ToNEOPlayer( threat->GetEntity() );
 
 	CNEOBaseCombatWeapon* myWeapon = static_cast<CNEOBaseCombatWeapon* >( me->GetActiveWeapon() );
@@ -305,6 +331,13 @@ ActionResult< CNEOBot >	CNEOBotAttack::Update( CNEOBot *me, float interval )
 			{
 				me->PressRightButton();
 			}
+		}
+
+		// NEO-HARNESS-TEMP research arm (2026-09-23): circling on purpose keeps the bot inside the
+		// stuck monitor's radius; it is not trying to get anywhere, so it is not stuck
+		if ( neo_bot_attack_circle_clear_stuck.GetBool() )
+		{
+			me->GetLocomotionInterface()->ClearStuckStatus( "circling a close threat" );
 		}
 	}
 
@@ -465,6 +498,10 @@ EventDesiredResult< CNEOBot > CNEOBotAttack::OnStuck( CNEOBot *me )
 {
 	m_path.Invalidate();
 	m_attackCoverArea = nullptr;
+	if ( neo_bot_chase_stuck_repath.GetBool() )
+	{
+		m_chasePath.Invalidate();
+	}
 	return TryContinue();
 }
 

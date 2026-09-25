@@ -6,6 +6,34 @@
 
 extern ConVar falldamage;
 
+// NEO-HARNESS-TEMP research arm (2026-09-23, patch 54)
+ConVar neo_bot_crouch_lookahead( "neo_bot_crouch_lookahead", "0", FCVAR_CHEAT,
+	"Research: duck when a crouch area on the path starts within this many units (0 = only inside one)" );
+
+// NEO-HARNESS-TEMP research arm (2026-09-25, patch 93): a bot ducks once its last known area is CROUCH, i.e. once its centre is
+// in the crouch strip; a strip that starts at the obstacle's edge lets the standing hull's front meet the obstacle first
+// (isolation's hut eave, decom's pipes, vtol's shelf: scratch/rr/roundrobin.md). Duck when the point a half hull ahead in
+// the direction of travel is over a crouch area.
+ConVar neo_bot_crouch_leading_edge( "neo_bot_crouch_leading_edge", "0", FCVAR_CHEAT,
+	"Research: duck when the leading edge of the hull, not only its centre, is over a NAV_MESH_CROUCH area" );
+
+// patch 93: the nav area under the point a half hull (plus a margin) ahead of the bot, along its horizontal velocity
+static bool NeoCrouchAhead( CNEOBot *me, const Vector &feet, float flStep )
+{
+	Vector vel = me->GetAbsVelocity();
+	vel.z = 0.0f;
+	if ( vel.Length2DSqr() < Square( 30.0f ) )
+	{
+		return false;
+	}
+
+	vel.NormalizeInPlace();
+	const float flAhead = me->GetBodyInterface()->GetHullWidth() * 0.5f + 12.0f;
+	const Vector probe = feet + vel * flAhead + Vector( 0.0f, 0.0f, flStep );
+	const CNavArea *pAhead = TheNavMesh->GetNavArea( probe, 60.0f );
+	return pAhead && pAhead->HasAttributes( NAV_MESH_CROUCH );
+}
+
 //-----------------------------------------------------------------------------------------
 void CNEOBotLocomotion::Update( void )
 {
@@ -24,6 +52,34 @@ void CNEOBotLocomotion::Update( void )
 		if (currentArea && (currentArea->GetAttributes() & NAV_MESH_CROUCH))
 		{
 			me->PressCrouchButton( 0.3f );
+		}
+		else if ( neo_bot_crouch_leading_edge.GetBool() && NeoCrouchAhead( me, GetFeet(), GetStepHeight() ) )
+		{
+			me->PressCrouchButton( 0.3f );
+		}
+		else if ( neo_bot_crouch_lookahead.GetFloat() > 0.0f )
+		{
+			// NEO-HARNESS-TEMP research arm (2026-09-23, patch 54): duck before the hull reaches a crouch
+			// space, not once the bot's centre is inside it. A crouch area is often only as deep as the
+			// low ceiling itself (terminal's spawn exit: a 25 u strip under an 8 u lintel), so a standing
+			// hull hits the lintel while the bot is still in the area before it and never ducks
+			const PathFollower *path = me->GetCurrentPath();
+			if ( path && path->IsValid() )
+			{
+				const float flLook = neo_bot_crouch_lookahead.GetFloat();
+				const Vector &feet = GetFeet();
+				int nChecked = 0;
+				for ( const Path::Segment *seg = path->GetCurrentGoal(); seg && nChecked < 4; seg = path->NextSegment( seg ), ++nChecked )
+				{
+					if ( ( seg->pos - feet ).Length2D() > flLook )
+						break;
+					if ( seg->area && seg->area->HasAttributes( NAV_MESH_CROUCH ) )
+					{
+						me->PressCrouchButton( 0.3f );
+						break;
+					}
+				}
+			}
 		}
 #ifdef NEO
 		// NEO JANK resetting of crouch timer moved to NextBotPlayer::PressJumpButton
@@ -146,5 +202,9 @@ bool CNEOBotLocomotion::IsEntityTraversable( CBaseEntity* obstacle, TraverseWhen
 	}
 
 	const bool bIsTraversable = PlayerLocomotion::IsEntityTraversable( obstacle, when );
-	return bIsTraversable || GetBot()->IsAbleToBreak(obstacle);
+	// NEO-HARNESS-TEMP research arm: with neo_bot_avoid_prop_entities, a breakable is only traversable
+	// EVENTUALLY (base ILocomotion's rule), so avoidance steers round it
+	extern ConVar neo_bot_avoid_prop_entities;
+	const bool bBreakNow = ( when == EVENTUALLY ) || !neo_bot_avoid_prop_entities.GetBool();
+	return bIsTraversable || ( bBreakNow && GetBot()->IsAbleToBreak(obstacle) );
 }
