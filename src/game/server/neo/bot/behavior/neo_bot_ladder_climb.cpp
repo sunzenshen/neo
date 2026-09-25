@@ -149,6 +149,13 @@ ConVar neo_bot_ladder_reclaim( "neo_bot_ladder_reclaim", "0", FCVAR_CHEAT,
 ConVar neo_bot_ladder_descent_clear( "neo_bot_ladder_descent_clear", "0", FCVAR_CHEAT,
 	"Research: a descending bot drops off the ladder early only once it is a standing height below the ladder's top" );
 
+// NEO-HARNESS-TEMP research arm (2026-09-24, patch 83): the climb's first Update comes one bot update (~0.13 s) after the
+// mount, and until then the bot holds the approach's forward press - which, facing the ladder, LadderMove turns into climbing
+// UP: a descent mounted at the top goes over the top edge and lands back on the floor it started from (lci C: 50 of 93
+// descents). Press the climb's direction (patch 76's MoveUp / MoveDown, which override forward and strafe) at the mount.
+ConVar neo_bot_ladder_press_on_start( "neo_bot_ladder_press_on_start", "0", FCVAR_CHEAT,
+	"Research: the ladder climb presses its vertical direction when it starts, instead of at its first update" );
+
 CNEOBotLadderClimb::CNEOBotLadderClimb( const CNavLadder *ladder, bool goingUp )
 	: m_ladder( ladder ), m_bGoingUp( goingUp ), m_flLastZ( 0.0f ),
 	m_bDismountPhase( false ), m_bJumpedOffLadder( false ), m_pExitArea( nullptr )
@@ -251,6 +258,22 @@ ActionResult<CNEOBot> CNEOBotLadderClimb::OnStart( CNEOBot *me, Action<CNEOBot> 
 
 	// patch 71: the locomotion must know this ladder is wanted (see neo_bot_ladder_claim)
 	NeoClaimLadder( me, m_ladder, m_bGoingUp, m_pExitArea );
+
+	// patch 83: climb the right way from the first tick, not with the approach's forward press
+	if ( neo_bot_ladder_press_on_start.GetBool() && neo_bot_ladder_moveup.GetBool() )
+	{
+		me->ReleaseForwardButton();
+		me->ReleaseLeftButton();
+		me->ReleaseRightButton();
+		if ( m_bGoingUp )
+		{
+			me->PressMoveUpButton( NEO_LADDER_VERTICAL_PRESS );
+		}
+		else
+		{
+			me->PressMoveDownButton( NEO_LADDER_VERTICAL_PRESS );
+		}
+	}
 
 	NeoLogLadderEvent( me, "climbstart", m_ladder, m_bGoingUp, "tele=%d exit=%d exitz=%.0f vel=%.0f,%.0f,%.0f ang=%.0f,%.0f",
 		bTeleported ? 1 : 0, m_pExitArea ? m_pExitArea->GetID() : -1, m_pExitArea ? m_exitAreaCenter.z : 0.0f,
