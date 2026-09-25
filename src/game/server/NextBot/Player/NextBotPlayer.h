@@ -20,6 +20,11 @@ extern ConVar NextBotPlayerStop;
 extern ConVar NextBotPlayerWalk;
 extern ConVar NextBotPlayerCrouch;
 extern ConVar NextBotPlayerMove;
+#ifdef NEO
+extern ConVar neo_bot_ladder_descend_forward;	// NEO-HARNESS-TEMP research arm, patch 101 (neo_bot_ladder_climb.cpp)
+extern ConVar neo_bot_ladder_descent_settle;	// NEO-HARNESS-TEMP research arm, patch 102 (neo_bot_ladder_climb.cpp)
+extern int NeoBotLadderSettlePhase( int iEntIndex );
+#endif
 
 
 
@@ -1017,6 +1022,82 @@ inline void NextBotPlayer< PlayerType >::PhysicsSimulate( void )
 	if ( IsRenderYawOverridden() && IsMotionControlledXY( GetMainActivity() ) )
 	{
 		angles[YAW] = GetOverriddenRenderYaw();
+	}
+#endif
+
+#ifdef NEO
+	// NEO-HARNESS-TEMP research arm (2026-09-25, patch 102): a settling descent sends nothing while it aims (phase 1) and
+	// only forward into the face after (phase 2) - whatever else pressed a button this tick (the locomotion's descent
+	// approach presses IN_BACK)
+	if ( neo_bot_ladder_descent_settle.GetBool() )
+	{
+		const int nSettle = NeoBotLadderSettlePhase( this->entindex() );
+		if ( nSettle == 1 )
+		{
+			inputButtons &= ~( IN_FORWARD | IN_BACK | IN_MOVELEFT | IN_MOVERIGHT );
+			forwardSpeed = strafeSpeed = verticalSpeed = 0.0f;
+		}
+		else if ( nSettle == 2 )
+		{
+			inputButtons &= ~( IN_BACK | IN_MOVELEFT | IN_MOVERIGHT );
+			inputButtons |= IN_FORWARD;
+			forwardSpeed = mover->GetRunSpeed();
+			strafeSpeed = verticalSpeed = 0.0f;
+		}
+	}
+
+	// NEO-HARNESS-TEMP research arm (2026-09-25, patch 101 v2: neo_bot_ladder_descend_forward 2): LadderMove pushes a player
+	// off a ladder when it stands on a floor and its move has any component away from the face - MoveDown counts, since
+	// NEO's upmove branch moves out along the face normal. Judge that here, on the command the engine will run this tick,
+	// with LadderMove's own floor test: on a ladder with a floor under the feet, send no move away from the face.
+	// v3 (neo_bot_ladder_descend_forward 3): the grab and the push-off happen inside one LadderMove, so a bot still walking
+	// on the rim when the command is built is not on the ladder yet - drop MoveDown on a floor before the grab too (upmove
+	// does nothing to a walking player)
+	const bool bNeoLadderNear = neo_bot_ladder_descend_forward.GetInt() >= 3 && this->GetMoveType() != MOVETYPE_LADDER;
+	if ( neo_bot_ladder_descend_forward.GetInt() >= 2 && ( this->GetMoveType() == MOVETYPE_LADDER || bNeoLadderNear ) )
+	{
+		Vector vecFloor = this->GetAbsOrigin();
+		vecFloor.z += this->GetPlayerMins().z - 1.0f;
+		const bool bOnFloor = this->GetGroundEntity() != NULL || enginetrace->GetPointContents( vecFloor ) == CONTENTS_SOLID;
+		if ( bOnFloor )
+		{
+			if ( verticalSpeed < 0.0f )
+			{
+				verticalSpeed = 0.0f;
+			}
+
+			// the face normal of the nav ladder the bot is on (the engine's own is private to CBasePlayer)
+			const Vector &vecFeet = this->GetAbsOrigin();
+			const CNavLadder *pLadder = NULL;
+			float flBestSq = 48.0f * 48.0f;
+			FOR_EACH_VEC( TheNavMesh->GetLadders(), iLadder )
+			{
+				const CNavLadder *pCand = TheNavMesh->GetLadders()[iLadder];
+				if ( vecFeet.z < pCand->m_bottom.z - 24.0f || vecFeet.z > pCand->m_top.z + 24.0f )
+				{
+					continue;
+				}
+
+				const float flDistSq = ( pCand->GetPosAtHeight( vecFeet.z ) - vecFeet ).AsVector2D().LengthSqr();
+				if ( flDistSq < flBestSq )
+				{
+					flBestSq = flDistSq;
+					pLadder = pCand;
+				}
+			}
+
+			Vector vecForward, vecRight;
+			AngleVectors( angles, &vecForward, &vecRight, NULL );
+			const float flFwd = ( ( inputButtons & IN_FORWARD ) ? 1.0f : 0.0f ) - ( ( inputButtons & IN_BACK ) ? 1.0f : 0.0f );
+			const float flSide = ( ( inputButtons & IN_MOVERIGHT ) ? 1.0f : 0.0f ) - ( ( inputButtons & IN_MOVELEFT ) ? 1.0f : 0.0f );
+			const Vector vecWish = vecForward * flFwd + vecRight * flSide;
+			if ( pLadder && !bNeoLadderNear && verticalSpeed == 0.0f && DotProduct( vecWish, pLadder->GetNormal() ) > 0.0f )
+			{
+				inputButtons &= ~( IN_FORWARD | IN_BACK | IN_MOVELEFT | IN_MOVERIGHT );
+				forwardSpeed = 0.0f;
+				strafeSpeed = 0.0f;
+			}
+		}
 	}
 #endif
 

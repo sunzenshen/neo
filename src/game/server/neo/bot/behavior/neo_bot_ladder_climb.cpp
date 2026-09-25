@@ -11,6 +11,8 @@
 // NEO-HARNESS-TEMP forensic instrumentation (2026-09-24): one NEO_FORENSIC_LADDERBEH line per ladder behaviour ending,
 // with its reason, so an offline tool can count how climbs end (see harness/patches/README.md). Never part of a PR.
 extern ConVar sv_neo_forensic_log;
+static float s_flNeoClimbStart[ MAX_PLAYERS + 1 ];	// patch 100: when each bot's current climb began
+static const float NEO_LADDER_TICK_TRACE_TIME = 1.2f;
 static void NeoLogLadderBeh( CNEOBot *me, const char *beh, const CNavLadder *ladder, bool goingUp, const char *reason )
 {
 	if ( !sv_neo_forensic_log.GetBool() || !me )
@@ -125,6 +127,88 @@ ConVar neo_bot_ladder_lateral_hold( "neo_bot_ladder_lateral_hold", "0", FCVAR_CH
 // upmove is set) and before the dismount, whose forward step over the top upmove would also override.
 ConVar neo_bot_ladder_moveup( "neo_bot_ladder_moveup", "0", FCVAR_CHEAT,
 	"Research: the ladder climb's MoveUp / MoveDown presses actually reach the user command (climb along the ladder, not the view)" );
+
+// NEO-HARNESS-TEMP research arm (2026-09-25, patch 101): LadderMove turns MoveDown into a move out along the face normal
+// (NEO's upmove branch) and, for a player standing on a floor, adds a push off the ladder for any move away from the face -
+// so a descent that holds MoveDown while the bot's feet still touch the landing or a hatch rim is pushed off the top
+// (saitama 2: 11-14 of the descents st1 traced popped out within one update, every one with upmove -230). While there is
+// floor under the feet, descend with the plain forward-into-the-face press and the steep look instead, which never counts
+// as moving away.
+ConVar neo_bot_ladder_descend_forward( "neo_bot_ladder_descend_forward", "0", FCVAR_CHEAT,
+	"Research: a descent does not press MoveDown while the bot's feet are on a floor (forward into the face only)" );
+static constexpr float NEO_LADDER_STEEP_PITCH = 50.0f;	// forward into the face descends only past 45 deg of pitch
+
+static bool NeoFloorUnder( CNEOBot *me )
+{
+	// as LadderMove decides onFloor: a ground entity, or solid 1 u under the feet
+	const Vector feet = me->GetLocomotionInterface()->GetFeet();
+	return me->GetGroundEntity() != NULL || ( UTIL_PointContents( feet - Vector( 0.0f, 0.0f, 1.0f ) ) & CONTENTS_SOLID ) != 0;
+}
+
+// NEO-HARNESS-TEMP research arm (2026-09-25, patch 102): the descent's grab tick is the hazard (patch 100's traces: MoveDown
+// or IN_BACK from a bot still on the rim, or forward with the view pointed up, and the bot pops out of the top). Settle
+// first: press nothing until the view is steep and square to the face (phase 1), then forward only - into the face, which
+// both grabs the ladder and moves down, and never counts as moving away - until the bot is on the ladder and off the
+// floor (phase 2); then the usual descent. NextBotPlayer's user-command build enforces the same limits every tick.
+ConVar neo_bot_ladder_descent_settle( "neo_bot_ladder_descent_settle", "0", FCVAR_CHEAT,
+	"Research: a descent presses nothing until its view is steep and square to the ladder, then forward only until it is on the ladder off the floor" );
+static constexpr float NEO_LADDER_SETTLE_YAW = 30.0f;		// deg off the face's inward normal
+static constexpr float NEO_LADDER_SETTLE_TIMEOUT = 1.2f;	// give up settling after this long
+static constexpr float NEO_LADDER_SETTLE_LOOK_DROP = 150.0f;	// settle looking at the face this far below the feet
+
+// NEO-HARNESS-TEMP research arm (2026-09-25, patch 104): the dismount kick sends the bot at a fixed 150 u/s, some 80 u through
+// the air whatever the distance to the exit point; off a short side landing that is past the landing, into the corner
+// beyond (sentinel_jgr ladder 6: 13 of 72 climbs up ended in the elevator roof's far corner, 78 stuck events in 8 matches).
+// Scale the kick to reach the exit point.
+ConVar neo_bot_ladder_kick_to_exit( "neo_bot_ladder_kick_to_exit", "0", FCVAR_CHEAT,
+	"Research: the dismount kick carries the bot as far as the exit point instead of a fixed 150 u/s" );
+static constexpr float NEO_LADDER_KICK_SPEED = 150.0f;	// the stock kick
+static constexpr float NEO_LADDER_KICK_AIRTIME = 0.45f;	// about how long its 150 u/s up keeps the bot in the air
+static constexpr float NEO_LADDER_KICK_MIN = 50.0f;		// enough to leave the ladder
+
+// patch 104 v2: the kick aims where the whole hull stands on the exit area - to its nearest point the bot's centre lands
+// on the area's edge with half its hull over whatever lies between (sentinel 1: the top of the wall before its landing)
+static Vector NeoHullLandingPoint( const CNavArea *area, const Vector &from, float flHalfHull )
+{
+	const Vector lo = area->GetCorner( NORTH_WEST );
+	const Vector hi = area->GetCorner( SOUTH_EAST );
+	float xlo = lo.x + flHalfHull, xhi = hi.x - flHalfHull;
+	float ylo = lo.y + flHalfHull, yhi = hi.y - flHalfHull;
+	if ( xlo > xhi )
+	{
+		xlo = xhi = 0.5f * ( lo.x + hi.x );
+	}
+	if ( ylo > yhi )
+	{
+		ylo = yhi = 0.5f * ( lo.y + hi.y );
+	}
+
+	Vector vecLand( Clamp( from.x, xlo, xhi ), Clamp( from.y, ylo, yhi ), from.z );
+	vecLand.z = area->GetZ( vecLand );
+	return vecLand;
+}
+static int s_nNeoLadderSettle[ MAX_PLAYERS + 1 ];			// 0 none, 1 aiming, 2 pushing into the face
+static float s_flNeoLadderSettleStart[ MAX_PLAYERS + 1 ];
+
+int NeoBotLadderSettlePhase( int iEntIndex )
+{
+	return ( iEntIndex > 0 && iEntIndex <= MAX_PLAYERS ) ? s_nNeoLadderSettle[ iEntIndex ] : 0;
+}
+
+static void NeoSetLadderSettle( CNEOBot *me, int nPhase )
+{
+	const int idx = me->entindex();
+	if ( idx <= 0 || idx > MAX_PLAYERS )
+	{
+		return;
+	}
+
+	if ( nPhase == 1 && s_nNeoLadderSettle[idx] == 0 )
+	{
+		s_flNeoLadderSettleStart[idx] = gpGlobals->curtime;
+	}
+	s_nNeoLadderSettle[idx] = nPhase;
+}
 static constexpr float NEO_LADDER_VERTICAL_PRESS = 0.25f;
 
 // NEO-HARNESS-TEMP research arm (2026-09-24, patch 77): OnStart's teleport fallback leaves the hull 2 u off the ladder face
@@ -180,6 +264,12 @@ ActionResult<CNEOBot> CNEOBotLadderClimb::OnStart( CNEOBot *me, Action<CNEOBot> 
 	// Timeout based on ladder length
 	float estimatedClimbTime = m_ladder->m_length / MAX_CLIMB_SPEED + 3.0f;
 	m_timeoutTimer.Start( estimatedClimbTime );
+
+	// patch 100
+	if ( me->entindex() > 0 && me->entindex() <= MAX_PLAYERS )
+	{
+		s_flNeoClimbStart[ me->entindex() ] = gpGlobals->curtime;
+	}
 
 	ILocomotion *mover = me->GetLocomotionInterface();
 	m_flLastZ = mover->GetFeet().z;
@@ -269,11 +359,14 @@ ActionResult<CNEOBot> CNEOBotLadderClimb::OnStart( CNEOBot *me, Action<CNEOBot> 
 		{
 			me->PressMoveUpButton( NEO_LADDER_VERTICAL_PRESS );
 		}
-		else
+		else if ( !( neo_bot_ladder_descend_forward.GetBool() && NeoFloorUnder( me ) ) && !neo_bot_ladder_descent_settle.GetBool() )	// patches 101 / 102
 		{
 			me->PressMoveDownButton( NEO_LADDER_VERTICAL_PRESS );
 		}
 	}
+
+	// patch 102: a descent settles before it presses anything
+	NeoSetLadderSettle( me, ( neo_bot_ladder_descent_settle.GetBool() && !m_bGoingUp ) ? 1 : 0 );
 
 	NeoLogLadderEvent( me, "climbstart", m_ladder, m_bGoingUp, "tele=%d exit=%d exitz=%.0f vel=%.0f,%.0f,%.0f ang=%.0f,%.0f",
 		bTeleported ? 1 : 0, m_pExitArea ? m_pExitArea->GetID() : -1, m_pExitArea ? m_exitAreaCenter.z : 0.0f,
@@ -370,8 +463,39 @@ void CNEOBotLadderClimb::ResolveExitArea( CNEOBot *me )
 
 //---------------------------------------------------------------------------------------------
 // Implementation based on ladder climbing logic in https://github.com/Dragoteryx/drgbase/
+// NEO-HARNESS-TEMP forensic instrumentation (2026-09-25, patch 100): NEO_FORENSIC_LADDERTICK - every tick of a descent's
+// first 0.6 s, what the engine was last told to do (the user command) and what it did, for the descents that pop back
+// out of the top (saitama 2: 49 %). Never part of a PR.
+
+// patch 100b: the same trace for climbs up (leaning sentinel ladder 7: 27 % of up-climbs slip off near the foot)
+ConVar neo_bot_ladder_tick_trace_up( "neo_bot_ladder_tick_trace_up", "0", FCVAR_CHEAT, "Harness: NEO_FORENSIC_LADDERTICK for climbs up too" );
+
+static void NeoLogLadderTick( CNEOBot *me, const CNavLadder *ladder, bool bGoingUp )
+{
+	const int idx = me->entindex();
+	if ( !sv_neo_forensic_log.GetBool() || ( bGoingUp && !neo_bot_ladder_tick_trace_up.GetBool() ) || !ladder || idx <= 0 || idx > MAX_PLAYERS
+		|| gpGlobals->curtime - s_flNeoClimbStart[idx] > NEO_LADDER_TICK_TRACE_TIME )
+	{
+		return;
+	}
+
+	const Vector &feet = me->GetLocomotionInterface()->GetFeet();
+	const Vector &vel = me->GetAbsVelocity();
+	const CUserCmd *pCmd = me->GetLastUserCommand();
+	const QAngle ang = me->EyeAngles();
+	Msg( "NEO_FORENSIC_LADDERTICK t=%.3f p=%d dir=%s ladder=%d pos=%.0f,%.0f,%.1f top=%.0f vel=%.0f,%.0f,%.0f mt=%d gnd=%d btn=%x "
+		"fm=%.0f sm=%.0f um=%.0f cmdbtn=%x ang=%.0f,%.0f using=%d\n",
+		gpGlobals->curtime, idx, bGoingUp ? "up" : "down", ladder->GetID(), feet.x, feet.y, feet.z, ladder->m_top.z, vel.x, vel.y, vel.z,
+		(int)me->GetMoveType(), me->GetGroundEntity() ? 1 : 0, (unsigned)me->m_nButtons,
+		pCmd ? pCmd->forwardmove : 0.0f, pCmd ? pCmd->sidemove : 0.0f, pCmd ? pCmd->upmove : 0.0f, pCmd ? (unsigned)pCmd->buttons : 0u,
+		ang.x, ang.y, me->GetLocomotionInterface()->IsUsingLadder() ? 1 : 0 );
+}
+
 ActionResult<CNEOBot> CNEOBotLadderClimb::Update( CNEOBot *me, float /*interval*/ )
 {
+	// patch 100
+	NeoLogLadderTick( me, m_ladder, m_bGoingUp );
+
 	if ( m_timeoutTimer.IsElapsed() )
 	{
 		return NEO_LADDER_DONE( "Ladder climb timeout" );
@@ -461,6 +585,38 @@ ActionResult<CNEOBot> CNEOBotLadderClimb::Update( CNEOBot *me, float /*interval*
 
 		float currentZ = myPos.z;
 		float targetZ = m_bGoingUp ? m_ladder->m_top.z : m_ladder->m_bottom.z;
+
+		// patch 102: advance the settle - aim, then push into the face, then climb as usual
+		int nSettle = NeoBotLadderSettlePhase( me->entindex() );
+		if ( nSettle > 0 )
+		{
+			Vector2D vecIn = -m_ladder->GetNormal().AsVector2D();
+			vecIn.NormalizeInPlace();
+			Vector vecEyeFwd;
+			AngleVectors( me->EyeAngles(), &vecEyeFwd );
+			Vector2D vecEye2D = vecEyeFwd.AsVector2D();
+			vecEye2D.NormalizeInPlace();
+			const bool bSquare = DotProduct2D( vecEye2D, vecIn ) > cosf( DEG2RAD( NEO_LADDER_SETTLE_YAW ) );
+			const bool bSteep = me->EyeAngles().x >= NEO_LADDER_STEEP_PITCH;
+			if ( gpGlobals->curtime - s_flNeoLadderSettleStart[ me->entindex() ] > NEO_LADDER_SETTLE_TIMEOUT )
+			{
+				nSettle = 0;
+			}
+			else if ( nSettle == 1 && bSquare && bSteep )
+			{
+				nSettle = 2;
+			}
+			else if ( nSettle == 2 && onLadder && !NeoFloorUnder( me ) )
+			{
+				nSettle = 0;
+			}
+			NeoSetLadderSettle( me, nSettle );
+			if ( nSettle > 0 )
+			{
+				m_flLastZ = currentZ;	// no stall while settling
+				m_stuckTimer.Start( STUCK_CHECK_INTERVAL );
+			}
+		}
 
 		// Stuck detection: if we haven't made vertical progress, bail out gracefully
 		if ( m_stuckTimer.IsElapsed() )
@@ -582,13 +738,26 @@ ActionResult<CNEOBot> CNEOBotLadderClimb::Update( CNEOBot *me, float /*interval*
 
 			// patch 76: a duration that reaches the user command (see neo_bot_ladder_moveup); -1 is the stock no-op
 			const float flVerticalPress = neo_bot_ladder_moveup.GetBool() ? NEO_LADDER_VERTICAL_PRESS : -1.0f;
-			if ( bShouldGoUp )
+			if ( nSettle > 0 )
+			{
+				me->ReleaseMoveUpButton();	// patch 102: settling
+				me->ReleaseMoveDownButton();
+			}
+			else if ( bShouldGoUp )
 			{
 				me->PressMoveUpButton( flVerticalPress );
 			}
 			else
 			{
-				me->PressMoveDownButton( flVerticalPress );
+				// patch 101: not while a floor is under the feet - LadderMove would push the bot off the ladder
+				if ( neo_bot_ladder_descend_forward.GetBool() && NeoFloorUnder( me ) )
+				{
+					me->ReleaseMoveDownButton();
+				}
+				else
+				{
+					me->PressMoveDownButton( flVerticalPress );
+				}
 				bIsClimbingDown = true;
 			}
 		}
@@ -597,13 +766,43 @@ ActionResult<CNEOBot> CNEOBotLadderClimb::Update( CNEOBot *me, float /*interval*
 		// Look at and move to the dismount height, slightly behind the ladder
 		Vector lookTarget = m_ladder->GetPosAtHeight( dismountZ );
 		lookTarget -= m_ladder->GetNormal() * 50.0f;
+		if ( nSettle > 0 )
+		{
+			// patch 102 v2: settle on a steep point just inside the face (the dismount point can sit only ~48 deg down,
+			// short of the 50 the settle waits for)
+			lookTarget = m_ladder->GetPosAtHeight( Max( myPos.z - NEO_LADDER_SETTLE_LOOK_DROP, m_ladder->m_bottom.z ) ) - m_ladder->GetNormal() * 8.0f;
+		}
 		body->AimHeadTowards( lookTarget, IBody::MANDATORY, 0.1f, nullptr,
 			m_bGoingUp ? "Climbing up (looking at dismount position)" : "Climbing down (looking at dismount position)" );
-		me->PressForwardButton(0.1f);
+		// patch 102: settling - nothing while aiming, forward into the face once square and steep
+		if ( nSettle == 1 )
+		{
+			me->ReleaseForwardButton();
+			me->ReleaseBackwardButton();
+			me->ReleaseLeftButton();
+			me->ReleaseRightButton();
+		}
+		else if ( nSettle == 2 )
+		{
+			me->PressForwardButton( 0.1f );
+		}
+		// patch 101: off a floor, forward into the face climbs down only once the view is steep - until then it climbs up
+		else if ( neo_bot_ladder_descend_forward.GetBool() && !m_bGoingUp && onLadder && NeoFloorUnder( me ) && me->EyeAngles().x < NEO_LADDER_STEEP_PITCH )
+		{
+			me->ReleaseForwardButton();
+		}
+		else
+		{
+			me->PressForwardButton(0.1f);
+		}
 
 		// patch 75: hold the bot across the ladder, at m_flLateralTarget inside its width
 		bool bStrafing = false;
-		if ( onLadder && neo_bot_ladder_lateral_hold.GetBool() )
+		if ( nSettle > 0 )
+		{
+			// patch 102: no sideways moves while settling
+		}
+		else if ( onLadder && neo_bot_ladder_lateral_hold.GetBool() )
 		{
 			const Vector normal = m_ladder->GetNormal();
 			const Vector lateral( -normal.y, normal.x, 0.0f );	// the right hand of a bot facing into the ladder
@@ -703,7 +902,22 @@ ActionResult<CNEOBot> CNEOBotLadderClimb::Update( CNEOBot *me, float /*interval*
 
 					mover->Reset(); // clear velocity cache in locomotion interface
 
-					Vector jumpVelocity = toExit * 150.0f;
+					// patch 104: as far as the exit area, not a fixed ~80 u through the air (v2: to where the hull lands on it)
+					float flKick = NEO_LADDER_KICK_SPEED;
+					Vector vecKickDir = toExit;
+					if ( neo_bot_ladder_kick_to_exit.GetBool() )
+					{
+						Vector vecToLand = NeoHullLandingPoint( m_pExitArea, myPos, body->GetHullWidth() * 0.5f ) - myPos;
+						vecToLand.z = 0.0f;
+						const float flDist = vecToLand.NormalizeInPlace();
+						if ( flDist > 0.0f )
+						{
+							vecKickDir = vecToLand;
+						}
+						flKick = Clamp( flDist / NEO_LADDER_KICK_AIRTIME, NEO_LADDER_KICK_MIN, NEO_LADDER_KICK_SPEED );
+					}
+
+					Vector jumpVelocity = vecKickDir * flKick;
 					jumpVelocity.z = 150.0f - me->GetAbsVelocity().z;
 
 					me->ApplyAbsVelocityImpulse( jumpVelocity );
@@ -783,6 +997,7 @@ void CNEOBotLadderClimb::EnterDismountPhase( CNEOBot *me, const char *why )
 //---------------------------------------------------------------------------------------------
 void CNEOBotLadderClimb::OnEnd( CNEOBot *me, Action<CNEOBot> *nextAction )
 {
+	NeoSetLadderSettle( me, 0 );	// patch 102
 	me->StartLookingAroundForEnemies();
 	me->ClearAttribute( CNEOBot::IGNORE_ENEMIES );
 

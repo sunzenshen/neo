@@ -4,8 +4,12 @@
 //========= Copyright Valve Corporation, All rights reserved. ============//
 
 #include "cbase.h"
+#include "engine/IStaticPropMgr.h"
 
 #include "BasePropDoor.h"
+#ifdef NEO
+#include "props.h"
+#endif
 
 #include "nav_mesh.h"
 #include "NextBot.h"
@@ -30,6 +34,228 @@ ConVar NextBotAllowClimbing( "nb_allow_climbing", "1", FCVAR_CHEAT );
 ConVar NextBotAllowGapJumping( "nb_allow_gap_jumping", "1", FCVAR_CHEAT );
 
 ConVar NextBotDebugClimbing( "nb_debug_climbing", "0", FCVAR_CHEAT );
+#ifdef NEO
+// NEO-HARNESS-TEMP research arm (2026-09-23, patch 58): trust a CLIMB_UP link once at its launch point.
+// 1 = climb as soon as the bot is within a hull width of the launch point; 2 = only when it is stuck there.
+ConVar neo_bot_climb_trust_nav( "neo_bot_climb_trust_nav", "0", FCVAR_CHEAT,
+	"Research: at a CLIMB_UP launch point, climb without the geometric ledge search (1 = always, 2 = when stuck)" );
+extern ConVar sv_neo_forensic_log;
+#endif
+
+#ifdef NEO
+// NEO-HARNESS-TEMP research arm (2026-09-22, ntre notes/prop-collision-initiative): steer round prop
+// entities instead of pressing into them; the PR form has no cvar.
+ConVar neo_bot_avoid_prop_entities( "neo_bot_avoid_prop_entities", "0", FCVAR_CHEAT,
+	"Research: avoid whiskers see breakable props, and a prop squarely ahead is walked round" );
+
+// Props the nav mesh cannot account for: nav_generate skips every entity, and they can be moved,
+// broken or animated, so a path can run straight through one.
+static bool NeoIsPropObstacle( CBaseEntity *ent )
+{
+	if ( !ent || ent->IsWorld() || ent->IsPlayer() || ent->MyCombatCharacterPointer() )
+	{
+		return false;
+	}
+
+	return dynamic_cast< CBreakableProp * >( ent ) != NULL || FClassnameIs( ent, "phys_bone_follower" )
+		|| FClassnameIs( ent, "func_breakable" ) || FClassnameIs( ent, "func_physbox" );
+}
+
+// Aim a hull half-width past whichever side of the prop is nearer the goal and walkable, level
+// with its far edge:        goal
+//                   o   [ prop ]   o     <- the two candidates
+//                          bot
+static bool NeoPropDetour( INextBot *bot, CBaseEntity *prop, const Vector &goalPos, const Vector &forward,
+	const Vector &left, Vector *detour )
+{
+	ILocomotion *mover = bot->GetLocomotionInterface();
+	const Vector &feet = mover->GetFeet();
+	Vector mins, maxs;
+	prop->CollisionProp()->WorldSpaceAABB( &mins, &maxs );
+
+	float sideLo = FLT_MAX, sideHi = -FLT_MAX, ahead = 0.0f;
+	for ( int i = 0; i < 4; ++i )
+	{
+		const Vector corner( ( i & 1 ) ? maxs.x : mins.x, ( i & 2 ) ? maxs.y : mins.y, feet.z );
+		const Vector to = corner - feet;
+		const float side = to.x * left.x + to.y * left.y;
+		sideLo = MIN( sideLo, side );
+		sideHi = MAX( sideHi, side );
+		ahead = MAX( ahead, to.x * forward.x + to.y * forward.y );
+	}
+
+	const float margin = bot->GetBodyInterface()->GetHullWidth() / 2.0f + 4.0f;
+	Vector candidates[2] = {
+		feet + ahead * forward + ( sideHi + margin ) * left,
+		feet + ahead * forward + ( sideLo - margin ) * left,
+	};
+	if ( ( candidates[1] - goalPos ).LengthSqr() < ( candidates[0] - goalPos ).LengthSqr() )
+	{
+		V_swap( candidates[0], candidates[1] );
+	}
+
+	for ( int i = 0; i < 2; ++i )
+	{
+		if ( mover->IsPotentiallyTraversable( feet, candidates[i], ILocomotion::IMMEDIATELY ) )
+		{
+			*detour = candidates[i];
+			return true;
+		}
+	}
+
+	return false;
+}
+
+// NEO-HARNESS-TEMP research arm (2026-09-23, ntre notes/navmesh-release-roadmap): the follower's
+// skip-ahead checks trust IsPotentiallyTraversable, whose probe is a quarter hull wide, so a skip can
+// go through a holed wall, grate or railing a player cannot pass; the bot then presses into it.
+ConVar neo_bot_path_skip_wide( "neo_bot_path_skip_wide", "0", FCVAR_CHEAT,
+	"Research: the path follower only skips ahead where a nearly full-width hull fits (2 = and its full current height)" );
+
+// patch 62: a path point entering a NAV_MESH_PRECISE area is a waypoint the bot must reach before heading further,
+// so a mesh author can stop skip-ahead cutting a corner (a stair's handrail end, a pillar) by marking the area past it
+// NEO-HARNESS-TEMP research arm (2026-09-24, patch 70): see the "goal too high" check in PathFollower::Update
+ConVar neo_bot_felloff_steep( "neo_bot_felloff_steep", "0", FCVAR_CHEAT,
+	"Research: a goal more than a jump above and steeper than 45 degrees away is acted on at once instead of after the stuck timeout - 1 = take the next segment or re-path, 2 = only take the next segment when it is reachable" );
+
+ConVar neo_bot_path_precise_waypoint( "neo_bot_path_precise_waypoint", "0", FCVAR_CHEAT,
+	"Research: 1 = skip-ahead never passes a path point that enters a NAV_MESH_PRECISE area" );
+
+// NEO-HARNESS-TEMP research arm (2026-09-25, patch 95): the ladder behaviours (CNEOBotLadderApproach / Climb, started by
+// the tactical monitor) mount ladders; handing one the bot is not yet on to the locomotion here as well puts it in an
+// approach state the monitor never sees, since the goal has moved past the ladder (transit ladder 2's top, rg2)
+ConVar neo_bot_ladder_follower_defer( "neo_bot_ladder_follower_defer", "0", FCVAR_CHEAT,
+	"Research: the path follower leaves mounting a ladder the bot is not on to the ladder behaviours" );
+
+// NEO-HARNESS-TEMP research arm (2026-09-25, patch 97): a bot off its path walks the straight line to the next waypoint,
+// and that line can cross a drop the path never planned (patch 96's traces: apparatus 59 of 64 matched falls left the
+// edge heading for the path goal, 3404 -> a gap-jump waypoint in 8352 across the 80 u void). When the floor ahead ends
+// over such a drop, re-plan from where the bot is instead.
+ConVar neo_bot_path_void_guard( "neo_bot_path_void_guard", "0", FCVAR_CHEAT,
+	"Research: re-plan when the floor ahead ends over a drop the current ON_GROUND path segment does not plan (2 = not on the way to a ladder)" );
+
+// NEO-HARNESS-TEMP research arm (2026-09-25, patch 108): a JUMP_OVER_GAP goal is exempt from the guard, rightly while the bot
+// stands where the jump starts; a bot off its path heads for the far side's waypoint from elsewhere and walks into the gap
+// without jumping (apparatus 3404: the strip the 8352 gap jump lands on, whose bots still steer at the 3404 -> 8352 gap
+// point of a path planned from the far side - ~1 fall a match). Guard such a goal too.
+ConVar neo_bot_path_void_guard_gap( "neo_bot_path_void_guard_gap", "0", FCVAR_CHEAT,
+	"Research: the void guard also covers a gap-jump goal when the bot is not on the area the jump starts from"
+	" (2 = also re-plans, without the probe, from off the path towards a goal more than a step up; 3 = measures that step from the path segment, not the steering point)" );
+
+static const float NEO_VOID_GUARD_DROP = 200.0f;		// no floor this far under the probe = a drop the path must plan
+static const float NEO_VOID_GUARD_LEAD = 12.0f;			// probe this far past the hull's leading edge
+static const float NEO_VOID_GUARD_HALF = 12.0f;			// probe box half-width: a crack the hull bridges is not a void
+static const float NEO_VOID_GUARD_INTERVAL = 1.0f;		// per bot, at most one re-plan this often
+static float s_flNeoVoidGuardNext[ MAX_PLAYERS + 1 ];
+
+// a ladder end: the ladder behaviours mount it, and the drop beside it is the shaft the ladder is for
+static bool NeoNearLadderEnd( const Path::Segment *goal, const Path::Segment *next )
+{
+	if ( next && next->ladder )
+	{
+		return true;
+	}
+
+	if ( !goal->area )
+	{
+		return false;
+	}
+
+	return goal->area->GetLadders( CNavLadder::LADDER_UP )->Count() > 0 || goal->area->GetLadders( CNavLadder::LADDER_DOWN )->Count() > 0;
+}
+
+static bool NeoVoidAhead( INextBot *bot, const Path::Segment *goal, const Path::Segment *prior, const Path::Segment *next, const Vector &goalPos )
+{
+	ILocomotion *mover = bot->GetLocomotionInterface();
+
+	// patch 108: off the area a gap jump starts from, its waypoint is a walk into the gap
+	const bool bOffPath = goal && prior && prior->area && bot->GetEntity()->GetLastKnownArea() != prior->area;
+	const bool bOffPathGap = neo_bot_path_void_guard_gap.GetBool() && bOffPath && goal->type == Path::JUMP_OVER_GAP;
+	if ( !goal || ( goal->type != Path::ON_GROUND && !bOffPathGap ) || !mover->IsOnGround() || mover->IsClimbingOrJumping() )
+	{
+		return false;
+	}
+
+	// v2: from off the path, a goal more than a step up needs a jump the bot is not lined up for - re-plan without the probe,
+	// which a gap narrower than its box never reads as a void (apparatus 8340: a duct top ending 25 u short of the next)
+	// (v3: against the segment's own height - Avoid() hands a steering point at the bot's feet height, which hid the rise;
+	// ap3: 3404's bots walking back to the 8352 take-off never tripped v2)
+	const float flGoalZ = ( neo_bot_path_void_guard_gap.GetInt() >= 3 ) ? goal->pos.z : goalPos.z;
+	const bool bOffPathRise = neo_bot_path_void_guard_gap.GetInt() >= 2 && bOffPath
+		&& flGoalZ - mover->GetFeet().z > mover->GetStepHeight();
+
+	// v2 (rg4: v1 took the ladder descents that end back at the top from 42 to 59 %): not on the way to a ladder
+	if ( neo_bot_path_void_guard.GetInt() >= 2 && NeoNearLadderEnd( goal, next ) )
+	{
+		return false;
+	}
+
+	const int idx = bot->GetEntity()->entindex();
+	if ( idx <= 0 || idx > MAX_PLAYERS || gpGlobals->curtime < s_flNeoVoidGuardNext[idx] )
+	{
+		return false;
+	}
+
+	const Vector &feet = mover->GetFeet();
+	Vector dir = goalPos - feet;
+	dir.z = 0.0f;
+	const float flLead = bot->GetBodyInterface()->GetHullWidth() * 0.5f + NEO_VOID_GUARD_LEAD;
+	if ( dir.NormalizeInPlace() < flLead )
+	{
+		return false;
+	}
+
+	const Vector probe = feet + dir * flLead;
+	const Vector mins( -NEO_VOID_GUARD_HALF, -NEO_VOID_GUARD_HALF, 0.0f );
+	const Vector maxs( NEO_VOID_GUARD_HALF, NEO_VOID_GUARD_HALF, 2.0f );
+	trace_t tr;
+	UTIL_TraceHull( probe + Vector( 0.0f, 0.0f, mover->GetStepHeight() ), probe - Vector( 0.0f, 0.0f, NEO_VOID_GUARD_DROP ), mins, maxs,
+		MASK_PLAYERSOLID, bot->GetEntity(), COLLISION_GROUP_PLAYER_MOVEMENT, &tr );
+	if ( !bOffPathRise && ( tr.startsolid || tr.fraction < 1.0f ) )
+	{
+		return false;
+	}
+
+	s_flNeoVoidGuardNext[idx] = gpGlobals->curtime + NEO_VOID_GUARD_INTERVAL;
+	if ( sv_neo_forensic_log.GetBool() )
+	{
+		const CNavArea *pArea = bot->GetEntity()->GetLastKnownArea();
+		Msg( "NEO_FORENSIC_VOIDGUARD t=%.2f p=%d pos=%.0f,%.0f,%.0f area=%d goal=%.0f,%.0f,%.0f goalarea=%d\n",
+			gpGlobals->curtime, idx, feet.x, feet.y, feet.z, pArea ? (int)pArea->GetID() : -1,
+			goalPos.x, goalPos.y, goalPos.z, goal->area ? (int)goal->area->GetID() : -1 );
+	}
+	return true;
+}
+
+static bool NeoIsSkipTraversable( INextBot *bot, const Vector &from, const Vector &to )
+{
+	ILocomotion *mover = bot->GetLocomotionInterface();
+	if ( !mover->IsPotentiallyTraversable( from, to ) )
+	{
+		return false;
+	}
+
+	if ( !neo_bot_path_skip_wide.GetBool() )
+	{
+		return true;
+	}
+
+	// the probe's vertical span (step height to crouch height), nearly the full hull width
+	IBody *body = bot->GetBodyInterface();
+	const float halfWidth = 0.5f * body->GetHullWidth() - 1.0f;
+	const Vector hullMin( -halfWidth, -halfWidth, mover->GetStepHeight() );
+	// patch 58: mode 2 also spans the body's current height - a crouch-height probe passes lintels,
+	// hanging signs and raised crates that a standing hull hits (the hand-reshaping pass found a dozen)
+	const float probeTop = neo_bot_path_skip_wide.GetInt() >= 2 ? body->GetHullHeight() - 1.0f : body->GetCrouchHullHeight();
+	const Vector hullMax( halfWidth, halfWidth, probeTop );
+	NextBotTraversableTraceFilter filter( bot, ILocomotion::EVENTUALLY );
+	trace_t result;
+	mover->TraceHull( from, to, hullMin, hullMax, body->GetSolidMask(), &filter, &result );
+
+	// a hull already in contact tells nothing either way: keep the probe's answer
+	return result.startsolid || result.fraction >= 1.0f;
+}
+#endif
 
 
 //--------------------------------------------------------------------------------------------------------------
@@ -240,7 +466,11 @@ bool PathFollower::IsAtGoal( INextBot *bot ) const
 				// can't use this for positions below us because we need to be able
 				// to climb over random objects along our path that we can't actually
 				// move *through*
+#ifdef NEO
+				if ( toGoal.z < mover->GetStepHeight() && ( NeoIsSkipTraversable( bot, mover->GetFeet(), next->pos ) && !mover->HasPotentialGap( mover->GetFeet(), next->pos ) ) )
+#else
 				if ( toGoal.z < mover->GetStepHeight() && ( mover->IsPotentiallyTraversable( mover->GetFeet(), next->pos ) && !mover->HasPotentialGap( mover->GetFeet(), next->pos ) ) )
+#endif
 				{
 					// passed goal
 					return true;
@@ -362,7 +592,13 @@ bool PathFollower::LadderUpdate( INextBot *bot )
 				// lined up - continue approach
 				mover->Approach( m_goal->ladder->m_bottom );
 
+#ifdef NEO
+				// patch 95: not before the bot is on it
+				const bool bDeferUp = neo_bot_ladder_follower_defer.GetBool() && bot->GetEntity()->GetMoveType() != MOVETYPE_LADDER;
+				if ( range < mountRange && !bDeferUp )
+#else
 				if ( range < mountRange )
+#endif
 				{
 					// go up ladder
 					mover->ClimbLadder( m_goal->ladder, m_goal->area );
@@ -435,7 +671,13 @@ bool PathFollower::LadderUpdate( INextBot *bot )
 			float range = to.NormalizeInPlace();
 
 			// Approach the top of the ladder.  If we're already on the ladder, start descending.
+#ifdef NEO
+			// patch 95: in mount range but not on the ladder - keep walking to it; the ladder behaviours mount it
+			const bool bOnLadder = bot->GetEntity()->GetMoveType() == MOVETYPE_LADDER;
+			if ( bOnLadder || ( range < mountRange && !neo_bot_ladder_follower_defer.GetBool() ) )
+#else
 			if ( range < mountRange || bot->GetEntity()->GetMoveType() == MOVETYPE_LADDER )
+#endif
 			{
 				// go down ladder
 				mover->DescendLadder( m_goal->ladder, m_goal->area );
@@ -474,6 +716,13 @@ bool PathFollower::CheckProgress( INextBot *bot )
 		{
 			if ( ( pSkipToGoal->pos - myFeet ).IsLengthLessThan( m_minLookAheadRange ) )
 			{
+#ifdef NEO
+				if ( neo_bot_path_precise_waypoint.GetBool() && pSkipToGoal->area && pSkipToGoal->area->HasAttributes( NAV_MESH_PRECISE ) )
+				{
+					// the point enters a PRECISE area - walk to it
+					break;
+				}
+#endif
 				// goal is too close - step to next segment
 				const Path::Segment *nextSegment = NextSegment( pSkipToGoal );
 
@@ -498,7 +747,11 @@ bool PathFollower::CheckProgress( INextBot *bot )
 #endif
 
 				// can we reach the next path segment directly
+#ifdef NEO
+				if ( NeoIsSkipTraversable( bot, myFeet, nextSegment->pos ) && !mover->HasPotentialGap( myFeet, nextSegment->pos ) )
+#else
 				if ( mover->IsPotentiallyTraversable( myFeet, nextSegment->pos ) && !mover->HasPotentialGap( myFeet, nextSegment->pos ) )
+#endif
 				{
 					pSkipToGoal = nextSegment;
 				}
@@ -696,7 +949,26 @@ void PathFollower::Update( INextBot *bot )
 	{
 		const float closeRange = 25.0f; // 75.0f;
 		Vector2D to( mover->GetFeet().x - m_goal->pos.x, mover->GetFeet().y - m_goal->pos.y );
+#ifdef NEO
+		// NEO-HARNESS-TEMP research arm (patch 70): a goal more than a jump above the feet and steeper than 45 degrees
+		// away can be neither walked nor jumped to - the bot carried on past a drop onto a narrow ledge and landed on
+		// the floor below it (yard's 5680 / 5681). Stock code waits for the stuck timeout; act now instead.
+		// Mode 1 also re-paths (FELL_OFF) when the next segment is out of reach too - that looped at ladder feet and on
+		// vtol / terminal (fs1: FELL_OFF 5 -> 313 a match); mode 2 only ever moves the goal on to a reachable next segment.
+		const bool bSteep = neo_bot_felloff_steep.GetBool() && mover->IsOnGround() &&
+			( m_goal->pos.z - mover->GetFeet().z ) > to.Length() + mover->GetStepHeight();
+		if ( bSteep && neo_bot_felloff_steep.GetInt() >= 2 && !mover->IsStuck() && !to.IsLengthLessThan( closeRange ) )
+		{
+			const Path::Segment *next = NextSegment( m_goal );
+			if ( next && ( next->pos.z - mover->GetFeet().z <= mover->GetMaxJumpHeight() ) && mover->IsPotentiallyTraversable( mover->GetFeet(), next->pos ) )
+			{
+				m_goal = next;	// we already dropped past this goal
+			}
+		}
+		else if ( mover->IsStuck() || to.IsLengthLessThan( closeRange ) || bSteep )
+#else
 		if ( mover->IsStuck() || to.IsLengthLessThan( closeRange ) )
+#endif
 		{
 			// the goal is too high to reach
 
@@ -723,11 +995,23 @@ void PathFollower::Update( INextBot *bot )
 
 				return;
 			}
+#ifdef NEO
+			else if ( bSteep )
+			{
+				// the next segment is reachable from here: we already dropped past this goal
+				m_goal = next;
+			}
+#endif
 		}
 	}
 
 
 	Vector goalPos = m_goal->pos;
+
+#ifdef NEO
+	// NEO-HARNESS-TEMP research arm (patch 51): steer round physics props across the path ahead
+	goalPos = PropDetour( bot, goalPos );
+#endif
 
 	// avoid small obstacles
 	forward = goalPos - mover->GetFeet();
@@ -746,6 +1030,21 @@ void PathFollower::Update( INextBot *bot )
 			goalPos = Avoid( bot, goalPos, forward, left );
 		}
 	}
+
+#ifdef NEO
+	// patch 97: not over a drop the path does not plan - re-plan from here
+	if ( neo_bot_path_void_guard.GetBool() && NeoVoidAhead( bot, m_goal, PriorSegment( m_goal ), NextSegment( m_goal ), goalPos ) )
+	{
+		mover->GetBot()->OnMoveToFailure( this, FAIL_FELL_OFF );
+
+		// don't invalidate if OnMoveToFailure just recomputed a new path
+		if ( GetAge() > 0.0f )
+		{
+			Invalidate();
+		}
+		return;
+	}
+#endif
 
 	// face towards movement goal
 	if ( mover->IsOnGround() )
@@ -951,7 +1250,14 @@ Vector PathFollower::Avoid( INextBot *bot, const Vector &goalPos, const Vector &
 	m_isLeftClear = true;
 	float leftAvoid = 0.0f;
 
+#ifdef NEO
+	// breakable props are traversable EVENTUALLY (the bot may break them) but not right now
+	NextBotTraversableTraceFilter traverseFilter( bot, neo_bot_avoid_prop_entities.GetBool() ? ILocomotion::IMMEDIATELY : ILocomotion::EVENTUALLY );
+	CBaseEntity *leftHit = NULL;
+	CBaseEntity *rightHit = NULL;
+#else
 	NextBotTraversableTraceFilter traverseFilter( bot );
+#endif
 	mover->TraceHull( m_leftFrom, m_leftTo, m_hullMin, m_hullMax, mask, &traverseFilter, &result );
 	if ( result.fraction < 1.0f || result.startsolid )
 	{
@@ -969,6 +1275,9 @@ Vector PathFollower::Avoid( INextBot *bot, const Vector &goalPos, const Vector &
 		if ( result.DidHitNonWorldEntity() )
 		{
 			door = dynamic_cast< CBasePropDoor * >( result.m_pEnt );
+#ifdef NEO
+			leftHit = result.m_pEnt;
+#endif
 		}
 
 		// check for steps
@@ -1006,6 +1315,12 @@ Vector PathFollower::Avoid( INextBot *bot, const Vector &goalPos, const Vector &
 		{
 			door = dynamic_cast< CBasePropDoor * >( result.m_pEnt );
 		}
+#ifdef NEO
+		if ( result.DidHitNonWorldEntity() )
+		{
+			rightHit = result.m_pEnt;
+		}
+#endif
 
 		// check for steps
 // 		float firstHit = result.fraction;
@@ -1018,6 +1333,20 @@ Vector PathFollower::Avoid( INextBot *bot, const Vector &goalPos, const Vector &
 	}
 
 	Vector adjustedGoal = goalPos;
+
+#ifdef NEO
+	// a prop squarely ahead: walk round it rather than into it
+	if ( neo_bot_avoid_prop_entities.GetBool() && !door && !m_isLeftClear && !m_isRightClear )
+	{
+		CBaseEntity *prop = NeoIsPropObstacle( leftHit ) ? leftHit : ( NeoIsPropObstacle( rightHit ) ? rightHit : NULL );
+		Vector detour;
+		if ( prop && NeoPropDetour( bot, prop, goalPos, forward, left, &detour ) )
+		{
+			m_avoidTimer.Invalidate();
+			return detour;
+		}
+	}
+#endif
 
 	// avoid doors directly in our way
 	if ( door && !m_isLeftClear && !m_isRightClear )
@@ -1201,6 +1530,36 @@ bool PathFollower::Climbing( INextBot *bot, const Path::Segment *goal, const Vec
 		return false;
 	}
 
+
+#ifdef NEO
+	// NEO-HARNESS-TEMP research arm (patch 58): the ledge search below gives up silently in places the
+	// mesh says are a climb (tarmac's basin rim: bots stood at the launch point for whole rounds); trust
+	// the link there, as the authoritative-mesh branch above does
+	if ( neo_bot_climb_trust_nav.GetInt() > 0 && m_goal->type == CLIMB_UP &&
+		 ( neo_bot_climb_trust_nav.GetInt() == 1 || mover->IsStuck() ) &&
+		 ( m_goal->pos - mover->GetFeet() ).AsVector2D().IsLengthLessThan( body->GetHullWidth() ) )
+	{
+		const Segment *afterClimb = NextSegment( m_goal );
+		if ( afterClimb && afterClimb->area )
+		{
+			Vector nearClimbGoal;
+			afterClimb->area->GetClosestPointOnArea( mover->GetFeet(), &nearClimbGoal );
+			Vector trustDirection = nearClimbGoal - mover->GetFeet();
+			trustDirection.z = 0.0f;
+			trustDirection.NormalizeInPlace();
+			if ( mover->ClimbUpToLedge( nearClimbGoal, trustDirection, NULL ) )
+			{
+				if ( sv_neo_forensic_log.GetBool() )
+				{
+					Msg( "NEO_FORENSIC_CLIMBTRUST t=%.2f p=%d pos=%.0f,%.0f,%.0f to=%.0f,%.0f,%.0f area=%d\n", gpGlobals->curtime,
+						 bot->GetEntity()->entindex(), mover->GetFeet().x, mover->GetFeet().y, mover->GetFeet().z,
+						 nearClimbGoal.x, nearClimbGoal.y, nearClimbGoal.z, afterClimb->area->GetID() );
+				}
+				return true;
+			}
+		}
+	}
+#endif
 
 	// If we're approaching a CLIMB_UP link, save off the height delta for it, and trust the nav *just* enough
 	// to climb up to that ledge and only that ledge.  We keep as large a tolerance as possible, to trust
@@ -1925,3 +2284,466 @@ bool PathFollower::IsDiscontinuityAhead( INextBot *bot, Path::SegmentType type, 
 }
 
 
+
+
+#ifdef NEO
+//--------------------------------------------------------------------------------------------------------------
+// NEO-HARNESS-TEMP research arm (2026-09-23, patch 51): local prop detour.
+//
+// The nav mesh does not know about physics props: they move, and the mesh runs straight under them. When
+// the next stretch of the path crosses a solid physics prop (its box grown by a hull half-width, within
+// body height of the bot), this lays a small grid over the bot, the props and a rejoin point on the path
+// past them, marks a cell free when it is on the nav mesh near the bot's height and outside every grown
+// prop box, runs A* across it, straightens the result and steers through its waypoints. Replanned every
+// quarter second, so it follows props that swing or get pushed.
+ConVar neo_bot_prop_detour( "neo_bot_prop_detour", "0", FCVAR_CHEAT, "Research: plan a local grid detour round physics props on the path ahead" );
+ConVar neo_bot_prop_detour_lookahead( "neo_bot_prop_detour_lookahead", "256", FCVAR_CHEAT, "Research: how far along the path to look for props" );
+ConVar neo_bot_prop_detour_all_entities( "neo_bot_prop_detour_all_entities", "1", FCVAR_CHEAT, "Research: detour round every solid entity in range (sphere query), not only prop_physics" );
+ConVar neo_bot_prop_detour_static( "neo_bot_prop_detour_static", "0", FCVAR_CHEAT, "Research: 1 = static props start and shape detours, 2 = they only shape a detour a moving obstacle started" );
+ConVar neo_bot_prop_detour_exact( "neo_bot_prop_detour_exact", "0", FCVAR_CHEAT, "Research: a cell is occupied only when a player box there overlaps the obstacle collision model (else its grown box)" );
+ConVar neo_bot_prop_detour_linked( "neo_bot_prop_detour_linked", "0", FCVAR_CHEAT, "Research: detour grid steps only between cells whose nav areas are the same or connected" );
+ConVar neo_bot_prop_detour_cell( "neo_bot_prop_detour_cell", "24", FCVAR_CHEAT, "Research: detour grid cell size (grows by x1.5 when the region needs more than 72 cells a side)" );
+ConVar neo_bot_prop_detour_perf( "neo_bot_prop_detour_perf", "0", FCVAR_CHEAT, "Research: log detour planning cost every 30 s (NEO_FORENSIC_DETOUR_PERF)" );
+ConVar neo_bot_prop_detour_grid_pass( "neo_bot_prop_detour_grid_pass", "0", FCVAR_CHEAT, "Research: once the detour grid is laid, also mark every obstacle inside it (not only those near the bot)" );
+ConVar neo_bot_prop_detour_debug( "neo_bot_prop_detour_debug", "0", FCVAR_CHEAT, "Research: log detour plans (NEO_FORENSIC_DETOUR)" );
+
+static int g_nPropDetourGrids = 0;
+static long long g_nPropDetourCells = 0;
+
+namespace
+{
+	struct DetourBox_t { Vector2D lo, hi; CBaseEntity *pEnt; ICollideable *pStatic; bool bTrigger; };
+
+	bool SegmentHitsBox( const Vector2D &a, const Vector2D &b, const DetourBox_t &box, float *tEnter, float *tExit )
+	{
+		float t0 = 0.0f, t1 = 1.0f;
+		const Vector2D d = b - a;
+		for ( int axis = 0; axis < 2; ++axis )
+		{
+			const float lo = box.lo[axis], hi = box.hi[axis];
+			if ( fabsf( d[axis] ) < 1e-4f )
+			{
+				if ( a[axis] < lo || a[axis] > hi )
+					return false;
+				continue;
+			}
+			float ta = ( lo - a[axis] ) / d[axis], tb = ( hi - a[axis] ) / d[axis];
+			if ( ta > tb ) { float tmp = ta; ta = tb; tb = tmp; }
+			t0 = MAX( t0, ta ); t1 = MIN( t1, tb );
+			if ( t0 > t1 )
+				return false;
+		}
+		*tEnter = t0; *tExit = t1;
+		return true;
+	}
+}
+
+Vector PathFollower::PropDetour( INextBot *bot, const Vector &goalPos )
+{
+	if ( !neo_bot_prop_detour.GetBool() )
+	{
+		m_propDetour.RemoveAll();
+		return goalPos;
+	}
+
+	if ( m_propDetourTimer.IsElapsed() )
+	{
+		m_propDetourTimer.Start( 0.25f );
+		// NEO-HARNESS-TEMP: planning cost telemetry
+		static int s_nCalls = 0, s_nFound = 0;
+		static double s_flTotal = 0.0, s_flMax = 0.0, s_flNextLog = 0.0;
+		const double t0 = Plat_FloatTime();
+		const bool bFound = PlanPropDetour( bot );
+		const double dt = Plat_FloatTime() - t0;
+		++s_nCalls; s_nFound += bFound ? 1 : 0; s_flTotal += dt; s_flMax = MAX( s_flMax, dt );
+		if ( neo_bot_prop_detour_perf.GetBool() && gpGlobals->curtime >= s_flNextLog )
+		{
+			Msg( "NEO_FORENSIC_DETOUR_PERF t=%.2f calls=%d found=%d total_ms=%.2f mean_us=%.1f max_ms=%.3f grids=%d cells=%lld\n",
+				gpGlobals->curtime, s_nCalls, s_nFound, s_flTotal * 1000.0, s_nCalls ? s_flTotal * 1e6 / s_nCalls : 0.0, s_flMax * 1000.0,
+				g_nPropDetourGrids, g_nPropDetourCells );
+			s_nCalls = s_nFound = 0; s_flTotal = s_flMax = 0.0; g_nPropDetourGrids = 0; g_nPropDetourCells = 0;
+			s_flNextLog = gpGlobals->curtime + 30.0;
+		}
+	}
+
+	const Vector &feet = bot->GetLocomotionInterface()->GetFeet();
+	while ( m_propDetour.Count() && ( m_propDetour[0].AsVector2D() - feet.AsVector2D() ).IsLengthLessThan( 12.0f ) )
+	{
+		m_propDetour.Remove( 0 );
+	}
+	return m_propDetour.Count() ? m_propDetour[0] : goalPos;
+}
+
+bool PathFollower::PlanPropDetour( INextBot *bot )
+{
+	m_propDetour.RemoveAll();
+	if ( !m_goal || m_goal->ladder || m_goal->type != ON_GROUND )
+	{
+		return false;
+	}
+
+	ILocomotion *mover = bot->GetLocomotionInterface();
+	const Vector feet = mover->GetFeet();
+	const float flGrow = 18.0f;		// hull half-width + margin
+	const float flLookAhead = neo_bot_prop_detour_lookahead.GetFloat();
+
+	// the path ahead as a polyline, starting at the bot
+	CUtlVector< Vector > line;
+	line.AddToTail( feet );
+	float flLen = 0.0f;
+	for ( const Segment *s = m_goal; s && flLen < flLookAhead; s = NextSegment( s ) )
+	{
+		if ( s->ladder || ( s->type != ON_GROUND && s != m_goal ) )
+			break;
+		flLen += ( s->pos - line.Tail() ).Length2D();
+		line.AddToTail( s->pos );
+	}
+	if ( line.Count() < 2 )
+		return false;
+
+	// solid entities near the bot that stand in its body space (a sphere query over every entity, so
+	// dynamic props and physboxes count too, not only prop_physics)
+	CUtlVector< DetourBox_t > boxes;
+	const bool bAllEnts = neo_bot_prop_detour_all_entities.GetBool();
+	const int iStaticMode = neo_bot_prop_detour_static.GetInt();
+	auto addEntity = [&]( CBaseEntity *pEnt, float zLo, float zHi ) {
+		if ( !pEnt || pEnt == bot->GetEntity() || pEnt->IsWorld() || pEnt->IsPlayer() || pEnt->IsBaseCombatWeapon() )
+			return;
+		if ( !bAllEnts && !FClassnameIs( pEnt, "prop_physics*" ) )
+			return;
+		if ( !pEnt->IsSolid() || pEnt->IsSolidFlagSet( FSOLID_NOT_SOLID | FSOLID_TRIGGER ) )
+			return;
+		const int iGroup = pEnt->GetCollisionGroup();
+		if ( iGroup == COLLISION_GROUP_DEBRIS || iGroup == COLLISION_GROUP_DEBRIS_TRIGGER || iGroup == COLLISION_GROUP_INTERACTIVE_DEBRIS
+			|| iGroup == COLLISION_GROUP_WEAPON || iGroup == COLLISION_GROUP_PLAYER || iGroup == COLLISION_GROUP_PLAYER_MOVEMENT )
+			return;
+		// doors open for bots; glass is shot out (CNEOBotPathClearBreakable)
+		if ( FClassnameIs( pEnt, "prop_door*" ) || FClassnameIs( pEnt, "func_door*" ) || FClassnameIs( pEnt, "func_breakable_surf" ) )
+			return;
+		// anything the bot already walks through or breaks right away (non-solid brushes, breakables)
+		if ( !FClassnameIs( pEnt, "prop_physics*" ) && mover->IsEntityTraversable( pEnt, ILocomotion::IMMEDIATELY ) )
+			return;
+		for ( int b = 0; b < boxes.Count(); ++b )
+			if ( boxes[b].pEnt == pEnt )
+				return;
+		Vector lo, hi;
+		pEnt->CollisionProp()->WorldSpaceAABB( &lo, &hi );
+		// small in every direction (a can, a bottle): not worth steering round. Thin but tall (a post,
+		// a pipe) still blocks a hull that brushes it
+		if ( ( hi.x - lo.x ) < 16.0f && ( hi.y - lo.y ) < 16.0f && ( hi.z - lo.z ) < 40.0f )
+			return;
+		// a box this big is a structural brush entity the nav mesh was built round already
+		if ( ( hi.x - lo.x ) > 512.0f || ( hi.y - lo.y ) > 512.0f )
+			return;
+		if ( lo.z > zHi + HumanHeight || hi.z < zLo + StepHeight )
+			return;
+		DetourBox_t box;
+		box.lo.Init( lo.x - flGrow, lo.y - flGrow );
+		box.hi.Init( hi.x + flGrow, hi.y + flGrow );
+		box.pEnt = pEnt; box.pStatic = NULL; box.bTrigger = true;
+		boxes.AddToTail( box );
+	};
+	// static props: the nav mesh was generated through them (brush-only traces); 1 = they start and
+	// shape detours, 2 = they only shape a detour a moving obstacle started
+	auto addStatics = [&]( const Vector &qlo, const Vector &qhi, float zLo, float zHi ) {
+		extern IStaticPropMgrServer *staticpropmgr;
+		CUtlVector< ICollideable * > statics;
+		staticpropmgr->GetAllStaticPropsInAABB( qlo, qhi, &statics );
+		for ( int s = 0; s < statics.Count(); ++s )
+		{
+			ICollideable *pColl = statics[s];
+			if ( !pColl || pColl->GetSolid() == SOLID_NONE )
+				continue;
+			bool bHave = false;
+			for ( int b = 0; b < boxes.Count() && !bHave; ++b )
+				bHave = boxes[b].pStatic == pColl;
+			if ( bHave )
+				continue;
+			Vector lo, hi;
+			pColl->WorldSpaceSurroundingBounds( &lo, &hi );
+			if ( ( hi.x - lo.x ) > 512.0f || ( hi.y - lo.y ) > 512.0f )
+				continue;
+			if ( lo.z > zHi + HumanHeight || hi.z < zLo + StepHeight )
+				continue;
+			DetourBox_t box;
+			box.lo.Init( lo.x - flGrow, lo.y - flGrow );
+			box.hi.Init( hi.x + flGrow, hi.y + flGrow );
+			box.pEnt = NULL; box.pStatic = pColl;
+			box.bTrigger = iStaticMode == 1;
+			boxes.AddToTail( box );
+		}
+	};
+
+	for ( CEntitySphereQuery sphere( feet, flLookAhead + 64.0f ); CBaseEntity *pEnt = sphere.GetCurrentEntity(); sphere.NextEntity() )
+	{
+		addEntity( pEnt, feet.z, feet.z );
+	}
+	if ( iStaticMode == 1 || ( iStaticMode == 2 && boxes.Count() > 0 ) )
+	{
+		const float r = flLookAhead + 64.0f;
+		addStatics( feet - Vector( r, r, 64.0f ), feet + Vector( r, r, HumanHeight + 64.0f ), feet.z, feet.z );
+	}
+	if ( boxes.Count() == 0 )
+		return false;
+
+	// where along the polyline the props are: rejoin 32 u past the last one hit
+	bool bHit = false;
+	int iRejoinSeg = -1;
+	float flRejoinT = 0.0f;
+	for ( int i = 0; i + 1 < line.Count(); ++i )
+	{
+		for ( int b = 0; b < boxes.Count(); ++b )
+		{
+			float t0, t1;
+			if ( boxes[b].bTrigger && SegmentHitsBox( line[i].AsVector2D(), line[i + 1].AsVector2D(), boxes[b], &t0, &t1 ) )
+			{
+				bHit = true;
+				if ( i > iRejoinSeg || ( i == iRejoinSeg && t1 > flRejoinT ) )
+				{
+					iRejoinSeg = i;
+					flRejoinT = t1;
+				}
+			}
+		}
+	}
+	if ( !bHit )
+		return false;
+
+	Vector rejoin;
+	{
+		Vector a = line[iRejoinSeg], b = line[iRejoinSeg + 1];
+		Vector dir = b - a; dir.z = 0.0f;
+		float flSeg = dir.NormalizeInPlace();
+		float flAt = flRejoinT * flSeg + 32.0f;
+		int i = iRejoinSeg;
+		while ( flAt > flSeg && i + 2 < line.Count() )
+		{
+			flAt -= flSeg; ++i;
+			a = line[i]; b = line[i + 1]; dir = b - a; dir.z = 0.0f; flSeg = dir.NormalizeInPlace();
+		}
+		flAt = MIN( flAt, flSeg );
+		rejoin = a + dir * flAt;
+		rejoin.z = a.z + ( b.z - a.z ) * ( flSeg > 0.0f ? flAt / flSeg : 0.0f );
+	}
+
+	// the grid
+	Vector2D gLo( MIN( feet.x, rejoin.x ), MIN( feet.y, rejoin.y ) ), gHi( MAX( feet.x, rejoin.x ), MAX( feet.y, rejoin.y ) );
+	for ( int b = 0; b < boxes.Count(); ++b )
+	{
+		gLo.x = MIN( gLo.x, boxes[b].lo.x ); gLo.y = MIN( gLo.y, boxes[b].lo.y );
+		gHi.x = MAX( gHi.x, boxes[b].hi.x ); gHi.y = MAX( gHi.y, boxes[b].hi.y );
+	}
+	gLo -= Vector2D( 48.0f, 48.0f ); gHi += Vector2D( 48.0f, 48.0f );
+	const int nMax = 72;
+	float flCell = MAX( 4.0f, neo_bot_prop_detour_cell.GetFloat() );
+	while ( ( gHi.x - gLo.x ) / flCell > nMax || ( gHi.y - gLo.y ) / flCell > nMax )
+		flCell *= 1.5f;
+	// Everything else standing inside the grid counts too - a prop just past the rejoin point or beside
+	// the detour, outside the first query's sphere, would otherwise send the bot from one prop into the
+	// next. Heights span the bot's and the rejoin point's floors.
+	if ( neo_bot_prop_detour_grid_pass.GetBool() )
+	{
+		const float zLo = MIN( feet.z, rejoin.z ), zHi = MAX( feet.z, rejoin.z );
+		const Vector qlo( gLo.x, gLo.y, zLo - 64.0f ), qhi( gHi.x, gHi.y, zHi + HumanHeight + 64.0f );
+		CBaseEntity *list[ 256 ];
+		const int nEnts = UTIL_EntitiesInBox( list, ARRAYSIZE( list ), qlo, qhi, 0 );
+		for ( int e = 0; e < nEnts; ++e )
+		{
+			addEntity( list[e], zLo, zHi );
+		}
+		if ( iStaticMode >= 1 )
+		{
+			addStatics( qlo, qhi, zLo, zHi );
+		}
+	}
+
+	const int nx = (int)ceilf( ( gHi.x - gLo.x ) / flCell ), ny = (int)ceilf( ( gHi.y - gLo.y ) / flCell );
+	++g_nPropDetourGrids; g_nPropDetourCells += nx * ny;
+
+	CUtlVector< unsigned char > free; free.SetCount( nx * ny );
+	CUtlVector< unsigned char > blocked; blocked.SetCount( nx * ny );
+	for ( int i = 0; i < nx * ny; ++i ) blocked[i] = 0;
+	const bool bExact = neo_bot_prop_detour_exact.GetBool();
+	const float flHull = 15.0f, flBodyTop = 64.0f;
+	CUtlVector< float > height; height.SetCount( nx * ny );
+	CUtlVector< const CNavArea * > cellArea; cellArea.SetCount( nx * ny );
+	const float flZTol = 40.0f;
+	for ( int y = 0; y < ny; ++y )
+	{
+		for ( int x = 0; x < nx; ++x )
+		{
+			const int i = y * nx + x;
+			const Vector2D c( gLo.x + ( x + 0.5f ) * flCell, gLo.y + ( y + 0.5f ) * flCell );
+			free[i] = 0;
+			cellArea[i] = NULL;
+			const CNavArea *area = TheNavMesh->GetNavArea( Vector( c.x, c.y, feet.z + flZTol ), 2.0f * flZTol );
+			if ( !area )
+				continue;
+			const float z = area->GetZ( c.x, c.y );
+			if ( fabsf( z - feet.z ) > flZTol && fabsf( z - rejoin.z ) > flZTol )
+				continue;
+			bool bInProp = false, bTriggerHit = false;
+			for ( int b = 0; b < boxes.Count() && !bInProp; ++b )
+			{
+				if ( c.x < boxes[b].lo.x || c.x > boxes[b].hi.x || c.y < boxes[b].lo.y || c.y > boxes[b].hi.y )
+					continue;
+				if ( !bExact )
+				{
+					bInProp = true;
+					bTriggerHit = boxes[b].bTrigger;
+					continue;
+				}
+				// a player-sized box standing here, from a step over the floor to crouch-plus height:
+				// does it overlap the obstacle's own collision model?
+				Ray_t ray;
+				const Vector at( c.x, c.y, z );
+				ray.Init( at, at, Vector( -flHull, -flHull, StepHeight ), Vector( flHull, flHull, flBodyTop ) );
+				trace_t tr;
+				if ( boxes[b].pEnt )
+					enginetrace->ClipRayToEntity( ray, MASK_PLAYERSOLID, boxes[b].pEnt, &tr );
+				else
+					enginetrace->ClipRayToCollideable( ray, MASK_PLAYERSOLID, boxes[b].pStatic, &tr );
+				bInProp = tr.startsolid || tr.allsolid;
+				bTriggerHit = bInProp && boxes[b].bTrigger;
+			}
+			if ( bInProp )
+			{
+				blocked[i] = bTriggerHit ? 2 : 1;
+				continue;
+			}
+			free[i] = 1;
+			height[i] = z;
+			cellArea[i] = area;
+		}
+	}
+
+	auto cellOf = [&]( const Vector &p, int &cx, int &cy ) {
+		cx = clamp( (int)( ( p.x - gLo.x ) / flCell ), 0, nx - 1 );
+		cy = clamp( (int)( ( p.y - gLo.y ) / flCell ), 0, ny - 1 );
+	};
+	auto nearestFree = [&]( int &cx, int &cy ) -> bool {
+		for ( int r = 0; r <= 3; ++r )
+			for ( int dy = -r; dy <= r; ++dy )
+				for ( int dx = -r; dx <= r; ++dx )
+				{
+					const int x = cx + dx, y = cy + dy;
+					if ( x >= 0 && y >= 0 && x < nx && y < ny && free[y * nx + x] ) { cx = x; cy = y; return true; }
+				}
+		return false;
+	};
+	// Two free cells are only neighbours if the mesh lets a bot walk between them: the same area, or areas
+	// with a connection either way. Being on the mesh is not enough - areas either side of a thin wall
+	// are both "free" cells
+	const bool bLinked = neo_bot_prop_detour_linked.GetBool();
+	auto cellsLinked = [&]( int a, int b ) -> bool {
+		if ( !bLinked || cellArea[a] == cellArea[b] )
+			return true;
+		return cellArea[a] && cellArea[b] && ( cellArea[a]->IsConnected( cellArea[b], NUM_DIRECTIONS ) || cellArea[b]->IsConnected( cellArea[a], NUM_DIRECTIONS ) );
+	};
+
+	// does the path, as it stands, run through an occupied cell? If not, nothing to steer round
+	{
+		bool bCrosses = false;
+		for ( int i = 0; i + 1 < line.Count() && !bCrosses; ++i )
+		{
+			const float flSeg = ( line[i + 1] - line[i] ).Length2D();
+			const int steps = MAX( 1, (int)( flSeg / ( flCell * 0.5f ) ) );
+			for ( int k = 0; k <= steps && !bCrosses; ++k )
+			{
+				const Vector p = line[i] + ( line[i + 1] - line[i] ) * ( (float)k / steps );
+				int px, py; cellOf( p, px, py );
+				bCrosses = blocked[py * nx + px] == 2;
+			}
+		}
+		if ( !bCrosses )
+			return false;
+	}
+
+	int sx, sy, tx, ty;
+	cellOf( feet, sx, sy ); cellOf( rejoin, tx, ty );
+	if ( !nearestFree( sx, sy ) || !nearestFree( tx, ty ) )
+		return false;
+
+	// A*, 8-connected; no corner cutting past a blocked cell
+	CUtlVector< float > g; g.SetCount( nx * ny );
+	CUtlVector< int > parent; parent.SetCount( nx * ny );
+	CUtlVector< unsigned char > closed; closed.SetCount( nx * ny );
+	for ( int i = 0; i < nx * ny; ++i ) { g[i] = FLT_MAX; parent[i] = -1; closed[i] = 0; }
+	struct Open_t { float f; int i; };
+	CUtlVector< Open_t > open;
+	const int start = sy * nx + sx, target = ty * nx + tx;
+	g[start] = 0.0f;
+	open.AddToTail( { 0.0f, start } );
+	bool bFound = false;
+	int nExpanded = 0;
+	while ( open.Count() && nExpanded < 6000 )
+	{
+		int best = 0;
+		for ( int k = 1; k < open.Count(); ++k )
+			if ( open[k].f < open[best].f ) best = k;
+		const int cur = open[best].i;
+		open.FastRemove( best );
+		if ( closed[cur] ) continue;
+		closed[cur] = 1; ++nExpanded;
+		if ( cur == target ) { bFound = true; break; }
+		const int cx = cur % nx, cy = cur / nx;
+		for ( int dy = -1; dy <= 1; ++dy )
+			for ( int dx = -1; dx <= 1; ++dx )
+			{
+				if ( !dx && !dy ) continue;
+				const int x = cx + dx, y = cy + dy;
+				if ( x < 0 || y < 0 || x >= nx || y >= ny ) continue;
+				const int n = y * nx + x;
+				if ( !free[n] || closed[n] ) continue;
+				if ( dx && dy && ( !free[cy * nx + x] || !free[y * nx + cx] ) ) continue;
+				if ( !cellsLinked( cur, n ) ) continue;
+				const float step = ( dx && dy ) ? 1.4142f : 1.0f;
+				if ( g[cur] + step < g[n] )
+				{
+					g[n] = g[cur] + step; parent[n] = cur;
+					const float h = sqrtf( (float)( ( x - tx ) * ( x - tx ) + ( y - ty ) * ( y - ty ) ) );
+					open.AddToTail( { g[n] + h, n } );
+				}
+			}
+	}
+
+	if ( neo_bot_prop_detour_debug.GetBool() )
+	{
+		Msg( "NEO_FORENSIC_DETOUR t=%.2f p=%d props=%d grid=%dx%d cell=%.0f found=%d len=%.0f from=%.0f,%.0f to=%.0f,%.0f\n",
+			gpGlobals->curtime, bot->GetEntity()->entindex(), boxes.Count(), nx, ny, flCell, bFound ? 1 : 0,
+			bFound ? g[target] * flCell : 0.0f, feet.x, feet.y, rejoin.x, rejoin.y );
+	}
+	if ( !bFound )
+		return false;
+
+	// back-track, then keep only the cells a straight grid line cannot skip
+	CUtlVector< int > cells;
+	for ( int i = target; i != -1; i = parent[i] ) cells.AddToHead( i );
+	auto lineFree = [&]( int a, int b ) -> bool {
+		const int ax = a % nx, ay = a / nx, bx = b % nx, by = b / nx;
+		const int steps = MAX( abs( bx - ax ), abs( by - ay ) ) * 2;
+		int prev = a;
+		for ( int k = 0; k <= steps; ++k )
+		{
+			const float t = steps ? (float)k / steps : 0.0f;
+			const int x = (int)( ax + ( bx - ax ) * t + 0.5f ), y = (int)( ay + ( by - ay ) * t + 0.5f );
+			const int cell = y * nx + x;
+			if ( !free[cell] ) return false;
+			if ( !cellsLinked( prev, cell ) ) return false;
+			prev = cell;
+		}
+		return true;
+	};
+	int anchor = 0;
+	for ( int k = 1; k < cells.Count(); ++k )
+	{
+		if ( k == cells.Count() - 1 || !lineFree( cells[anchor], cells[k + 1] ) )
+		{
+			const int i = cells[k];
+			m_propDetour.AddToTail( Vector( gLo.x + ( i % nx + 0.5f ) * flCell, gLo.y + ( i / nx + 0.5f ) * flCell, height[i] ) );
+			anchor = k;
+		}
+	}
+	return m_propDetour.Count() > 0;
+}
+#endif // NEO

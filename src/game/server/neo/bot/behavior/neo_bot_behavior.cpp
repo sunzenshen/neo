@@ -1,4 +1,5 @@
 #include "cbase.h"
+#include "movevars_shared.h"
 #include "fmtstr.h"
 #include "movevars_shared.h"
 
@@ -18,6 +19,9 @@
 #include "bot/behavior/neo_bot_tactical_monitor.h"
 #include "weapons/weapon_balc.h"
 
+extern ConVar neo_bot_strafe_gapcheck;
+extern ConVar sv_neo_forensic_log;
+
 // NEO-HARNESS-TEMP research arm (2026-09-24, patch 80): the unstick jump below lets go of a ladder (LadderMove turns IN_JUMP
 // into a push off the face). The stuck monitor only clears once a bot has moved 100 u from where it got stuck, so a bot
 // stuck at a short ladder's foot keeps receiving OnStuck once a second through its whole climb (lcg: 8 of 9 OnStuck events
@@ -25,6 +29,11 @@
 ConVar neo_bot_ladder_stuck_nojump( "neo_bot_ladder_stuck_nojump", "0", FCVAR_CHEAT,
 	"Research: OnStuck does not jump or strafe a bot that is on a ladder" );
 
+// NEO-HARNESS-TEMP research arm (2026-09-25, patch 86): a stuck bot standing in an area its own path does not pass
+// through follows a stale path into whatever lies between (vp90: 21 % of OnStuck events, oilstain 72 %); drop the path
+// so the owning behaviour replans from where the bot stands
+ConVar neo_bot_stuck_offpath_repath( "neo_bot_stuck_offpath_repath", "0", FCVAR_CHEAT,
+	"Research: OnStuck invalidates the current path when the bot's area is not on it, so its behaviour replans" );
 ConVar neo_bot_path_lookahead_range( "neo_bot_path_lookahead_range", "300" );
 ConVar neo_bot_sniper_aim_error( "neo_bot_sniper_aim_error", "0.01", FCVAR_CHEAT );
 ConVar neo_bot_sniper_aim_steady_rate( "neo_bot_sniper_aim_steady_rate", "10", FCVAR_CHEAT );
@@ -281,7 +290,48 @@ EventDesiredResult< CNEOBot > CNEOBotMainAction::OnStuck( CNEOBot *me )
 		return TryContinue();
 	}
 
+	// patch 86: off its own path - replan instead of pressing on towards a goal through a wall
+	if ( neo_bot_stuck_offpath_repath.GetBool() && path && path->IsValid() && !me->IsBotOnLadder() )
+	{
+		const CNavArea *pArea = me->GetLastKnownArea();
+		bool bOnPath = false;
+		for ( const Path::Segment *seg = path->FirstSegment(); seg && !bOnPath; seg = path->NextSegment( seg ) )
+		{
+			bOnPath = ( seg->area == pArea );
+		}
+
+		if ( pArea && !bOnPath )
+		{
+			if ( sv_neo_forensic_log.GetBool() )
+			{
+				Msg( "NEO_FORENSIC_OFFPATH t=%.2f p=%d area=%d\n", gpGlobals->curtime, me->entindex(), pArea->GetID() );
+			}
+			const_cast< PathFollower * >( path )->Invalidate();
+		}
+	}
+
 	me->GetLocomotionInterface()->Jump();
+
+	// patch 66: the random unstick strafe could throw a bot stuck at an edge off it (walkway falls, pit entries)
+	if ( neo_bot_strafe_gapcheck.GetBool() )
+	{
+		Vector forward;
+		me->EyeVectors( &forward );
+		Vector left( -forward.y, forward.x, 0.0f );
+		left.NormalizeInPlace();
+		const float sideStep = 25.0f;
+		const bool leftOk = !me->GetLocomotionInterface()->HasPotentialGap( me->GetAbsOrigin(), me->GetAbsOrigin() + sideStep * left );
+		const bool rightOk = !me->GetLocomotionInterface()->HasPotentialGap( me->GetAbsOrigin(), me->GetAbsOrigin() - sideStep * left );
+		if ( leftOk && ( !rightOk || RandomInt( 0, 100 ) < 50 ) )
+		{
+			me->PressLeftButton();
+		}
+		else if ( rightOk )
+		{
+			me->PressRightButton();
+		}
+		return TryContinue();
+	}
 
 	if ( RandomInt( 0, 100 ) < 50 )
 	{
@@ -1239,10 +1289,31 @@ QueryResultType	CNEOBotMainAction::ShouldRetreat( const INextBot *bot ) const
 
 
 //-----------------------------------------------------------------------------------------
+// NEO research (patch 66): strafes without a gap check - MainAction's unstick strafe and Attack's circle-strafe - check
+// for a drop on that side first (Dodge already does). Fall deaths on skyline: 60 % of victims were side-stepping.
+ConVar neo_bot_strafe_gapcheck( "neo_bot_strafe_gapcheck", "0", FCVAR_CHEAT,
+	"Research: 1 = the unstick strafe and Attack's circle-strafe only step to a side without a potential gap" );
+
+// NEO research (patch 64): the bot side of the fall-edge annotation (areas bots can fall to their deaths from carry
+// NAV_MESH_PRECISE + NAV_MESH_CLIFF): no combat strafing and no AvoidBumpingFriends shove on either (patch 85: CLIFF
+// too, and Attack's circle-strafe as well as Dodge)
+ConVar neo_bot_precise_careful( "neo_bot_precise_careful", "0", FCVAR_CHEAT,
+	"Research: 1 = bots on a NAV_MESH_PRECISE or NAV_MESH_CLIFF area neither strafe in combat nor step away from teammates" );
+
+bool NeoBotOnPreciseArea( CNEOBot *me )
+{
+	CNavArea *area = me->GetLastKnownArea();
+	return neo_bot_precise_careful.GetBool() && area && area->HasAttributes( NAV_MESH_PRECISE | NAV_MESH_CLIFF );
+}
+
 void CNEOBotMainAction::Dodge( CNEOBot *me )
 {
 	// low-skill bots don't dodge
 	if ( me->IsDifficulty( CNEOBot::EASY ) )
+		return;
+
+	// a sidestep on a PRECISE area (a ledge) can walk the bot off it
+	if ( NeoBotOnPreciseArea( me ) )
 		return;
 
 	// don't dodge if that ability is "turned off"
