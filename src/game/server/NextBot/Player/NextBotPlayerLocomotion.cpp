@@ -275,6 +275,10 @@ bool PlayerLocomotion::TraverseLadder( void )
 }
 
 
+#ifdef NEO
+extern ConVar neo_bot_ladder_claim;	// NEO-HARNESS-TEMP research arm, patch 71 (neo_bot_ladder_climb.cpp)
+#endif
+
 //-----------------------------------------------------------------------------------------------------
 /**
  * We're close, but not yet on, this ladder - approach it
@@ -292,6 +296,17 @@ PlayerLocomotion::LadderState PlayerLocomotion::ApproachAscendingLadder( void )
 		m_ladderTimer.Start( 2.0f );
 		return DISMOUNTING_LADDER_TOP;
 	}
+
+#ifdef NEO
+	// NEO-HARNESS-TEMP research arm (2026-09-24, patch 71 v3): a bot the ladder behaviour has already put on the ladder
+	// is not "too far below" it, whatever the nav ladder's bottom says - on a ladder whose foot hangs above the floor
+	// (subsurface ladder 1: 55 u) the check below refused 29 of 96 claims (lc6), and the unwanted-ladder takeover then
+	// adopted the ladder by its nearer end and drove the bot down
+	if ( neo_bot_ladder_claim.GetBool() && GetBot()->GetEntity()->GetMoveType() == MOVETYPE_LADDER )
+	{
+		return ASCENDING_LADDER;
+	}
+#endif
 
 	// sanity check - are we too far below this ladder to reach it?
 	if ( GetFeet().z <= m_ladderInfo->m_bottom.z - GetMaxJumpHeight() )
