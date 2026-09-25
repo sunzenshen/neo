@@ -35,6 +35,8 @@ private:
 	CountdownTimer m_timeoutTimer;
 	IntervalTimer m_pushTimer;	// patch 63: pushing into the ladder's foot since
 	CountdownTimer m_hopTimer;
+	Vector m_vecLastProgressPos;	// patch 99: where the bot last made progress
+	float m_flLastProgressTime;
 
 	static constexpr float MOUNT_RANGE = 25.0f;         // Distance to start climbing
 	static constexpr float ALIGN_DOT_THRESHOLD = -0.9f;	// cos(~25 degrees) alignment tolerance

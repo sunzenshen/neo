@@ -16,6 +16,24 @@
 #include "tier0/memdbgon.h"
 
 ConVar NextBotPlayerMoveDirect( "nb_player_move_direct", "0" );
+#ifdef NEO
+// NEO-HARNESS-TEMP research arm (2026-09-25, patch 109): on a PRECISE / CLIFF area (a fall edge) move in the exact direction
+// to the goal instead of the nearest of eight button combinations - up to 22.5 deg of drift, which walks a bot that aims
+// elsewhere off a 20-32 u strip (mvd1: nb_player_move_direct everywhere cut falls x0.91 but cost stuck x1.17)
+ConVar neo_bot_precise_move_direct( "neo_bot_precise_move_direct", "0", FCVAR_CHEAT,
+	"Research: on a NAV_MESH_PRECISE or NAV_MESH_CLIFF area a bot's move input follows the exact direction to its goal" );
+// NEO-HARNESS-TEMP research arm (2026-09-23, patch 58): tuck (hold crouch) once a climb's jump has left the
+// ground, so the bot reaches the crouch-jump height the path costs assume (CNEOBotLocomotion::GetMaxJumpHeight)
+ConVar neo_bot_climb_crouch_jump( "neo_bot_climb_crouch_jump", "0", FCVAR_CHEAT,
+	"Research: hold crouch while airborne on a ledge climb or gap jump (a crouch jump)" );
+// NEO-HARNESS-TEMP research arm (2026-09-24, patch 59): a ledge climb leaves the ground with whatever horizontal
+// velocity the bot had - at a launch point against the wall, almost none - and air control alone rarely carries it
+// the half hull onto the ledge (NEO_FORENSIC_CLIMB: tarmac's basin 27 % of climbs landed). Gap jumps already set
+// the run speed towards the landing at take-off; do the same for climbs.
+ConVar neo_bot_climb_push( "neo_bot_climb_push", "0", FCVAR_CHEAT,
+	"Research: at a ledge climb's take-off, set horizontal velocity towards the landing at run speed, as gap jumps do (2 = only for climbs over 40 u)" );
+extern ConVar sv_neo_forensic_log;
+#endif
 
 //-----------------------------------------------------------------------------------------------------
 PlayerLocomotion::PlayerLocomotion( INextBot *bot ) : ILocomotion( bot )
@@ -258,15 +276,18 @@ bool PlayerLocomotion::TraverseLadder( void )
 		const CNavLadder *pLadder = m_ladderInfo ? m_ladderInfo : pLadderBefore;
 		const Vector &vecFeet = GetFeet();
 
+		const Vector &vecVel = GetBot()->GetEntity()->GetAbsVelocity();
+		const QAngle angEye = m_player->EyeAngles();
 		Msg( "NEO_FORENSIC_LADDER t=%.2f p=%d from=%s to=%s ladder=%d pos=%.0f,%.0f,%.0f "
-			"ladderbottom=%.0f laddertop=%.0f movetype=%d onground=%d\n",
+			"ladderbottom=%.0f laddertop=%.0f movetype=%d onground=%d vel=%.0f,%.0f,%.0f ang=%.0f,%.0f btn=%d\n",
 			gpGlobals->curtime, GetBot()->GetEntity()->entindex(),
 			NEOHarnessLadderStateName( stateBefore ), NEOHarnessLadderStateName( m_ladderState ),
 			pLadder ? pLadder->GetID() : -1,
 			vecFeet.x, vecFeet.y, vecFeet.z,
 			pLadder ? pLadder->m_bottom.z : 0.0f, pLadder ? pLadder->m_top.z : 0.0f,
 			(int)GetBot()->GetEntity()->GetMoveType(),
-			( GetBot()->GetEntity()->GetGroundEntity() != NULL ) ? 1 : 0 );
+			( GetBot()->GetEntity()->GetGroundEntity() != NULL ) ? 1 : 0,
+			vecVel.x, vecVel.y, vecVel.z, angEye.x, angEye.y, m_player->m_nButtons );
 	}
 
 	return bTraversing;
@@ -277,6 +298,46 @@ bool PlayerLocomotion::TraverseLadder( void )
 
 #ifdef NEO
 extern ConVar neo_bot_ladder_claim;	// NEO-HARNESS-TEMP research arm, patch 71 (neo_bot_ladder_climb.cpp)
+
+// NEO-HARNESS-TEMP research arm (2026-09-25, patch 95): the approach states below have no way out but the ladder, so a
+// bot driven at a ladder it cannot grab from where it stands stays there for good (transit ladder 2's top: 30-70 s
+// against the ladder_256 prop, IN_BACK held; lc1 subsurface 1's foot). Give up after this long; 0 = never (stock).
+ConVar neo_bot_ladder_approach_timeout( "neo_bot_ladder_approach_timeout", "0", FCVAR_CHEAT,
+	"Research: seconds the locomotion's ladder approach may take before it gives up (0 = no limit)" );
+
+// NEO-HARNESS-TEMP research arm (2026-09-25, patch 98): with the ladder claim (patch 71) this state machine descends
+// alongside CNEOBotLadderClimb, and the two steer against each other - the climb faces the ladder and presses forward
+// while DescendLadder() below approaches a point out along the face normal at a huge weight, which, facing the ladder,
+// is IN_BACK. On a ladder whose top is level with the landing that is a grounded player moving away from the face, and
+// LadderMove pushes it off (sentinel 3 / 6: 52-72 % of descents started at the top end there). Leave the steering to the
+// climb behaviour while it holds the ladder.
+ConVar neo_bot_ladder_descend_handsoff( "neo_bot_ladder_descend_handsoff", "0", FCVAR_CHEAT,
+	"Research: while the ladder behaviour holds a claimed ladder, the locomotion's descent only tracks state (no aim, no approach)" );
+
+static bool NeoLadderApproachTimedOut( const CountdownTimer &timer )
+{
+	return neo_bot_ladder_approach_timeout.GetFloat() > 0.0f && timer.HasStarted() && timer.IsElapsed();
+}
+
+// ClimbLadder / DescendLadder set the approach state outside TraverseLadder, so NEO_FORENSIC_LADDER never showed who
+// started an approach (why=call; movetype 2 = still walking, 9 = already on the ladder)
+static void NeoStartLadderApproach( CountdownTimer &timer, INextBot *bot, int stateBefore, const CNavLadder *ladder, bool bUp )
+{
+	if ( neo_bot_ladder_approach_timeout.GetFloat() > 0.0f )
+	{
+		timer.Start( neo_bot_ladder_approach_timeout.GetFloat() );
+	}
+
+	if ( !sv_neo_forensic_log.GetBool() || !ladder )
+	{
+		return;
+	}
+
+	const Vector &vecFeet = bot->GetLocomotionInterface()->GetFeet();
+	Msg( "NEO_FORENSIC_LADDER t=%.2f p=%d from=%s to=%s ladder=%d pos=%.0f,%.0f,%.0f ladderbottom=%.0f laddertop=%.0f movetype=%d why=call\n",
+		gpGlobals->curtime, bot->GetEntity()->entindex(), NEOHarnessLadderStateName( stateBefore ), bUp ? "approach_up" : "approach_down",
+		ladder->GetID(), vecFeet.x, vecFeet.y, vecFeet.z, ladder->m_bottom.z, ladder->m_top.z, (int)bot->GetEntity()->GetMoveType() );
+}
 #endif
 
 //-----------------------------------------------------------------------------------------------------
@@ -289,6 +350,15 @@ PlayerLocomotion::LadderState PlayerLocomotion::ApproachAscendingLadder( void )
 	{
 		return NO_LADDER;
 	}
+
+#ifdef NEO
+	// patch 95
+	if ( NeoLadderApproachTimedOut( m_ladderTimer ) && GetBot()->GetEntity()->GetMoveType() != MOVETYPE_LADDER )
+	{
+		m_ladderInfo = NULL;
+		return NO_LADDER;
+	}
+#endif
 
 	// sanity check - are we already at the end of this ladder?
 	if ( GetFeet().z >= m_ladderInfo->m_top.z - GetStepHeight() )
@@ -341,6 +411,15 @@ PlayerLocomotion::LadderState PlayerLocomotion::ApproachDescendingLadder( void )
 	{
 		return NO_LADDER;
 	}
+
+#ifdef NEO
+	// patch 95
+	if ( NeoLadderApproachTimedOut( m_ladderTimer ) && GetBot()->GetEntity()->GetMoveType() != MOVETYPE_LADDER )
+	{
+		m_ladderInfo = NULL;
+		return NO_LADDER;
+	}
+#endif
 
 	// sanity check - are we already at the end of this ladder?
 	if ( GetFeet().z <= m_ladderInfo->m_bottom.z + GetMaxJumpHeight() )
@@ -473,6 +552,14 @@ PlayerLocomotion::LadderState PlayerLocomotion::DescendLadder( void )
 		return DISMOUNTING_LADDER_BOTTOM;
 	}
 
+#ifdef NEO
+	// patch 98
+	if ( neo_bot_ladder_descend_handsoff.GetBool() && neo_bot_ladder_claim.GetBool() )
+	{
+		return DESCENDING_LADDER;
+	}
+#endif
+
 	// climb down this ladder - look down 
 	Vector goal = GetFeet() + 100.0f * ( m_ladderInfo->GetNormal() + Vector( 0, 0, -2 ) );
 
@@ -574,6 +661,24 @@ void PlayerLocomotion::Update( void )
 			// face into the jump/climb
 			GetBot()->GetBodyInterface()->AimHeadTowards( GetBot()->GetEntity()->EyePosition() + 100.0 * toLanding, IBody::MANDATORY, 0.25f, NULL, "Facing impending jump/climb" );
 
+#ifdef NEO
+			if ( neo_bot_climb_crouch_jump.GetBool() && !IsOnGround() )
+			{
+				INextBotPlayerInput *tuck = dynamic_cast< INextBotPlayerInput * >( GetBot() );
+				if ( tuck )
+				{
+					tuck->PressCrouchButton( 0.2f );
+				}
+			}
+			if ( IsOnGround() && sv_neo_forensic_log.GetBool() )
+			{
+				// NEO-HARNESS-TEMP (patch 58): did the climb / gap jump land where it meant to?
+				Msg( "NEO_FORENSIC_CLIMB t=%.2f p=%d kind=%s pos=%.0f,%.0f,%.0f goal=%.0f,%.0f,%.0f ok=%d\n", gpGlobals->curtime,
+					 GetBot()->GetEntity()->entindex(), m_isClimbingUpToLedge ? "climb" : "gap",
+					 GetFeet().x, GetFeet().y, GetFeet().z, m_landingGoal.x, m_landingGoal.y, m_landingGoal.z,
+					 GetFeet().z > m_landingGoal.z - GetStepHeight() ? 1 : 0 );
+			}
+#endif
 			if ( IsOnGround() )
 			{
 				// back on the ground - jump is complete
@@ -593,7 +698,12 @@ void PlayerLocomotion::Update( void )
 
 			Vector vel = GetBot()->GetEntity()->GetAbsVelocity();
 
-			if ( m_isJumpingAcrossGap )
+			if ( m_isJumpingAcrossGap
+#ifdef NEO
+				 || ( m_isClimbingUpToLedge && neo_bot_climb_push.GetBool() &&
+					  ( neo_bot_climb_push.GetInt() < 2 || m_landingGoal.z - GetFeet().z > 40.0f ) )
+#endif
+				)
 			{
 				// cheat and max our velocity in case we were stopped at the edge of this gap
 				vel.x = GetRunSpeed() * toLanding.x;
@@ -721,7 +831,13 @@ void PlayerLocomotion::Approach( const Vector &pos, float goalWeight )
 	else
 	{
 		const float epsilon = 0.25f;
-		if ( NextBotPlayerMoveDirect.GetBool() )
+		bool bMoveDirect = NextBotPlayerMoveDirect.GetBool();
+#ifdef NEO
+		// patch 109: on a fall edge, no quantized drift
+		const CNavArea *pArea = m_player->GetLastKnownArea();
+		bMoveDirect |= neo_bot_precise_move_direct.GetBool() && pArea && pArea->HasAttributes( NAV_MESH_PRECISE | NAV_MESH_CLIFF );
+#endif
+		if ( bMoveDirect )
 		{
 			if ( goalDistance > epsilon )
 			{
@@ -968,6 +1084,10 @@ void PlayerLocomotion::ClimbLadder( const CNavLadder *ladder, const CNavArea *di
 // 	Approach( goal );
 // 	FaceTowards( goal );
 	
+#ifdef NEO
+	NeoStartLadderApproach( m_ladderTimer, GetBot(), (int)m_ladderState, ladder, true );
+#endif
+
 	m_ladderState = APPROACHING_ASCENDING_LADDER;
 	m_ladderInfo = ladder;
 	m_ladderDismountGoal = dismountGoal;
@@ -984,6 +1104,10 @@ void PlayerLocomotion::DescendLadder( const CNavLadder *ladder, const CNavArea *
 // 	Vector goal =  GetBot()->GetPosition() + 100.0f * ( Vector( 0, 0, -1.0f ) - ladder->GetNormal() );
 // 	Approach( goal );
 // 	FaceTowards( goal );
+
+#ifdef NEO
+	NeoStartLadderApproach( m_ladderTimer, GetBot(), (int)m_ladderState, ladder, false );
+#endif
 
 	m_ladderState = APPROACHING_DESCENDING_LADDER;
 	m_ladderInfo = ladder;

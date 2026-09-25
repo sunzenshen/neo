@@ -211,9 +211,30 @@ ActionResult< CNEOBot > CNEOBotTacticalMonitor::MonitorArmedDetpack( CNEOBot *me
 
 
 //-----------------------------------------------------------------------------------------
+// NEO-HARNESS-TEMP research arm (2026-09-24, patch 60). Players never collide in NEO (CNEORules::ShouldCollide), so
+// this reflex only spaces bots out - and when several spawn on the same point (30-bot matches: a dozen per team
+// stacked on one spawn) the "away" vector is zero, every stacked bot drops its movement keys every tick, and the
+// team stands still until the stuck monitor jumps it free ~4.5 s later.
+// 1 = stacked bots step off in a direction of their own; 2 = no avoidance at all.
+ConVar neo_bot_avoid_friends( "neo_bot_avoid_friends", "0", FCVAR_CHEAT,
+	"Research: 0 = stock AvoidBumpingFriends, 1 = stacked bots separate along a per-bot direction, 2 = off" );
+
+extern bool NeoBotOnPreciseArea( CNEOBot *me );
+
 void CNEOBotTacticalMonitor::AvoidBumpingFriends( CNEOBot *me )
 {
 	const float avoidRange = 32.0f;
+
+	if ( neo_bot_avoid_friends.GetInt() >= 2 )
+	{
+		return;
+	}
+
+	// patch 64: stepping straight away from a teammate on a PRECISE area (a ledge) can step off it
+	if ( NeoBotOnPreciseArea( me ) )
+	{
+		return;
+	}
 
 	if ( !NEORules()->IsTeamplay() )
 	{
@@ -253,6 +274,12 @@ void CNEOBotTacticalMonitor::AvoidBumpingFriends( CNEOBot *me )
 		me->ReleaseBackwardButton();
 
 		Vector away = me->GetAbsOrigin() - closestFriend->GetAbsOrigin();
+		if ( neo_bot_avoid_friends.GetInt() == 1 && away.AsVector2D().IsLengthLessThan( 1.0f ) )
+		{
+			// stacked on the same spot: a direction of our own, so the stack fans out instead of freezing
+			const float yaw = DEG2RAD( ( me->entindex() * 137.508f ) );
+			away.Init( 32.0f * cosf( yaw ), 32.0f * sinf( yaw ), 0.0f );
+		}
 
 		me->GetLocomotionInterface()->Approach( me->GetLocomotionInterface()->GetFeet() + away );
 	}
@@ -261,10 +288,93 @@ void CNEOBotTacticalMonitor::AvoidBumpingFriends( CNEOBot *me )
 
 
 //-----------------------------------------------------------------------------------------
+// NEO-HARNESS-TEMP research arm (2026-09-25, patch 88): the ladder approach steers straight at the mount point, so starting it
+// by distance alone sends a bot on the far side of a wall into the wall (bullet ladder 4: 21 of 28 up-approach timeouts from
+// behind the pillar the ladder hangs on, 55 u through it; scratch/rr/ladder_audit.md 3.7). Start it only when the way to the
+// mount point is clear or the bot already stands in the ladder's own end area.
+ConVar neo_bot_ladder_approach_clear( "neo_bot_ladder_approach_clear", "0", FCVAR_CHEAT,
+	"Research: start a ladder approach only with a clear hull path to the mount point (or from the ladder's end area)" );
+
+static bool NeoLadderEntryClear( CNEOBot *me, const CNavLadder *ladder, bool bGoingUp )
+{
+	const CNavArea *pArea = me->GetLastKnownArea();
+	if ( pArea && ( bGoingUp ? pArea == ladder->m_bottomArea
+		: ( pArea == ladder->m_topForwardArea || pArea == ladder->m_topLeftArea || pArea == ladder->m_topRightArea || pArea == ladder->m_topBehindArea ) ) )
+	{
+		return true;
+	}
+
+	// at the bot's own height, a step up: in front of the face going up, the ladder's top going down
+	ILocomotion *mover = me->GetLocomotionInterface();
+	const float flOut = me->GetBodyInterface()->GetHullWidth() * 0.5f + 2.0f;
+	Vector start = mover->GetFeet();
+	start.z += mover->GetStepHeight();
+	Vector entry = bGoingUp ? ladder->m_bottom + ladder->GetNormal() * flOut : ladder->m_top;
+	entry.z = start.z;
+
+	// right at the mount point the trace only meets the ladder's own surroundings (la1): let the approach start
+	const float flNearEnough = 48.0f;
+	if ( ( entry - start ).AsVector2D().IsLengthLessThan( flNearEnough ) )
+	{
+		return true;
+	}
+
+	const Vector vecMins( me->WorldAlignMins().x, me->WorldAlignMins().y, 0.0f );
+	const Vector vecMaxs( me->WorldAlignMaxs().x, me->WorldAlignMaxs().y, me->GetBodyInterface()->GetCrouchHullHeight() - mover->GetStepHeight() );
+	trace_t tr;
+	UTIL_TraceHull( start, entry, vecMins, vecMaxs, MASK_PLAYERSOLID, me, COLLISION_GROUP_PLAYER_MOVEMENT, &tr );
+	return !tr.startsolid && tr.fraction >= 1.0f;
+}
+
+// NEO-HARNESS-TEMP research arm (2026-09-25, patch 94): a bot the engine holds on a ladder while no ladder behaviour runs -
+// no path, or a path whose goal is not a ladder - hangs there: nothing below drives it (rg2: 50-60 s episodes at the
+// restored shaft tops of sentinel ctg / jgr and half way up skyline 1, goal -1; scratch/rr/ladder_audit.md 3.4). Climb it
+// to the nearer end.
+ConVar neo_bot_ladder_orphan_climb( "neo_bot_ladder_orphan_climb", "0", FCVAR_CHEAT,
+	"Research: a bot left on a ladder with no ladder behaviour climbs it to the nearer end" );
+
+static const CNavLadder *NeoLadderUnderBot( CNEOBot *me )
+{
+	const Vector &feet = me->GetLocomotionInterface()->GetFeet();
+	const CNavLadder *best = nullptr;
+	float flBest = Square( 48.0f );
+	const NavLadderVector &ladders = TheNavMesh->GetLadders();
+	FOR_EACH_VEC( ladders, i )
+	{
+		const CNavLadder *ladder = ladders[i];
+		if ( feet.z < ladder->m_bottom.z - 24.0f || feet.z > ladder->m_top.z + 24.0f )
+		{
+			continue;
+		}
+
+		const float flDistSq = ( ladder->GetPosAtHeight( feet.z ) - feet ).AsVector2D().LengthSqr();
+		if ( flDistSq < flBest )
+		{
+			flBest = flDistSq;
+			best = ladder;
+		}
+	}
+	return best;
+}
+
 ActionResult< CNEOBot > CNEOBotTacticalMonitor::WatchForLadders( CNEOBot *me )
 {
 	// Check if our current path has an approaching ladder segment
 	const PathFollower *path = me->GetCurrentPath();
+
+	// patch 94: on a ladder with nothing to climb it for
+	if ( neo_bot_ladder_orphan_climb.GetBool() && me->IsOnLadder() )
+	{
+		const Path::Segment *pathGoal = ( path && path->IsValid() ) ? path->GetCurrentGoal() : nullptr;
+		const CNavLadder *ladder = NeoLadderUnderBot( me );
+		if ( ladder && !( pathGoal && pathGoal->ladder == ladder ) )
+		{
+			const float z = me->GetLocomotionInterface()->GetFeet().z;
+			const bool bUp = ( ladder->m_top.z - z ) < ( z - ladder->m_bottom.z );
+			return SuspendFor( new CNEOBotLadderClimb( ladder, bUp ), bUp ? "Left on a ladder: climbing to the top" : "Left on a ladder: climbing down" );
+		}
+	}
+
 	if ( !path || !path->IsValid() )
 	{
 		return Continue();
@@ -294,6 +404,12 @@ ActionResult< CNEOBot > CNEOBotTacticalMonitor::WatchForLadders( CNEOBot *me )
 
 	if ( me->GetAbsOrigin().DistToSqr( ladderPos ) < Square(ladderApproachRange) )
 	{
+		// patch 88: not through a wall - keep following the path round it first
+		if ( neo_bot_ladder_approach_clear.GetBool() && !NeoLadderEntryClear( me, goal->ladder, goingUp ) )
+		{
+			return Continue();
+		}
+
 		return SuspendFor( 
 			new CNEOBotLadderApproach( goal->ladder, goingUp ), 
 			goingUp ? "Approaching ladder up" : "Approaching ladder down" 

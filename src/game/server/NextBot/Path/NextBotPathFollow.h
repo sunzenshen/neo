@@ -81,6 +81,15 @@ private:
 	CBaseEntity *FindBlocker( INextBot *bot );		// if entity is returned, it is blocking us from continuing along our path
 
 	float m_goalTolerance;
+
+#ifdef NEO
+	// NEO-HARNESS-TEMP research arm (2026-09-23, patch 51): a local grid detour round physics props that
+	// stand across the next stretch of path; the nav mesh keeps doing the routing, this only steers
+	Vector PropDetour( INextBot *bot, const Vector &goalPos );
+	bool PlanPropDetour( INextBot *bot );
+	CUtlVector< Vector > m_propDetour;				// remaining detour waypoints, nearest first
+	CountdownTimer m_propDetourTimer;				// replan interval
+#endif
 };
 
 

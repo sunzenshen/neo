@@ -64,6 +64,13 @@ ActionResult< CNEOBot > CNEOBotCtgEnemy::OnResume( CNEOBot *me, Action< CNEOBot 
 //---------------------------------------------------------------------------------------------
 EventDesiredResult< CNEOBot > CNEOBotCtgEnemy::OnStuck( CNEOBot *me )
 {
+	// NEO-HARNESS-TEMP research arm (neo_bot_chase_stuck_repath, 2026-09-23): replan from where we are
+	extern ConVar neo_bot_chase_stuck_repath;
+	if ( neo_bot_chase_stuck_repath.GetBool() )
+	{
+		m_chasePath.Invalidate();
+	}
+
 	return TryContinue();
 }
 

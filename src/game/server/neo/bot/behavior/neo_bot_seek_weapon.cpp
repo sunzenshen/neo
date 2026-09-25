@@ -9,6 +9,39 @@
 static constexpr int BOT_WEP_PREF_RANK_UNPREFERRED = -1;
 static constexpr int BOT_WEP_PREF_RANK_EMPTY = -2;
 
+// NEO research (patch 61): weapons that come to rest off the nav mesh - thrown out of a train window, behind a
+// stall counter, on a bus roof - were targeted over and over: the path ends at the weapon itself, so the
+// "path gets close enough" check always passes, and giving up / getting stuck never marked the weapon, so the
+// next scavenge (1 s later without primary ammo) picked the same one again.
+ConVar neo_bot_seek_weapon_reach( "neo_bot_seek_weapon_reach", "0", FCVAR_CHEAT,
+	"Research: 1 = skip weapons lying off the nav mesh, and ignore a weapon the bot got stuck on, could not path to or gave up on" );
+
+// A weapon further than this outside its nearest nav area (with brush line of sight), or this far above / below
+// the area's surface, cannot be picked up by a bot standing on the mesh
+static constexpr float BOT_WEP_OFFMESH_REACH_2D = 40.0f;
+static constexpr float BOT_WEP_OFFMESH_REACH_UP = 72.0f;
+static constexpr float BOT_WEP_OFFMESH_REACH_DOWN = 32.0f;
+
+static bool IsWeaponOffMesh( CBaseEntity *pWeapon )
+{
+	const Vector pos = pWeapon->WorldSpaceCenter();
+	CNavArea *pArea = TheNavMesh->GetNearestNavArea( pos, false, 256.0f, true, false );
+	if ( !pArea )
+	{
+		return true;
+	}
+
+	Vector close;
+	pArea->GetClosestPointOnArea( pos, &close );
+	if ( ( close - pos ).Length2D() > BOT_WEP_OFFMESH_REACH_2D )
+	{
+		return true;
+	}
+
+	const float dz = pos.z - close.z;
+	return dz > BOT_WEP_OFFMESH_REACH_UP || dz < -BOT_WEP_OFFMESH_REACH_DOWN;
+}
+
 //---------------------------------------------------------------------------------------------
 bool IsUndroppablePrimary( CBaseCombatWeapon *pPrimary )
 {
@@ -184,6 +217,11 @@ CBaseEntity *FindNearestPrimaryWeapon( const CNEOBot *me, bool bAllowDropGhost, 
 					}
 				}
 
+				if ( neo_bot_seek_weapon_reach.GetBool() && IsWeaponOffMesh( pEntity ) )
+				{
+					continue;
+				}
+
 				flClosestDistSq = flDistSq;
 				iBestWeaponRank = targetPrefRank;
 				pClosestWeapon = pEntity;
@@ -199,6 +237,15 @@ CNEOBotSeekWeapon::CNEOBotSeekWeapon( CBaseEntity *pTargetWeapon, CNEOIgnoredWea
 {
 	m_hTargetWeapon = pTargetWeapon;
 	m_pIgnoredWeapons = pIgnoredWeapons;
+}
+
+//---------------------------------------------------------------------------------------------
+void CNEOBotSeekWeapon::IgnoreTargetWeapon( void )
+{
+	if ( neo_bot_seek_weapon_reach.GetBool() && m_hTargetWeapon && m_pIgnoredWeapons && !m_pIgnoredWeapons->Has( m_hTargetWeapon ) )
+	{
+		m_pIgnoredWeapons->Add( m_hTargetWeapon );
+	}
 }
 
 //---------------------------------------------------------------------------------------------
@@ -271,6 +318,7 @@ ActionResult< CNEOBot >	CNEOBotSeekWeapon::Update( CNEOBot *me, float interval )
 
 	if ( m_giveUpTimer.IsElapsed() )
 	{
+		IgnoreTargetWeapon();
 		return Done("Gave up seeking weapon");
 	}
 
@@ -278,6 +326,7 @@ ActionResult< CNEOBot >	CNEOBotSeekWeapon::Update( CNEOBot *me, float interval )
 	{
 		if ( !CNEOBotPathCompute( me, m_path, m_hTargetWeapon->GetAbsOrigin(), FASTEST_ROUTE ) )
 		{
+			IgnoreTargetWeapon();
 			return Done("Unable to find a path to the nearest primary weapon");
 		}
 		m_repathTimer.Start( RandomFloat( 1.0f, 2.0f ) );
@@ -354,6 +403,7 @@ ActionResult< CNEOBot > CNEOBotSeekWeapon::OnResume( CNEOBot *me, Action< CNEOBo
 //---------------------------------------------------------------------------------------------
 EventDesiredResult< CNEOBot > CNEOBotSeekWeapon::OnStuck( CNEOBot *me )
 {
+	IgnoreTargetWeapon();
 	m_hTargetWeapon = nullptr;
 	m_repathTimer.Invalidate();
 	FindAndPathToWeapon(me);
@@ -369,6 +419,7 @@ EventDesiredResult< CNEOBot > CNEOBotSeekWeapon::OnMoveToSuccess( CNEOBot *me, c
 //---------------------------------------------------------------------------------------------
 EventDesiredResult< CNEOBot > CNEOBotSeekWeapon::OnMoveToFailure( CNEOBot *me, const Path *path, MoveToFailureType reason )
 {
+	IgnoreTargetWeapon();
 	m_hTargetWeapon = nullptr;
 	m_repathTimer.Invalidate();
 	FindAndPathToWeapon(me);

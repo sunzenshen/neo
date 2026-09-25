@@ -23,6 +23,7 @@
 #include "behavior/neo_bot_behavior.h"
 #include "neo_crosshair.h"
 #include "neo/weapons/weapon_ghost.h"
+#include "neo_harness_collision.h" // NEO-HARNESS-TEMP: patch 42, stuck blocker identity
 
 ConVar neo_bot_notice_gunfire_range("neo_bot_notice_gunfire_range", "3000", FCVAR_GAMEDLL);
 ConVar neo_bot_notice_quiet_gunfire_range("neo_bot_notice_quiet_gunfire_range", "500", FCVAR_GAMEDLL);
@@ -3063,17 +3064,375 @@ static void CNEOBotApplyOnStuckAreaPenalty( CNEOBot *me )
 	}
 }
 
+// NEO-HARNESS-TEMP: forensic instrumentation only (see harness/patches/README.md). Emits one
+// NEO_FORENSIC_STUCK line per stuck event, carrying the bot's position, hull extents, and a
+// forward hull trace along its current path goal so an offline tool can plot what the bot was
+// bumping into. Never part of a PR.
+extern ConVar sv_neo_forensic_log;
+
+static void CNEOBotLogStuckForensic( CNEOBot *me, const char *reason, INextBotEventResponder *pBehavior, const Path *pFailedPath = NULL )
+{
+	if ( !sv_neo_forensic_log.GetBool() )
+	{
+		return;
+	}
+
+	// Primary known threat: where the bot believes it is and which nav area that is
+	Vector vecThreat = vec3_origin;
+	int iThreatArea = -2;
+	int iThreatVisible = 0;
+	if ( const CKnownEntity *threat = me->GetVisionInterface()->GetPrimaryKnownThreat() )
+	{
+		vecThreat = threat->GetLastKnownPosition();
+		iThreatArea = threat->GetLastKnownArea() ? (int)threat->GetLastKnownArea()->GetID() : -1;
+		iThreatVisible = threat->IsVisibleRecently() ? 1 : 0;
+	}
+
+	// Action stack as one token, e.g. MainAction(TacticalMonitor(SeekAndDestroy))
+	char szBehavior[256] = "-";
+	INextBotEventResponder *pRootAction = pBehavior ? pBehavior->FirstContainedResponder() : NULL;
+	if ( pRootAction )
+	{
+		const char *pszStack = static_cast< Action< CNEOBot > * >( pRootAction )->DebugString();
+		int iOut = 0;
+		for ( const char *c = pszStack; *c && iOut < (int)sizeof( szBehavior ) - 1; ++c )
+		{
+			if ( *c != ' ' )
+			{
+				szBehavior[iOut++] = *c;
+			}
+		}
+		szBehavior[iOut] = '\0';
+	}
+
+	const Vector vecOrigin = me->GetAbsOrigin();
+	const CNavArea *pArea = me->GetLastKnownArea();
+	const Vector vecHullMins = me->GetBodyInterface()->GetHullMins();
+	const Vector vecHullMaxs = me->GetBodyInterface()->GetHullMaxs();
+
+	// Forward hull trace toward the bot's current path goal - the same hull-trace pattern
+	// CNEOBotPathClearBreakable::GetBreakableInPath uses - to see what's directly in the way.
+	CBaseEntity *pBlocker = NULL;
+	char szBlkDesc[160] = "-";
+	Vector vecTraceEnd = vecOrigin;
+	Vector vecGoal = vecOrigin;
+	int iGoalArea = -1;
+	int iSegmentType = -1;
+	// skipprobe (2026-09-23): the path follower's quarter-hull skip probe reaches the goal (1) or not
+	int iSkipProbe = -1;
+	const PathFollower *pPath = me->GetCurrentPath();
+	if ( pPath && pPath->IsValid() )
+	{
+		if ( const Path::Segment *pGoal = pPath->GetCurrentGoal() )
+		{
+			vecGoal = pGoal->pos;
+			iGoalArea = pGoal->area ? (int)pGoal->area->GetID() : -1;
+			iSegmentType = pGoal->type;
+			iSkipProbe = me->GetLocomotionInterface()->IsPotentiallyTraversable( me->GetLocomotionInterface()->GetFeet(), pGoal->pos ) ? 1 : 0;
+
+			// Hull underside lifted by the step height: a goal a hair under the origin otherwise
+			// hits the floor at fraction 0 and reports worldspawn at the bot's own position.
+			Vector vecTraceMins = vecHullMins;
+			vecTraceMins.z += me->GetLocomotionInterface()->GetStepHeight();
+
+			trace_t tr;
+			UTIL_TraceHull( vecOrigin, pGoal->pos, vecTraceMins, vecHullMaxs,
+				MASK_NPCSOLID, me->GetEntity(), COLLISION_GROUP_NONE, &tr );
+			pBlocker = tr.m_pEnt;
+			vecTraceEnd = tr.endpos;
+			NeoHarnessCollision::DescribeHit( tr, szBlkDesc, sizeof( szBlkDesc ) );
+		}
+	}
+
+	// A failed path: where it ends (the search's closest area), and whether its end position
+	// resolves to a nav area the way Path::Compute resolves its goal (-1: no goal area)
+	Vector vecEnd = vec3_origin;
+	int iEndArea = -2;
+	int iEndNav = -2;
+	int iEndHazard = 0;
+	// The start area and its walk neighbours: blocked (CNavArea::IsBlocked, which the search skips
+	// even for the start area) or hazardous (the path cost refuses it under DEFAULT_ROUTE)
+	int iStartBlocked = 0, iStartHazard = 0, iNbr = 0, iNbrBlocked = 0, iNbrHazard = 0;
+	if ( pFailedPath && pArea )
+	{
+		iStartBlocked = pArea->IsBlocked( me->GetTeamNumber() ) ? 1 : 0;
+		iStartHazard = CNEOBotPathReservations()->IsAreaHazardous( pArea->GetID(), me ) ? 1 : 0;
+		for ( int dir = 0; dir < NUM_DIRECTIONS; ++dir )
+		{
+			for ( int i = 0; i < pArea->GetAdjacentCount( (NavDirType)dir ); ++i )
+			{
+				const CNavArea *pNbr = pArea->GetAdjacentArea( (NavDirType)dir, i );
+				++iNbr;
+				iNbrBlocked += pNbr->IsBlocked( me->GetTeamNumber() ) ? 1 : 0;
+				iNbrHazard += CNEOBotPathReservations()->IsAreaHazardous( pNbr->GetID(), me ) ? 1 : 0;
+			}
+		}
+	}
+	if ( pFailedPath && pFailedPath->IsValid() && pFailedPath->LastSegment() )
+	{
+		const float flMaxDistanceToArea = 200.0f;
+		vecEnd = pFailedPath->GetEndPosition();
+		const CNavArea *pEndArea = pFailedPath->LastSegment()->area;
+		const CNavArea *pEndNav = TheNavMesh->GetNearestNavArea( vecEnd, true, flMaxDistanceToArea, true );
+		iEndArea = pEndArea ? (int)pEndArea->GetID() : -1;
+		iEndNav = pEndNav ? (int)pEndNav->GetID() : -1;
+		iEndHazard = ( pEndNav && CNEOBotPathReservations()->IsAreaHazardous( pEndNav->GetID(), me ) ) ? 1 : 0;
+	}
+
+	// Path shape (patch 42): a trivial path is Path::Compute's straight-line fallback, two segments
+	// in areas that are not connected - it walks through whatever lies between
+	// onpath: index of the bot's own area among the path's segments (-1: the bot is off its path, e.g.
+	// a path kept across a displacement); goalidx: index of the segment it is heading for
+	int iPathSegs = 0, iTrivial = 0, iOnPath = -1, iGoalIdx = -1;
+	char szPathAreas[160] = "";
+	int iBlockedAhead = -1;
+	float flPathAge = -1.0f;
+	if ( pPath && pPath->IsValid() )
+	{
+		const Path::Segment *pFirst = pPath->FirstSegment();
+		const Path::Segment *pLast = pFirst;
+		const Path::Segment *pCurGoal = pPath->GetCurrentGoal();
+		for ( const Path::Segment *seg = pFirst; seg; seg = pPath->NextSegment( seg ) )
+		{
+			if ( pArea && seg->area == pArea && iOnPath < 0 )
+			{
+				iOnPath = iPathSegs;
+			}
+			if ( seg == pCurGoal )
+			{
+				iGoalIdx = iPathSegs;
+			}
+			++iPathSegs;
+			pLast = seg;
+		}
+
+		// The path's areas from two before the goal to three after it: which link the bot is on
+		int iSeg = 0;
+		for ( const Path::Segment *seg = pFirst; seg; seg = pPath->NextSegment( seg ), ++iSeg )
+		{
+			if ( iSeg < iGoalIdx - 2 || iSeg > iGoalIdx + 3 || !seg->area )
+			{
+				continue;
+			}
+			// blkahead (2026-09-23): first path area from the goal on that is blocked for the bot's team
+			if ( iSeg >= iGoalIdx && iBlockedAhead < 0 && seg->area->IsBlocked( me->GetTeamNumber() ) )
+			{
+				iBlockedAhead = iSeg - iGoalIdx;
+			}
+			char szPart[24];
+			Q_snprintf( szPart, sizeof( szPart ), "%s%u%s", szPathAreas[0] ? ">" : "", seg->area->GetID(), ( iSeg == iGoalIdx ) ? "*" : "" );
+			Q_strncat( szPathAreas, szPart, sizeof( szPathAreas ), COPY_ALL_CHARACTERS );
+		}
+		iTrivial = ( iPathSegs == 2 && pFirst && pLast && pFirst->area && pLast->area && pFirst->area != pLast->area
+			&& !pFirst->area->IsConnected( pLast->area, NUM_DIRECTIONS ) ) ? 1 : 0;
+		flPathAge = pPath->GetAge();
+	}
+	const int iStrafe = ( me->m_nButtons & ( IN_MOVELEFT | IN_MOVERIGHT ) ) ? 1 : 0;
+
+	// What the hull is pressed against right now, and the exact static prop / entity (patch 42)
+	char szContacts[768];
+	NeoHarnessCollision::DescribeContacts( me, vecHullMins, vecHullMaxs, me->GetLocomotionInterface()->GetStepHeight(), szContacts, sizeof( szContacts ) );
+
+	Msg( "NEO_FORENSIC_STUCK t=%.2f p=%d reason=%s pos=%.0f,%.0f,%.0f area=%d "
+		"hullmin=%.0f,%.0f,%.0f hullmax=%.0f,%.0f,%.0f vel=%.0f onground=%d "
+		"blocker=%s blockerpos=%.0f,%.0f,%.0f "
+		"goal=%.0f,%.0f,%.0f goalarea=%d seg=%d duck=%d stuckdur=%.1f blockermodel=%s behavior=%s "
+		"threat=%.0f,%.0f,%.0f threatarea=%d threatvis=%d "
+		"end=%.0f,%.0f,%.0f endarea=%d endnav=%d endhaz=%d "
+		"startblk=%d starthaz=%d nbr=%d nbrblk=%d nbrhaz=%d blkdesc=%s contacts=%s "
+		"pathsegs=%d trivial=%d pathage=%.1f strafe=%d onpath=%d goalidx=%d patharea=%s skipprobe=%d blkahead=%d\n",
+		gpGlobals->curtime, me->entindex(), reason,
+		vecOrigin.x, vecOrigin.y, vecOrigin.z, pArea ? pArea->GetID() : -1,
+		vecHullMins.x, vecHullMins.y, vecHullMins.z, vecHullMaxs.x, vecHullMaxs.y, vecHullMaxs.z,
+		me->GetAbsVelocity().Length(), ( me->GetGroundEntity() != NULL ) ? 1 : 0,
+		pBlocker ? pBlocker->GetClassname() : "none",
+		vecTraceEnd.x, vecTraceEnd.y, vecTraceEnd.z,
+		vecGoal.x, vecGoal.y, vecGoal.z, iGoalArea, iSegmentType,
+		( me->GetFlags() & FL_DUCKING ) ? 1 : 0,
+		me->GetLocomotionInterface()->GetStuckDuration(),
+		( pBlocker && !pBlocker->IsWorld() && pBlocker->GetModelName() != NULL_STRING ) ? STRING( pBlocker->GetModelName() ) : "-",
+		szBehavior,
+		vecThreat.x, vecThreat.y, vecThreat.z, iThreatArea, iThreatVisible,
+		vecEnd.x, vecEnd.y, vecEnd.z, iEndArea, iEndNav, iEndHazard,
+		iStartBlocked, iStartHazard, iNbr, iNbrBlocked, iNbrHazard, szBlkDesc, szContacts,
+		iPathSegs, iTrivial, flPathAge, iStrafe, iOnPath, iGoalIdx, szPathAreas[0] ? szPathAreas : "-", iSkipProbe, iBlockedAhead );
+}
+
+// NEO-HARNESS-TEMP research arm (2026-09-23): remember the crossing a bot got stuck making, so the next
+// path search (this bot's or a teammate's) prefers another way while the failure is recent
+extern ConVar neo_bot_path_crossing_stuck_penalty;
+extern ConVar neo_bot_stuck_door_penalty;
+
+// NEO-HARNESS-TEMP research arm (2026-09-23, patch 57): stuck against a closed, motionless door on the
+// path - close that crossing to the team for a while, so the replan goes another way
+static void CNEOBotApplyOnStuckDoorBlock( CNEOBot *me )
+{
+	if ( neo_bot_stuck_door_penalty.GetFloat() <= 0.0f )
+		return;
+
+	const PathFollower *path = me->GetCurrentPath();
+	if ( !path || !path->IsValid() )
+		return;
+	const Path::Segment *goal = path->GetCurrentGoal();
+	const Path::Segment *prior = goal ? path->PriorSegment( goal ) : NULL;
+	if ( !goal || !prior || !goal->area || !prior->area || goal->area == prior->area )
+		return;
+
+	// what the hull runs into on the way to the path goal
+	const Vector from = me->GetAbsOrigin() + Vector( 0.0f, 0.0f, StepHeight );
+	Vector to = goal->pos;
+	to.z = from.z;
+	Vector dir = to - from;
+	if ( dir.NormalizeInPlace() < 1.0f )
+		return;
+	trace_t tr;
+	CTraceFilterSimple filter( me, COLLISION_GROUP_PLAYER_MOVEMENT );
+	UTIL_TraceHull( from, from + dir * 48.0f, me->GetBodyInterface()->GetHullMins() + Vector( 0.0f, 0.0f, StepHeight ),
+		me->GetBodyInterface()->GetHullMaxs() - Vector( 0.0f, 0.0f, StepHeight ), MASK_PLAYERSOLID, &filter, &tr );
+	CBaseEntity *pDoor = tr.m_pEnt;
+	if ( !pDoor || pDoor->IsWorld() )
+		return;
+	if ( !pDoor->ClassMatches( "func_door*" ) && !pDoor->ClassMatches( "prop_door*" ) )
+		return;
+	if ( !pDoor->GetAbsVelocity().IsZero() || pDoor->GetLocalAngularVelocity() != vec3_angle )
+		return;	// opening or closing: wait for it
+
+	CNEOBotPathReservations()->BlockDoorCrossing( prior->area->GetID(), goal->area->GetID(), me->GetTeamNumber() );
+	if ( sv_neo_forensic_log.GetBool() )
+	{
+		Msg( "NEO_FORENSIC_DOORBLOCK t=%.2f p=%d team=%d door=%d:%s cross=%d>%d\n", gpGlobals->curtime, me->entindex(),
+			me->GetTeamNumber(), pDoor->entindex(), pDoor->GetClassname(), prior->area->GetID(), goal->area->GetID() );
+	}
+}
+
+static void CNEOBotApplyOnStuckCrossingPenalty( CNEOBot *me )
+{
+	const float flPenalty = neo_bot_path_crossing_stuck_penalty.GetFloat();
+	if ( flPenalty <= 0.0f )
+	{
+		return;
+	}
+
+	// a bot circling or dodging a visible enemy is fighting, not failing to get somewhere
+	const CKnownEntity *threat = me->GetVisionInterface()->GetPrimaryKnownThreat();
+	if ( threat && threat->IsVisibleRecently() )
+	{
+		return;
+	}
+
+	const PathFollower *path = me->GetCurrentPath();
+	if ( !path || !path->IsValid() )
+	{
+		return;
+	}
+
+	const Path::Segment *goal = path->GetCurrentGoal();
+	const Path::Segment *prior = goal ? path->PriorSegment( goal ) : NULL;
+	if ( !goal || !prior || !goal->area || !prior->area || goal->area == prior->area )
+	{
+		return;
+	}
+
+	CNEOBotPathReservations()->IncrementCrossingAvoidPenalty( prior->area->GetID(), goal->area->GetID(), flPenalty );
+	if ( sv_neo_forensic_log.GetBool() )
+	{
+		Msg( "NEO_FORENSIC_XPEN t=%.2f p=%d from=%d to=%d pen=%.0f\n", gpGlobals->curtime, me->entindex(),
+			prior->area->GetID(), goal->area->GetID(),
+			CNEOBotPathReservations()->GetCrossingAvoidPenalty( prior->area->GetID(), goal->area->GetID() ) );
+	}
+}
+
+void CNEOBotIntention::OnNavAreaChanged( CNavArea *enteredArea, CNavArea *leftArea )
+{
+	// NEO-HARNESS-TEMP research arm (patch 57): a teammate got through, so the door is open for the team
+	if ( enteredArea && leftArea && neo_bot_stuck_door_penalty.GetFloat() > 0.0f )
+	{
+		CNEOBotPathReservations()->RelieveDoorCrossing( leftArea->GetID(), enteredArea->GetID(), GetBot()->GetEntity()->GetTeamNumber() );
+	}
+	// a bot that made the crossing shows it is passable again
+	if ( enteredArea && leftArea && neo_bot_path_crossing_stuck_penalty.GetFloat() > 0.0f )
+	{
+		CNEOBotPathReservations()->RelieveCrossingAvoidPenalty( leftArea->GetID(), enteredArea->GetID() );
+	}
+	IIntention::OnNavAreaChanged( enteredArea, leftArea );
+}
+
 void CNEOBotIntention::OnStuck()
 {
-	CNEOBotApplyOnStuckAreaPenalty( static_cast<CNEOBot *>( GetBot() ) );
+	CNEOBot *me = static_cast<CNEOBot *>( GetBot() );
+	CNEOBotLogStuckForensic( me, "OnStuck", m_behavior );
+	CNEOBotApplyOnStuckAreaPenalty( me );
+	CNEOBotApplyOnStuckCrossingPenalty( me );
+	CNEOBotApplyOnStuckDoorBlock( me );
 	INextBotEventResponder::OnStuck();
+}
+
+// NEO-HARNESS-TEMP research arm (2026-09-23, patch 53)
+ConVar neo_bot_felloff_reanchor( "neo_bot_felloff_reanchor", "0", FCVAR_CHEAT,
+	"Research: on FAIL_FELL_OFF, when the last known area is above the bot, take the area underneath as its last known area" );
+
+bool CNEOBot::ReanchorLastKnownAreaBelow( float flMaxDrop )
+{
+	if ( !m_lastNavArea )
+		return false;
+	const Vector feet = GetAbsOrigin();
+	if ( m_lastNavArea->GetZ( feet ) < feet.z + StepHeight )
+		return false;	// not below it: nothing to fix
+	CNavArea *area = TheNavMesh->GetNavArea( feet + Vector( 0.0f, 0.0f, 1.0f ), flMaxDrop );
+	if ( !area )
+	{
+		// perched just off an edge (a prop's rim): the nearest area below within a hull or two
+		Extent ext;
+		ext.lo = feet - Vector( 64.0f, 64.0f, flMaxDrop );
+		ext.hi = feet + Vector( 64.0f, 64.0f, -StepHeight );
+		CUtlVector< CNavArea * > near;
+		TheNavMesh->CollectAreasOverlappingExtent( ext, &near );
+		float flBest = FLT_MAX;
+		for ( int i = 0; i < near.Count(); ++i )
+		{
+			Vector closest;
+			near[i]->GetClosestPointOnArea( feet, &closest );
+			if ( closest.z > feet.z - StepHeight )
+				continue;
+			const float d = ( closest - feet ).Length2DSqr();
+			if ( d < flBest )
+			{
+				flBest = d;
+				area = near[i];
+			}
+		}
+	}
+	if ( !area || area == m_lastNavArea || !IsAreaTraversable( area ) )
+		return false;
+
+	// the same bookkeeping as CBaseCombatCharacter::UpdateLastKnownArea
+	m_lastNavArea->DecrementPlayerCount( m_registeredNavTeam, entindex() );
+	m_lastNavArea->OnExit( this, area );
+	m_registeredNavTeam = GetTeamNumber();
+	area->IncrementPlayerCount( m_registeredNavTeam, entindex() );
+	area->OnEnter( this, m_lastNavArea );
+	OnNavAreaChanged( area, m_lastNavArea );
+	m_lastNavArea = area;
+	return true;
 }
 
 void CNEOBotIntention::OnMoveToFailure( const Path *path, MoveToFailureType reason )
 {
+	CNEOBot *me = static_cast<CNEOBot *>( GetBot() );
+	if ( reason == FAIL_FELL_OFF && neo_bot_felloff_reanchor.GetBool() )
+	{
+		me->ReanchorLastKnownAreaBelow( 400.0f );
+	}
 	if ( reason == FAIL_STUCK )
 	{
-		CNEOBotApplyOnStuckAreaPenalty( static_cast<CNEOBot *>( GetBot() ) );
+		CNEOBotLogStuckForensic( me, "OnMoveToFailure_FAIL_STUCK", m_behavior );
+		CNEOBotApplyOnStuckAreaPenalty( me );
+		CNEOBotApplyOnStuckCrossingPenalty( me );
+	}
+	else
+	{
+		// NEO-HARNESS-TEMP: the other move failures (no path, fell off) for the forensic log
+		CNEOBotLogStuckForensic( me, ( reason == FAIL_NO_PATH_EXISTS ) ? "OnMoveToFailure_FAIL_NO_PATH_EXISTS" : "OnMoveToFailure_FAIL_FELL_OFF", m_behavior, path );
 	}
 	INextBotEventResponder::OnMoveToFailure( path, reason );
 }
@@ -3084,9 +3443,95 @@ void CNEOBotIntention::Reset()
 	m_behavior = new CNEOBotBehavior(new CNEOBotMainAction);
 }
 
+// NEO-HARNESS-TEMP forensic instrumentation (2026-09-25, patch 96): NEO_FORENSIC_LEAVEGROUND - the tick a bot leaves the
+// ground where a fall can kill (a PRECISE / CLIFF area, or no floor within 200 u under its hull), with what drove it: the
+// fall deaths' walk-off mechanism is still unidentified (fl1: not the strafes patch 66 checks). Never part of a PR.
+static bool s_bNeoWasOnGround[ MAX_PLAYERS + 1 ];
+
+static void CNEOBotLogLeaveGround( CNEOBot *me, INextBotEventResponder *pBehavior )
+{
+	const int idx = me->entindex();
+	if ( idx <= 0 || idx > MAX_PLAYERS )
+	{
+		return;
+	}
+
+	const bool bOnGround = me->GetGroundEntity() != NULL;
+	const bool bWasOnGround = s_bNeoWasOnGround[idx];
+	s_bNeoWasOnGround[idx] = bOnGround;
+	if ( !sv_neo_forensic_log.GetBool() || !bWasOnGround || bOnGround || !me->IsAlive() || me->GetMoveType() == MOVETYPE_LADDER )
+	{
+		return;
+	}
+
+	const CNavArea *pArea = me->GetLastKnownArea();
+	const bool bMarked = pArea && pArea->HasAttributes( NAV_MESH_PRECISE | NAV_MESH_CLIFF );
+	const Vector vecFeet = me->GetAbsOrigin();
+	const float flProbe = 200.0f;
+	trace_t tr;
+	UTIL_TraceHull( vecFeet + Vector( 0, 0, 2 ), vecFeet - Vector( 0, 0, flProbe ), me->WorldAlignMins(),
+		Vector( me->WorldAlignMaxs().x, me->WorldAlignMaxs().y, 2.0f ), MASK_PLAYERSOLID, me, COLLISION_GROUP_PLAYER_MOVEMENT, &tr );
+	const bool bVoid = tr.fraction >= 1.0f;
+	if ( !bMarked && !bVoid )
+	{
+		return;
+	}
+
+	char szBehavior[256] = "-";
+	INextBotEventResponder *pRootAction = pBehavior ? pBehavior->FirstContainedResponder() : NULL;
+	if ( pRootAction )
+	{
+		const char *pszStack = static_cast< Action< CNEOBot > * >( pRootAction )->DebugString();
+		int iOut = 0;
+		for ( const char *c = pszStack; *c && iOut < (int)sizeof( szBehavior ) - 1; ++c )
+		{
+			if ( *c != ' ' )
+			{
+				szBehavior[iOut++] = *c;
+			}
+		}
+		szBehavior[iOut] = '\0';
+	}
+
+	Vector vecGoal = vecFeet;
+	int iGoalType = -1;
+	int iGoalHow = -1;
+	int iGoalLadder = -1;
+	int iGoalArea = -1;
+	int iPriorArea = -1;	// 09-25 22:55: the area the goal's segment is reached from, and the path's age
+	float flPathAge = -1.0f;
+	const PathFollower *pPath = me->GetCurrentPath();
+	const Path::Segment *pGoal = ( pPath && pPath->IsValid() ) ? pPath->GetCurrentGoal() : NULL;
+	if ( pGoal )
+	{
+		vecGoal = pGoal->pos;
+		iGoalType = pGoal->type;
+		iGoalHow = pGoal->how;
+		iGoalLadder = pGoal->ladder ? (int)pGoal->ladder->GetID() : -1;
+		iGoalArea = pGoal->area ? (int)pGoal->area->GetID() : -1;
+		const Path::Segment *pPrior = pPath->PriorSegment( pGoal );
+		iPriorArea = ( pPrior && pPrior->area ) ? (int)pPrior->area->GetID() : -1;
+		flPathAge = pPath->GetAge();
+	}
+
+	ILocomotion *mover = me->GetLocomotionInterface();
+	const CUserCmd *pCmd = me->GetLastUserCommand();
+	const Vector &vecVel = me->GetAbsVelocity();
+	const QAngle angEye = me->EyeAngles();
+	Msg( "NEO_FORENSIC_LEAVEGROUND t=%.2f p=%d pos=%.0f,%.0f,%.0f area=%d marked=%d void=%d vel=%.0f,%.0f,%.0f btn=%x fm=%.0f sm=%.0f "
+		"ang=%.0f,%.0f jumping=%d gap=%d ledge=%d stuck=%d goal=%.0f,%.0f,%.0f goalarea=%d goaltype=%d goalhow=%d goalladder=%d prior=%d pathage=%.2f hp=%d behavior=%s\n",
+		gpGlobals->curtime, idx, vecFeet.x, vecFeet.y, vecFeet.z, pArea ? (int)pArea->GetID() : -1, bMarked ? 1 : 0, bVoid ? 1 : 0,
+		vecVel.x, vecVel.y, vecVel.z, (unsigned)me->m_nButtons, pCmd ? pCmd->forwardmove : 0.0f, pCmd ? pCmd->sidemove : 0.0f,
+		angEye.x, angEye.y, mover->IsClimbingOrJumping() ? 1 : 0, mover->IsJumpingAcrossGap() ? 1 : 0, mover->IsClimbingUpToLedge() ? 1 : 0,
+		mover->IsStuck() ? 1 : 0, vecGoal.x, vecGoal.y, vecGoal.z, iGoalArea, iGoalType, iGoalHow, iGoalLadder, iPriorArea, flPathAge, me->GetHealth(), szBehavior );
+}
+
 void CNEOBotIntention::Update()
 {
 	m_behavior->Update(static_cast<CNEOBot *>(GetBot()), GetUpdateInterval());
+
+	// NEO-HARNESS-TEMP patch 96
+	CNEOBotLogLeaveGround( static_cast<CNEOBot *>(GetBot()), m_behavior );
 }
 
 INextBotEventResponder *CNEOBotIntention::FirstContainedResponder() const

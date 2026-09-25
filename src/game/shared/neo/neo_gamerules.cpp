@@ -25,6 +25,8 @@
 #include "neo_ghost_spawn_point.h"
 #include "neo_ghost_cap_point.h"
 #include "neo/bot/neo_bot_path_reservation.h"
+#include "NextBot/NextBotInterface.h" // NEO-HARNESS-TEMP: forensic POS movement fields
+#include "NextBot/Path/NextBotPathFollow.h"
 #include "neo/weapons/weapon_ghost.h"
 #include "neo/weapons/weapon_neobasecombatweapon.h"
 #include "eventqueue.h"
@@ -183,6 +185,11 @@ ConVar sv_neo_ghost_spawn_force("sv_neo_ghost_spawn_force", "-1", FCVAR_REPLICAT
 	"Pin the ghost to a fixed neo_ghostspawnpoint every round. -1 uses default random selection.", true, -1, false, 0);
 ConVar sv_neo_jgr_spawn_force("sv_neo_jgr_spawn_force", "-1", FCVAR_REPLICATED | FCVAR_CHEAT,
 	"Pin the juggernaut to a fixed neo_juggernautspawnpoint every round. -1 uses default random selection.", true, -1, false, 0);
+// NEO-HARNESS-TEMP: put the ghost anywhere, not just on a mapper-placed neo_ghostspawnpoint, so a
+// patch of floor can be made the objective and the bots' route to it measured. Used to ask whether
+// a nav area removed by the mesh research is one bots would actually have used.
+ConVar sv_neo_ghost_spawn_pos("sv_neo_ghost_spawn_pos", "", FCVAR_REPLICATED | FCVAR_CHEAT,
+	"NEO harness debug: \"x y z\" places the ghost there every round, overriding the spawn point. Empty disables.");
 ConVar sv_neo_teamdamage_assists("sv_neo_teamdamage_assists", "0", FCVAR_REPLICATED, "Whether to drain XP when assisting the death of a teammate.", true, 0.0f, true, 1.0f);
 ConVar sv_neo_client_autorecord("sv_neo_client_autorecord", "0", FCVAR_REPLICATED | FCVAR_DONTRECORD, "Record demos clientside", true, 0, true, 1);
 #ifdef CLIENT_DLL
@@ -1147,10 +1154,38 @@ void CNEORules::Think(void)
 			}
 			const Vector vecPos = pPlayer->GetAbsOrigin();
 			CNavArea *pArea = pPlayer->GetLastKnownArea();
-			Msg("NEO_FORENSIC_POS t=%.2f p=%d team=%d pos=%.0f,%.0f,%.0f area=%d hp=%d ghost=%d\n",
+			// NEO-HARNESS-TEMP: mt= is the move type, so an offline tool can tell a bot hanging on
+			// a ladder (MOVETYPE_LADDER, 9) from one standing beside it. The engine sets that from
+			// touching the ladder brush, independently of the bot's own ladder state machine.
+			// NEO-HARNESS-TEMP (2026-09-23): for bots, whether the locomotion is being asked to move
+			// (mv), path validity (pv), max speed, buttons and flags - to see why a bot stands still
+			int iAttempting = -1, iPathValid = -1, iSinceUpdate = -1;
+			float flRunSpeed = -1.0f;
+			if ( INextBot *pBot = pPlayer->MyNextBotPointer() )
+			{
+				iAttempting = pBot->GetLocomotionInterface()->IsAttemptingToMove() ? 1 : 0;
+				const PathFollower *pPath = pBot->GetCurrentPath();
+				iPathValid = ( pPath && pPath->IsValid() ) ? 1 : 0;
+				iSinceUpdate = gpGlobals->tickcount - pBot->GetTickLastUpdate();
+				flRunSpeed = pBot->GetLocomotionInterface()->GetRunSpeed();
+			}
+			// NEO-HARNESS-TEMP (2026-09-23): the last queued user command (what the movement code was
+			// asked to do), ticks since the bot's last NextBot Update (lu), gamemovement's stuck state
+			// and the ground entity - for the ghost round-start stall, where team-2 bots hold
+			// IN_FORWARD facing their goal with nothing touching them and neither move nor turn
+			const CUserCmd *pCmd = pPlayer->GetLastUserCommand();
+			CBaseEntity *pGround = pPlayer->GetGroundEntity();
+			Msg("NEO_FORENSIC_POS t=%.2f p=%d team=%d pos=%.0f,%.0f,%.0f area=%d hp=%d ghost=%d cls=%d mt=%d mv=%d pv=%d spd=%.0f btn=%x fl=%x nf=%x ang=%.0f,%.0f vel=%.0f"
+				" lu=%d rs=%.0f cn=%d ct=%d fm=%.0f sm=%.0f cb=%x cy=%.0f stk=%d gnd=%d\n",
 				gpGlobals->curtime, i, pPlayer->GetTeamNumber(),
 				vecPos.x, vecPos.y, vecPos.z, pArea ? pArea->GetID() : -1,
-				pPlayer->GetHealth(), m_iGhosterPlayer == i ? 1 : 0);
+				pPlayer->GetHealth(), m_iGhosterPlayer == i ? 1 : 0, pPlayer->GetClass(),
+				(int)pPlayer->GetMoveType(), iAttempting, iPathValid, pPlayer->MaxSpeed(),
+				(unsigned)pPlayer->m_nButtons, (unsigned)pPlayer->GetFlags(), (unsigned)pPlayer->GetNeoFlags(),
+				pPlayer->EyeAngles().x, pPlayer->EyeAngles().y, pPlayer->GetAbsVelocity().Length2D(),
+				iSinceUpdate, flRunSpeed, pCmd ? pCmd->command_number : -1, pCmd ? gpGlobals->tickcount - pCmd->tick_count : -1,
+				pCmd ? pCmd->forwardmove : 0.0f, pCmd ? pCmd->sidemove : 0.0f, pCmd ? (unsigned)pCmd->buttons : 0u,
+				pCmd ? pCmd->viewangles.y : 0.0f, pPlayer->m_StuckLast, pGround ? pGround->entindex() : -1);
 		}
 	}
 #endif // GAME_DLL
@@ -2030,8 +2065,14 @@ void CNEORules::SpawnTheGhost(const Vector *origin)
 	// No ghost spawns and this map isn't named "_ctg". Probably not a CTG map.
 	if (m_ghostSpawns.IsEmpty() && (V_stristr(GameRules()->MapName(), "_ctg") == 0))
 	{
-		m_pGhost = nullptr;
-		return;
+		// NEO-HARNESS-TEMP: sv_neo_ghost_spawn_pos names an explicit position, which is exactly
+		// what a map with no ghost spawns needs - the both-ends ladder probe has to reach DM, TDM
+		// and JGR maps too, and 77 of its 195 probe points live on them.
+		if (!sv_neo_ghost_spawn_pos.GetString()[0])
+		{
+			m_pGhost = nullptr;
+			return;
+		}
 	}
 
 	auto* pEnt = gEntList.FirstEnt();
@@ -2084,8 +2125,22 @@ void CNEORules::SpawnTheGhost(const Vector *origin)
 	}
 	else if (m_ghostSpawns.IsEmpty())
 	{
-		Warning("No ghost spawns found! Spawning ghost at map origin, instead.\n");
-		m_pGhost->SetAbsOrigin(vec3_origin);
+		// NEO-HARNESS-TEMP: the pinned position, when there is one, rather than the map origin -
+		// which on most maps is inside geometry and makes the ghost unreachable.
+		Vector vecSpawn = vec3_origin;
+		float hx = 0.0f, hy = 0.0f, hz = 0.0f;
+		const char *pszHarnessPos = sv_neo_ghost_spawn_pos.GetString();
+		if (pszHarnessPos && *pszHarnessPos && sscanf(pszHarnessPos, "%f %f %f", &hx, &hy, &hz) == 3)
+		{
+			vecSpawn.Init(hx, hy, hz);
+			Msg("NEO_HARNESS_GHOST_POS: %.0f %.0f %.0f\n", hx, hy, hz);
+		}
+		else
+		{
+			Warning("No ghost spawns found! Spawning ghost at map origin, instead.\n");
+		}
+
+		m_pGhost->SetAbsOrigin(vecSpawn);
 		m_pGhost->Drop(vec3_origin);
 	}
 	else
@@ -2145,7 +2200,20 @@ void CNEORules::SpawnTheGhost(const Vector *origin)
 			}
 			else
 			{
-				m_pGhost->SetAbsOrigin(ghostSpawn->GetAbsOrigin());
+				// NEO-HARNESS-TEMP: sv_neo_ghost_spawn_pos substitutes the position here rather
+				// than re-placing the ghost afterwards - Drop() must run exactly once, since a
+				// second call on an already-dropped weapon trips
+				// baseentity.cpp's VPhysicsGetObject()->GetShadowController() assert.
+				Vector vecSpawn = ghostSpawn->GetAbsOrigin();
+				float hx = 0.0f, hy = 0.0f, hz = 0.0f;
+				const char *pszHarnessPos = sv_neo_ghost_spawn_pos.GetString();
+				if (pszHarnessPos && *pszHarnessPos && sscanf(pszHarnessPos, "%f %f %f", &hx, &hy, &hz) == 3)
+				{
+					vecSpawn.Init(hx, hy, hz);
+					Msg("NEO_HARNESS_GHOST_POS: %.0f %.0f %.0f\n", hx, hy, hz);
+				}
+
+				m_pGhost->SetAbsOrigin(vecSpawn);
 				m_pGhost->Drop(vec3_origin);
 				ghostSpawn->m_OnSpawnedHere.FireOutput(m_pGhost, m_pGhost);
 			}
