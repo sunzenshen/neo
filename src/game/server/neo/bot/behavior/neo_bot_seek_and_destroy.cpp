@@ -17,6 +17,12 @@ extern ConVar neo_bot_offense_must_push_time;
 extern ConVar neo_bot_defense_must_defend_time;
 
 ConVar neo_bot_debug_seek_and_destroy( "neo_bot_debug_seek_and_destroy", "0", FCVAR_CHEAT );
+// NEO-HARNESS-TEMP research arm (2026-09-25, patch 90): the tactical monitor runs ladder climbs as a SuspendFor, and the resume
+// re-rolled the roam goal (a random spawn point or a combat sound): from the top of a pit ladder the new goal was often back
+// down the same ladder (lcn: 12-17 % of DM / TDM up-climbs went straight back down, bullet 4 and apparatus 20 over a
+// quarter; scratch/rr/ladder_audit.md section 4). A climb is a leg of the route: keep the goal and replan to it from here.
+ConVar neo_bot_seek_resume_keep_goal( "neo_bot_seek_resume_keep_goal", "0", FCVAR_CHEAT,
+	"Research: SeekAndDestroy keeps its goal when it resumes from a ladder climb or approach" );
 ConVar neo_bot_disable_seek_and_destroy( "neo_bot_disable_seek_and_destroy", "0", FCVAR_CHEAT );
 
 ConVar sv_neo_bot_seek_and_destroy_combat_sound_commit_time( "sv_neo_bot_seek_and_destroy_combat_sound_commit_time", "3.0", FCVAR_CHEAT,
@@ -46,6 +52,8 @@ static bool BotInSoundPAS( CNEOBot *me, const Vector &vSoundPos )
 
 //---------------------------------------------------------------------------------------------
 // Returns true if m_path now leads to a combat sound the bot heard
+static bool IsStraightLineFallback( const PathFollower &path ); // research patch 65, below
+
 bool CNEOBotSeekAndDestroy::TryPathToCombatSound( CNEOBot *me )
 {
 	if ( !m_bListenForCombatSounds )
@@ -107,7 +115,7 @@ bool CNEOBotSeekAndDestroy::TryPathToCombatSound( CNEOBot *me )
 	}
 
 	if ( CNEOBotPathCompute( me, m_path, m_vCombatSoundSpot, DEFAULT_ROUTE )
-			&& m_path.IsValid() && m_path.GetResult() == Path::COMPLETE_PATH )
+			&& m_path.IsValid() && m_path.GetResult() == Path::COMPLETE_PATH && !IsStraightLineFallback( m_path ) )
 	{
 		m_vGoalPos = m_vCombatSoundSpot;
 		m_bGoingToTargetEntity = false;
@@ -170,7 +178,14 @@ ActionResult< CNEOBot >	CNEOBotSeekAndDestroy::Update( CNEOBot *me, float interv
 		{
 			// Only switch to CTG behavior if there are available capture zones this round
 			const Vector vecCapPoint = NEORules()->GetNearestGhostCapPoint( me->GetTeamNumber(), me->GetAbsOrigin() );
-			if ( vecCapPoint != CNEO_Player::VECTOR_INVALID_WAYPOINT )
+
+			// NEO-HARNESS-TEMP: forensic instrumentation only (see harness/patches/README.md).
+			// The both-ends ladder probe pins the ghost somewhere and asks whether bots can get to
+			// it, which needs nothing but the ghost - but a map with no capture zone never puts
+			// bots onto it, so DM, TDM and JGR maps cannot be probed at all. A pinned ghost is the
+			// harness saying "go here", so treat it as objective enough. Never part of a PR.
+			extern ConVar sv_neo_ghost_spawn_pos;
+			if ( vecCapPoint != CNEO_Player::VECTOR_INVALID_WAYPOINT || sv_neo_ghost_spawn_pos.GetString()[0] )
 			{
 				return SuspendFor( new CNEOBotCtgSeek, "Switching to Ghost-related Seek and Destroy" );
 			}
@@ -370,6 +385,15 @@ ActionResult< CNEOBot > CNEOBotSeekAndDestroy::UpdateCommon( CNEOBot *me, float 
 //---------------------------------------------------------------------------------------------
 ActionResult< CNEOBot > CNEOBotSeekAndDestroy::OnResume( CNEOBot *me, Action< CNEOBot > *interruptingAction )
 {
+	// patch 90: back from a ladder - same goal, fresh path from the ladder's end
+	const bool bFromLadder = interruptingAction && ( FStrEq( interruptingAction->GetName(), "LadderClimb" )
+		|| FStrEq( interruptingAction->GetName(), "LadderApproach" ) );
+	if ( neo_bot_seek_resume_keep_goal.GetBool() && bFromLadder && m_vGoalPos != vec3_origin
+		&& CNEOBotPathCompute( me, m_path, m_vGoalPos, DEFAULT_ROUTE ) && m_path.IsValid() )
+	{
+		return Continue();
+	}
+
 	RecomputeSeekPath( me );
 
 	return Continue();
@@ -508,6 +532,30 @@ private:
 
 
 //---------------------------------------------------------------------------------------------
+// NEO research (patch 65): roam goals (spawn points, wander points, gunfire) in a region the bot cannot reach - a spawn
+// platform with no way up (yard's z 152 deck, sentinel_jgr's east platform) - come back as the search's straight-line
+// fallback, which BuildTrivialPath labels COMPLETE_PATH, so the "insist on a complete path" checks below accept it and
+// the bot walks into the wall under the platform. Reject that fallback here and try the next goal.
+ConVar neo_bot_roam_reject_fallback( "neo_bot_roam_reject_fallback", "0", FCVAR_CHEAT,
+	"Research: 1 = SeekAndDestroy's roam / gunfire goals reject a straight-line fallback path (the search never left the start area)" );
+
+static bool IsStraightLineFallback( const PathFollower &path )
+{
+	if ( !neo_bot_roam_reject_fallback.GetBool() )
+	{
+		return false;
+	}
+	// exactly two segments: start and goal
+	const Path::Segment *first = path.FirstSegment();
+	const Path::Segment *last = first ? path.NextSegment( first ) : nullptr;
+	if ( !last || path.NextSegment( last ) )
+	{
+		return false;
+	}
+	return first->area && last->area && first->area != last->area
+		&& !first->area->IsConnected( last->area, NUM_DIRECTIONS );
+}
+
 void CNEOBotSeekAndDestroy::RecomputeSeekPath( CNEOBot *me )
 {
 	if ( m_bOverrideApproach )
@@ -592,7 +640,7 @@ void CNEOBotSeekAndDestroy::RecomputeSeekPath( CNEOBot *me )
 				m_hTargetEntity = pSpawns[RandomInt( 0, pSpawns.Size() - 1 )];
 				m_bGoingToTargetEntity = true;
 				m_vGoalPos = m_hTargetEntity->WorldSpaceCenter();
-				if ( CNEOBotPathCompute( me, m_path, m_vGoalPos, DEFAULT_ROUTE ) && m_path.IsValid() && m_path.GetResult() == Path::COMPLETE_PATH )
+				if ( CNEOBotPathCompute( me, m_path, m_vGoalPos, DEFAULT_ROUTE ) && m_path.IsValid() && m_path.GetResult() == Path::COMPLETE_PATH && !IsStraightLineFallback( m_path ) )
 					return;
 			}
 		}
@@ -604,7 +652,7 @@ void CNEOBotSeekAndDestroy::RecomputeSeekPath( CNEOBot *me )
 
 		Vector vWanderPoint = TheNavAreas[RandomInt( 0, TheNavAreas.Size() - 1 )]->GetCenter();
 		m_vGoalPos = vWanderPoint;
-		if ( CNEOBotPathCompute( me, m_path, vWanderPoint, DEFAULT_ROUTE ) )
+		if ( CNEOBotPathCompute( me, m_path, vWanderPoint, DEFAULT_ROUTE ) && !IsStraightLineFallback( m_path ) )
 			return;
 	}
 

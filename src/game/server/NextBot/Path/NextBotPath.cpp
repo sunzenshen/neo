@@ -23,6 +23,23 @@ ConVar NextBotPathDrawIncrement( "nb_path_draw_inc", "100", FCVAR_CHEAT );
 ConVar NextBotPathDrawSegmentCount( "nb_path_draw_segment_count", "100", FCVAR_CHEAT );
 ConVar NextBotPathSegmentInfluenceRadius( "nb_path_segment_influence_radius", "100", FCVAR_CHEAT );
 
+
+#ifdef NEO
+// NEO-HARNESS-TEMP research arm (2026-09-23, patch 55)
+ConVar neo_bot_trivial_fallback_partial( "neo_bot_trivial_fallback_partial", "0", FCVAR_CHEAT,
+	"Research: a straight-line fallback path (search never left the start area) reports PARTIAL_PATH, not COMPLETE_PATH" );
+ConVar neo_bot_drop_search_lateral( "neo_bot_drop_search_lateral", "0", FCVAR_CHEAT,
+	"Research: when no clear drop column lies straight past a drop-down crossing, search along the portal for one (2 = also log NEO_FORENSIC_DROPSEARCH)" );
+// NEO-HARNESS-TEMP research arm (2026-09-25, patch 92): a link between areas that do not touch, to a lower area, was made a
+// drop at the from-area's edge - into whatever lies between (apparatus's spawn-hall exits: 60-80 u pits, the hall-edge slot
+// falls to the kill volume; 16-41 % of those crossings died). Treat such a link as the gap jump the pass below makes of level
+// ones: the bot runs at the edge and jumps for the landing.
+ConVar neo_bot_path_gap_drop_jump( "neo_bot_path_gap_drop_jump", "0", FCVAR_CHEAT,
+	"Research: a link down to an area more than 1.9 generation steps away is a gap jump, not a drop off the edge" );
+ConVar neo_bot_trivial_fallback_log( "neo_bot_trivial_fallback_log", "0", FCVAR_CHEAT,
+	"Research: log NEO_FORENSIC_TRIVIAL each time Path::Compute falls back to a straight line because the goal is unreachable" );
+#endif
+
 //--------------------------------------------------------------------------------------------------------------
 Path::Path( void )
 {
@@ -104,7 +121,20 @@ bool Path::ComputePathDetails( INextBot *bot, const Vector &start )
 
 			float expectedHeightDrop = -DotProduct( alongPath, groundNormal );
 
+#ifdef NEO
+			// patch 92: disjoint areas - leave it to the gap-jump pass
+			bool bGapDown = false;
+			if ( neo_bot_path_gap_drop_jump.GetBool() && expectedHeightDrop > mover->GetStepHeight() )
+			{
+				Vector closeTo, closeFrom;
+				to->area->GetClosestPointOnArea( from->pos, &closeTo );
+				from->area->GetClosestPointOnArea( closeTo, &closeFrom );
+				bGapDown = ( closeFrom - closeTo ).AsVector2D().IsLengthGreaterThan( 1.9f * GenerationStepSize );
+			}
+			if ( expectedHeightDrop > mover->GetStepHeight() && !bGapDown )
+#else
 			if ( expectedHeightDrop > mover->GetStepHeight() )
+#endif
 			{
 				// NOTE: We can't know this is a drop-down yet, because of subtle interactions
 				// between nav area links and "portals" and "area crossings"

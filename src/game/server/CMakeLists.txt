@@ -1527,6 +1527,16 @@ set_source_files_properties(
     PROPERTIES SKIP_UNITY_BUILD_INCLUSION ON
 )
 
+# NEO-HARNESS-TEMP: engine ground-truth collision dump / nav hull audit (patch 42).
+target_sources(server PRIVATE
+    ${CMAKE_SOURCE_DIR}/../../harness/src/neo_harness_collision.cpp
+    ${CMAKE_SOURCE_DIR}/../../harness/src/neo_harness_collision.h
+)
+set_source_files_properties(
+    ${CMAKE_SOURCE_DIR}/../../harness/src/neo_harness_collision.cpp
+    PROPERTIES SKIP_UNITY_BUILD_INCLUSION ON
+)
+
 set(UNITY_SOURCE_NEO_BOT
     neo/bot/neo_bot.cpp
     neo/bot/neo_bot_path_compute.cpp
