@@ -37,6 +37,14 @@ ConVar neo_bot_ladder_mount_on_contact( "neo_bot_ladder_mount_on_contact", "0", 
 	"Research: a bot the engine has put on the approached ladder starts the climb at once, whatever its range to the mount point" );
 static constexpr float NEO_LADDER_CONTACT_RANGE = 48.0f;	// xy from the ladder's line: this ladder, not a neighbour
 
+// NEO-HARNESS-TEMP research arm (2026-09-24, patch 84): a descent approached from the landing behind the ladder's plane (its top
+// forward area - bullet's shafts) pushes into the back of the ladder brush; the engine grabs the bot while it still stands on
+// the landing, and MoveDown there is LadderMove's "on the ground, moving away": the bot steps back off (ldj C: bullet ladder 4
+// 97 of 110 descents ended back at the top). Mount every descent the way patch 73 mounts side-landing ones: walk to the point
+// in front of the face - over the shaft - then push into the face.
+ConVar neo_bot_ladder_front_mount( "neo_bot_ladder_front_mount", "0", FCVAR_CHEAT,
+	"Research: every descent is mounted from the point in front of the ladder's face (patch 73's approach for all ladders)" );
+
 // patch 79: how far out from the ladder, along alignOut, the bot's hull still fits at its own floor height
 static float NeoFreeAlignDistance( CNEOBot *me, const Vector &ladderPoint, const Vector2D &alignOut, float maxDist )
 {
@@ -179,9 +187,10 @@ ActionResult<CNEOBot> CNEOBotLadderApproach::Update( CNEOBot *me, float )
 		targetPos += m_ladder->GetNormal() * ( body->GetHullWidth() * 0.5f + HANG_CLEARANCE );
 	}
 
-	// patch 73: side-landing ladders are mounted going down from in front of the face
-	const bool bSideMount = !m_bGoingUp && neo_bot_ladder_side_mount.GetBool()
-		&& !m_ladder->m_topForwardArea && !m_ladder->m_topBehindArea;
+	// patch 73: side-landing ladders are mounted going down from in front of the face (patch 84: every descent)
+	const bool bSideLanding = !m_ladder->m_topForwardArea && !m_ladder->m_topBehindArea;
+	const bool bSideMount = !m_bGoingUp && ( neo_bot_ladder_front_mount.GetBool()
+		|| ( neo_bot_ladder_side_mount.GetBool() && bSideLanding ) );
 	if ( bSideMount )
 	{
 		targetPos = m_ladder->m_top + m_ladder->GetNormal() * ( body->GetHullWidth() * 0.5f + 2.0f );
