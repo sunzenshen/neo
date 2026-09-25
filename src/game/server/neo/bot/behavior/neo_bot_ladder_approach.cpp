@@ -28,6 +28,15 @@ ConVar neo_bot_ladder_side_mount( "neo_bot_ladder_side_mount", "0", FCVAR_CHEAT,
 ConVar neo_bot_ladder_align_clamp( "neo_bot_ladder_align_clamp", "0", FCVAR_CHEAT,
 	"Research: the ladder approach's alignment point stays inside the free space in front of the ladder" );
 
+// NEO-HARNESS-TEMP research arm (2026-09-24, patch 82): the approach looks at whether the engine has put the bot on the
+// ladder only once it is within mount range - 6 u of the point over the shaft for a side-landing descent. A bot that steps
+// into the shaft and is grabbed short of that keeps approaching while the locomotion, seeing a ladder nobody claimed, adopts
+// it by its nearer end and drives the bot up and off (lch C: 22 timeouts and 64 threat endings with the bot on the ladder).
+// On the ladder is mounted: start the climb.
+ConVar neo_bot_ladder_mount_on_contact( "neo_bot_ladder_mount_on_contact", "0", FCVAR_CHEAT,
+	"Research: a bot the engine has put on the approached ladder starts the climb at once, whatever its range to the mount point" );
+static constexpr float NEO_LADDER_CONTACT_RANGE = 48.0f;	// xy from the ladder's line: this ladder, not a neighbour
+
 // patch 79: how far out from the ladder, along alignOut, the bot's hull still fits at its own floor height
 static float NeoFreeAlignDistance( CNEOBot *me, const Vector &ladderPoint, const Vector2D &alignOut, float maxDist )
 {
@@ -117,6 +126,18 @@ ActionResult<CNEOBot> CNEOBotLadderApproach::Update( CNEOBot *me, float )
 	{
 		NeoLogLadderApproach( me, m_ladder, m_bGoingUp, "Ladder approach timeout" );
 		return Done( "Ladder approach timeout" );
+	}
+
+	// patch 82: already on this ladder - climb it, before the locomotion adopts it the other way
+	if ( neo_bot_ladder_mount_on_contact.GetBool() && me->IsOnLadder() )
+	{
+		const Vector &feet = me->GetLocomotionInterface()->GetFeet();
+		if ( ( m_ladder->GetPosAtHeight( feet.z ) - feet ).AsVector2D().IsLengthLessThan( NEO_LADDER_CONTACT_RANGE ) )
+		{
+			me->SetAbsVelocity( vec3_origin );
+			NeoLogLadderApproach( me, m_ladder, m_bGoingUp, "mounted" );
+			return ChangeTo( new CNEOBotLadderClimb( m_ladder, m_bGoingUp ), "Mounting ladder" );
+		}
 	}
 
 	const CKnownEntity *threat = me->GetVisionInterface()->GetPrimaryKnownThreat(true);
