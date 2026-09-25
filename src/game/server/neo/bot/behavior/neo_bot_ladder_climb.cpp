@@ -142,6 +142,13 @@ static constexpr float NEO_LADDER_GRAB_DIST = 2.0f;	// CGameMovement::LadderDist
 ConVar neo_bot_ladder_reclaim( "neo_bot_ladder_reclaim", "0", FCVAR_CHEAT,
 	"Research: a climbing bot the engine has on the ladder re-claims it when the locomotion has let go" );
 
+// NEO-HARNESS-TEMP research arm (2026-09-24, patch 81): going down, the early drop-off fires as soon as the exit is less than
+// SAFE_FALL_DIST below - on most ladders at the very top - and its kick (150 u/s back from the face and 150 u/s up) lands the
+// bot back on the floor it came down from: through a hatch, across a narrow shaft (lch C: 326 of 411 descents ended at the
+// top; saitama ladder 2's slab is the map's worst stuck spot). Drop early only once the bot is a standing height below the top.
+ConVar neo_bot_ladder_descent_clear( "neo_bot_ladder_descent_clear", "0", FCVAR_CHEAT,
+	"Research: a descending bot drops off the ladder early only once it is a standing height below the ladder's top" );
+
 CNEOBotLadderClimb::CNEOBotLadderClimb( const CNavLadder *ladder, bool goingUp )
 	: m_ladder( ladder ), m_bGoingUp( goingUp ), m_flLastZ( 0.0f ),
 	m_bDismountPhase( false ), m_bJumpedOffLadder( false ), m_pExitArea( nullptr )
