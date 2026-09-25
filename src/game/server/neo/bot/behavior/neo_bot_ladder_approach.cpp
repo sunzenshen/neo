@@ -21,6 +21,39 @@ ConVar neo_bot_ladder_mount_hop( "neo_bot_ladder_mount_hop", "0", FCVAR_CHEAT,
 ConVar neo_bot_ladder_side_mount( "neo_bot_ladder_side_mount", "0", FCVAR_CHEAT,
 	"Research: going down a ladder whose top landings are only at its sides, approach its face from the front" );
 
+// NEO-HARNESS-TEMP research arm (2026-09-24, patch 79): the approach aligns by heading for a point pulled out from the
+// ladder along its normal by up to ALIGN_RANGE (100 u). In a slot narrower than that the point lies inside the far wall,
+// and a bot coming from the side slides along that wall's end instead of turning into the slot (lcg: bullet ladder 4, 29
+// up-approach timeouts, 18 of them at one wall end). Keep the point inside the free space in front of the ladder.
+ConVar neo_bot_ladder_align_clamp( "neo_bot_ladder_align_clamp", "0", FCVAR_CHEAT,
+	"Research: the ladder approach's alignment point stays inside the free space in front of the ladder" );
+
+// patch 79: how far out from the ladder, along alignOut, the bot's hull still fits at its own floor height
+static float NeoFreeAlignDistance( CNEOBot *me, const Vector &ladderPoint, const Vector2D &alignOut, float maxDist )
+{
+	ILocomotion *mover = me->GetLocomotionInterface();
+	const Vector out( alignOut.x, alignOut.y, 0.0f );
+	const float flNear = me->GetBodyInterface()->GetHullWidth() * 0.5f + 2.0f;
+	if ( maxDist <= flNear )
+	{
+		return maxDist;
+	}
+
+	// start where a mounting bot stands, lifted a step so floor bumps do not count
+	Vector start = ladderPoint + out * flNear;
+	start.z = mover->GetFeet().z + mover->GetStepHeight();
+	const Vector end = ladderPoint + out * maxDist + Vector( 0.0f, 0.0f, start.z - ladderPoint.z );
+
+	trace_t tr;
+	UTIL_TraceHull( start, end, me->WorldAlignMins(), me->WorldAlignMaxs(), MASK_PLAYERSOLID_BRUSHONLY, me, COLLISION_GROUP_NONE, &tr );
+	if ( tr.startsolid )
+	{
+		return maxDist;
+	}
+
+	return flNear + tr.fraction * ( maxDist - flNear );
+}
+
 // NEO-HARNESS-TEMP forensic instrumentation (2026-09-24): see NEO_FORENSIC_LADDERBEH in neo_bot_ladder_climb.cpp
 extern ConVar sv_neo_forensic_log;
 static void NeoLogLadderApproach( CNEOBot *me, const CNavLadder *ladder, bool goingUp, const char *reason )
@@ -209,6 +242,15 @@ ActionResult<CNEOBot> CNEOBotLadderApproach::Update( CNEOBot *me, float )
 		// to guide bot movement along approach
 		// (patch 73: not for a side-landing descent - out along the normal is the open shaft in front of the ladder)
 		float offsetDist = bSideMount ? 0.0f : Clamp( range * 0.8f, 10.0f, ALIGN_RANGE );
+		// patch 79: in a slot shallower than the offset, aim at the middle of the slot rather than into its far wall
+		if ( !bSideMount && neo_bot_ladder_align_clamp.GetBool() )
+		{
+			const float flFree = NeoFreeAlignDistance( me, targetPos, alignNormal, offsetDist );
+			if ( flFree < offsetDist )
+			{
+				offsetDist = Max( 10.0f, 0.5f * ( flFree + body->GetHullWidth() * 0.5f + 2.0f ) );
+			}
+		}
 		goal.x += alignNormal.x * offsetDist;
 		goal.y += alignNormal.y * offsetDist;
 
