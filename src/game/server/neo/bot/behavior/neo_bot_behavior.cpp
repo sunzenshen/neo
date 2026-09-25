@@ -18,6 +18,13 @@
 #include "bot/behavior/neo_bot_tactical_monitor.h"
 #include "weapons/weapon_balc.h"
 
+// NEO-HARNESS-TEMP research arm (2026-09-24, patch 80): the unstick jump below lets go of a ladder (LadderMove turns IN_JUMP
+// into a push off the face). The stuck monitor only clears once a bot has moved 100 u from where it got stuck, so a bot
+// stuck at a short ladder's foot keeps receiving OnStuck once a second through its whole climb (lcg: 8 of 9 OnStuck events
+// inside a climb knocked the bot off). A climb has its own stall handling (CNEOBotLadderClimb).
+ConVar neo_bot_ladder_stuck_nojump( "neo_bot_ladder_stuck_nojump", "0", FCVAR_CHEAT,
+	"Research: OnStuck does not jump or strafe a bot that is on a ladder" );
+
 ConVar neo_bot_path_lookahead_range( "neo_bot_path_lookahead_range", "300" );
 ConVar neo_bot_sniper_aim_error( "neo_bot_sniper_aim_error", "0.01", FCVAR_CHEAT );
 ConVar neo_bot_sniper_aim_steady_rate( "neo_bot_sniper_aim_steady_rate", "10", FCVAR_CHEAT );
@@ -266,6 +273,12 @@ EventDesiredResult< CNEOBot > CNEOBotMainAction::OnStuck( CNEOBot *me )
 	else
 	{
 		UTIL_LogPrintf( "   path_goal ( \"NULL\" )\n" );
+	}
+
+	// patch 80: jumping would throw the bot off the ladder
+	if ( neo_bot_ladder_stuck_nojump.GetBool() && me->IsBotOnLadder() )
+	{
+		return TryContinue();
 	}
 
 	me->GetLocomotionInterface()->Jump();
