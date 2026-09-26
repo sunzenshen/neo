@@ -155,3 +155,16 @@ void CNEOBotCtgSeek::RecomputeSeekPath( CNEOBot *me )
 	// Fallback to base behavior (roaming spawn points)
 	CNEOBotSeekAndDestroy::RecomputeSeekPath( me );
 }
+
+//---------------------------------------------------------------------------------------------
+// A loose ghost that a known enemy is at least as close to is a race: whoever stops first loses it
+QueryResultType CNEOBotCtgSeek::ShouldHurry( const INextBot *me ) const
+{
+	if ( !NEORules()->GhostExists() || NEORules()->GetGhosterPlayer() > 0 )
+	{
+		return ANSWER_UNDEFINED;
+	}
+
+	const CNEOBot *meBot = static_cast<const CNEOBot *>( me );
+	return meBot->IsKnownEnemyNearer( NEORules()->GetGhostPos(), true ) ? ANSWER_YES : ANSWER_UNDEFINED;
+}

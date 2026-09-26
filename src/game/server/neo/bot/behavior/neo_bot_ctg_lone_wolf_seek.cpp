@@ -154,8 +154,9 @@ ActionResult< CNEOBot >	CNEOBotCtgLoneWolfSeek::Update( CNEOBot *me, float inter
 		me->ReloadIfLowClip(true); // force reload true
 	}
 
-	// Periodically look for better weapons
-	if ( ( !m_scavengeTimer.HasStarted() || m_scavengeTimer.IsElapsed() ) )
+	// Periodically look for better weapons, unless there is no time for a detour
+	if ( ( !m_scavengeTimer.HasStarted() || m_scavengeTimer.IsElapsed() )
+		&& me->GetIntentionInterface()->ShouldHurry( me ) != ANSWER_YES )
 	{
 		m_scavengeTimer.Start( RandomFloat( 3.0f, 6.0f ) );
 
