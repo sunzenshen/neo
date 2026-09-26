@@ -144,3 +144,21 @@ void CNEOBotJgrSeek::RecomputeSeekPath( CNEOBot *me )
 	// Fallback to base behavior (roaming spawn points)
 	CNEOBotSeekAndDestroy::RecomputeSeekPath( me );
 }
+
+//---------------------------------------------------------------------------------------------
+// An unclaimed juggernaut that a known enemy is at least as close to is a race
+QueryResultType CNEOBotJgrSeek::ShouldHurry( const INextBot *me ) const
+{
+	if ( NEORules()->GetJuggernautPlayer() > 0 || !NEORules()->JuggernautItemExists() )
+	{
+		return ANSWER_UNDEFINED;
+	}
+
+	const CNEOBot *meBot = static_cast<const CNEOBot *>( me );
+	if ( meBot->GetClass() == NEO_CLASS_JUGGERNAUT )
+	{
+		return ANSWER_UNDEFINED;
+	}
+
+	return meBot->IsKnownEnemyNearer( NEORules()->GetJuggernautMarkerPos(), true ) ? ANSWER_YES : ANSWER_UNDEFINED;
+}

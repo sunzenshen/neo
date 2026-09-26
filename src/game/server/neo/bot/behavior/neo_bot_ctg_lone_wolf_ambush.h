@@ -19,6 +19,9 @@ public:
 	virtual EventDesiredResult< CNEOBot > OnMoveToSuccess( CNEOBot *me, const Path *path ) override;
 	virtual EventDesiredResult< CNEOBot > OnMoveToFailure( CNEOBot *me, const Path *path, MoveToFailureType reason ) override;
 
+	// Waiting in ambush is deliberate; the hunt's hurry does not apply here
+	virtual QueryResultType ShouldHurry( const INextBot *me ) const override { return ANSWER_UNDEFINED; }
+
 	virtual const char *GetName( void ) const override { return "ctgLoneWolfAmbush"; }
 
 protected:

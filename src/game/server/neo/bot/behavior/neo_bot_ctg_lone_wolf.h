@@ -16,6 +16,8 @@ public:
 	virtual EventDesiredResult< CNEOBot > OnStuck( CNEOBot *me ) override;
 	virtual EventDesiredResult< CNEOBot > OnMoveToFailure( CNEOBot *me, const Path *path, MoveToFailureType reason ) override;
 
+	virtual QueryResultType ShouldHurry( const INextBot *me ) const override;
+
 	virtual const char *GetName( void ) const override { return "ctgLoneWolf"; }
 
 protected:
