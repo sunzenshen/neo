@@ -352,8 +352,11 @@ ActionResult< CNEOBot >	CNEOBotAttack::Update( CNEOBot *me, float interval )
 		{
 			me->EnableCloak(3.0f);
 			
-			// Consider throwing a grenade
-			if ( !m_grenadeThrowCooldownTimer.HasStarted() || m_grenadeThrowCooldownTimer.IsElapsed() )
+			// Consider throwing a grenade - in a hurry, only at the enemy ghost carrier is it worth the stop
+			const bool bInAHurry = ( me->GetIntentionInterface()->ShouldHurry( me ) == ANSWER_YES );
+			const bool bThreatIsGhostCarrier = threat->GetEntity() && threat->GetEntity()->entindex() == NEORules()->GetGhosterPlayer();
+			if ( ( !bInAHurry || bThreatIsGhostCarrier )
+				&& ( !m_grenadeThrowCooldownTimer.HasStarted() || m_grenadeThrowCooldownTimer.IsElapsed() ) )
 			{
 				m_grenadeThrowCooldownTimer.Start( sv_neo_bot_grenade_throw_cooldown.GetFloat() );
 				Action<CNEOBot> *pGrenadeBehavior = CNEOBotGrenadeDispatch::ChooseGrenadeThrowBehavior( me, threat );

@@ -2085,6 +2085,33 @@ bool CNEOBot::IsThrowLineClear(const Vector& where) const
 
 
 //-----------------------------------------------------------------------------------------------------
+// Return true if a living enemy we know about is nearer to the position than we are (or as near, if bOrAsNear)
+bool CNEOBot::IsKnownEnemyNearer(const Vector& vecPos, bool bOrAsNear) const
+{
+	const float flMyDistSq = GetAbsOrigin().DistToSqr(vecPos);
+
+	CUtlVector< CKnownEntity > knownVector;
+	GetVisionInterface()->CollectKnownEntities(&knownVector);
+
+	for (int i = 0; i < knownVector.Count(); ++i)
+	{
+		CBaseEntity* pKnown = knownVector[i].GetEntity();
+		if (!pKnown || !pKnown->IsPlayer() || !pKnown->IsAlive() || pKnown->GetTeamNumber() == GetTeamNumber())
+		{
+			continue;
+		}
+
+		const float flEnemyDistSq = pKnown->GetAbsOrigin().DistToSqr(vecPos);
+		if (flEnemyDistSq < flMyDistSq || (bOrAsNear && flEnemyDistSq == flMyDistSq))
+		{
+			return true;
+		}
+	}
+
+	return false;
+}
+
+//-----------------------------------------------------------------------------------------------------
 // Return whether there is a friendly player blocking the line of fire
 bool CNEOBot::IsLineOfFireClearOfFriendlies(const Vector& from, CBaseEntity* who) const
 {

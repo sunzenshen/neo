@@ -642,32 +642,8 @@ bool CNEOBotCtgCarrier::HasCleanRunToCap( const CNEOBot *me ) const
 		return false;
 	}
 
-	const float flMyDistToGoalSq = me->GetAbsOrigin().DistToSqr( m_closestCapturePoint );
-
-	CUtlVector< CKnownEntity > knownVector;
-	me->GetVisionInterface()->CollectKnownEntities( &knownVector );
-
-	for ( int i = 0; i < knownVector.Count(); ++i )
-	{
-		CBaseEntity *pKnown = knownVector[i].GetEntity();
-		if ( !pKnown || !pKnown->IsPlayer() || !pKnown->IsAlive() )
-		{
-			continue;
-		}
-
-		if ( pKnown->GetTeamNumber() == me->GetTeamNumber() )
-		{
-			continue;
-		}
-
-		if ( pKnown->GetAbsOrigin().DistToSqr( m_closestCapturePoint ) <= flMyDistToGoalSq )
-		{
-			// A known enemy is at least as close to the cap as we are.
-			return false;
-		}
-	}
-
-	return true;
+	// A known enemy at least as close to the cap as we are could cut us off
+	return !me->IsKnownEnemyNearer( m_closestCapturePoint, true );
 }
 
 //---------------------------------------------------------------------------------------------
