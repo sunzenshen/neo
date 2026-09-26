@@ -13,6 +13,9 @@ public:
 
 	virtual const char *GetName() const override { return "ctgCapture"; }
 
+	// A pickup is short and a detour throws its progress away
+	virtual QueryResultType ShouldHurry( const INextBot *me ) const override { return ANSWER_YES; }
+
 	virtual ActionResult<CNEOBot> OnStart( CNEOBot *me, Action<CNEOBot> *priorAction ) override;
 	virtual ActionResult<CNEOBot> Update( CNEOBot *me, float interval ) override;
 

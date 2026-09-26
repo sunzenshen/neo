@@ -14,6 +14,7 @@ public:
 
 	virtual ActionResult< CNEOBot >	Update( CNEOBot *me, float interval );
 	virtual const char *GetName( void ) const	{ return "jgrSeek"; };
+	virtual QueryResultType ShouldHurry( const INextBot *me ) const override;
 
 protected:
 	virtual void RecomputeSeekPath( CNEOBot *me );

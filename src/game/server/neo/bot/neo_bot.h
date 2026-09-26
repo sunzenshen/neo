@@ -239,6 +239,7 @@ public:
 	bool IsLineOfFireClearOfFriendlies(const Vector& from, const Vector& to) const;
 	bool IsFriendlyNearLineOfFire(const Vector& from, const Vector& to) const;	// return true if a teammate is near the line between the given points
 	bool IsFriendlyNearBarrel(float range) const;			// return true if a teammate is near where my weapon points
+	bool IsKnownEnemyNearer(const Vector& vecPos, bool bOrAsNear) const;	// return true if a living enemy we know about is nearer to the position than we are (or as near, if bOrAsNear)
 	void RepathIfFriendlyBlockingLineOfFire();
 
 	Vector FindVisibleThrowPointNear( const Vector &vecPos ) const;

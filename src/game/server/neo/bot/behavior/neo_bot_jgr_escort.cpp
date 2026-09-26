@@ -113,3 +113,18 @@ EventDesiredResult< CNEOBot > CNEOBotJgrEscort::OnMoveToFailure( CNEOBot *me, co
 {
 	return TryContinue();
 }
+
+//---------------------------------------------------------------------------------------------
+// Hurry back to the friendly juggernaut if there are enemies closer to it
+QueryResultType CNEOBotJgrEscort::ShouldHurry( const INextBot *me ) const
+{
+	const CNEOBot *meBot = static_cast<const CNEOBot *>( me );
+
+	CNEO_Player *pJuggernaut = ToNEOPlayer( UTIL_PlayerByIndex( NEORules()->GetJuggernautPlayer() ) );
+	if ( !pJuggernaut || !pJuggernaut->IsAlive() || pJuggernaut->GetTeamNumber() != meBot->GetTeamNumber() || pJuggernaut == meBot )
+	{
+		return ANSWER_UNDEFINED;
+	}
+
+	return meBot->IsKnownEnemyNearer( pJuggernaut->GetAbsOrigin(), false ) ? ANSWER_YES : ANSWER_UNDEFINED;
+}

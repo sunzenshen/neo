@@ -252,32 +252,7 @@ QueryResultType CNEOBotCtgEscort::ShouldHurry( const INextBot *me ) const
 		return ANSWER_UNDEFINED;
 	}
 
-	const Vector &vecCarrierPos = pCarrier->GetAbsOrigin();
-	const float flMyDistToCarrierSq = meBot->GetAbsOrigin().DistToSqr( vecCarrierPos );
-
-	CUtlVector< CKnownEntity > knownVector;
-	meBot->GetVisionInterface()->CollectKnownEntities( &knownVector );
-
-	for ( int i = 0; i < knownVector.Count(); ++i )
-	{
-		CBaseEntity *pKnown = knownVector[i].GetEntity();
-		if ( !pKnown || !pKnown->IsPlayer() || !pKnown->IsAlive() )
-		{
-			continue;
-		}
-
-		if ( pKnown->GetTeamNumber() == meBot->GetTeamNumber() )
-		{
-			continue;
-		}
-
-		if ( pKnown->GetAbsOrigin().DistToSqr( vecCarrierPos ) < flMyDistToCarrierSq )
-		{
-			return ANSWER_YES;
-		}
-	}
-
-	return ANSWER_UNDEFINED;
+	return meBot->IsKnownEnemyNearer( pCarrier->GetAbsOrigin(), false ) ? ANSWER_YES : ANSWER_UNDEFINED;
 }
 
 //---------------------------------------------------------------------------------------------
