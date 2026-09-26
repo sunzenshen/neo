@@ -142,6 +142,14 @@ ConVar neo_bot_path_void_guard_gap( "neo_bot_path_void_guard_gap", "0", FCVAR_CH
 	"Research: the void guard also covers a gap-jump goal when the bot is not on the area the jump starts from"
 	" (2 = also re-plans, without the probe, from off the path towards a goal more than a step up; 3 = measures that step from the path segment, not the steering point)" );
 
+// NEO-HARNESS-TEMP research arm (2026-09-26, patch 110): a path recomputed while the bot is in the air over a gap starts
+// from the area the jump left (GetLastKnownArea), so its goal is the take-off behind the bot. Landed low on the far side,
+// the take-off is more than a step up and IsAtGoal never passes it, so the bot walks back into the gap (ap3: apparatus
+// 3404, all 6 traced walk-backs; the path was 0.00-0.14 s old at the jump - a combat-sound / seek re-plan mid-air).
+// The jump is already made: take its landing as the goal.
+ConVar neo_bot_path_gap_resume( "neo_bot_path_gap_resume", "0", FCVAR_CHEAT,
+	"Research: a gap-jump goal whose landing area the bot is already on, or whose gap the bot is jumping, moves on to the landing" );
+
 static const float NEO_VOID_GUARD_DROP = 200.0f;		// no floor this far under the probe = a drop the path must plan
 static const float NEO_VOID_GUARD_LEAD = 12.0f;			// probe this far past the hull's leading edge
 static const float NEO_VOID_GUARD_HALF = 12.0f;			// probe box half-width: a crack the hull bridges is not a void
@@ -705,6 +713,28 @@ bool PathFollower::LadderUpdate( INextBot *bot )
 bool PathFollower::CheckProgress( INextBot *bot )
 {
 	ILocomotion *mover = bot->GetLocomotionInterface();
+
+#ifdef NEO
+	// patch 110: the gap was already jumped (a path recomputed mid-air starts from the take-off area)
+	if ( neo_bot_path_gap_resume.GetBool() && m_goal && m_goal->type == JUMP_OVER_GAP )
+	{
+		const Path::Segment *landing = NextSegment( m_goal );
+		const Path::Segment *takeoff = PriorSegment( m_goal );
+		const CNavArea *pMyArea = bot->GetEntity()->GetLastKnownArea();
+		if ( landing && landing->area && ( !takeoff || takeoff->area != landing->area )
+			&& ( mover->IsJumpingAcrossGap() || pMyArea == landing->area ) )
+		{
+			if ( sv_neo_forensic_log.GetBool() )
+			{
+				const Vector &feet = mover->GetFeet();
+				Msg( "NEO_FORENSIC_GAPRESUME t=%.2f p=%d pos=%.0f,%.0f,%.0f area=%d air=%d gap=%.0f,%.0f,%.0f landingarea=%d age=%.2f\n",
+					gpGlobals->curtime, bot->GetEntity()->entindex(), feet.x, feet.y, feet.z, pMyArea ? (int)pMyArea->GetID() : -1,
+					mover->IsJumpingAcrossGap() ? 1 : 0, m_goal->pos.x, m_goal->pos.y, m_goal->pos.z, (int)landing->area->GetID(), GetAge() );
+			}
+			m_goal = landing;
+		}
+	}
+#endif
 
 	// skip nearby goal points that are redundant to smooth path following motion
 	const Path::Segment *pSkipToGoal = NULL;
