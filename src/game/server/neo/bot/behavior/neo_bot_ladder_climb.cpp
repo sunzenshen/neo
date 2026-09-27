@@ -7,6 +7,24 @@
 // memdbgon must be the last include file in a .cpp file!!!
 #include "tier0/memdbgon.h"
 
+// NEO-HARNESS-TEMP: A/B switch (NextBotPlayerLocomotion.cpp) and one NEO_FORENSIC_LADDERBEH line per climb start,
+// dismount and end (harness/analysis/ladderread/ladtele2.py). Never part of a PR.
+extern ConVar neo_harness_ladder_pr_off;
+extern ConVar sv_neo_forensic_log;
+
+static void NeoLogLadderBeh( CNEOBot *me, const char *beh, const CNavLadder *ladder, bool goingUp, const char *reason )
+{
+	if ( !sv_neo_forensic_log.GetBool() || !me )
+	{
+		return;
+	}
+	const Vector &feet = me->GetLocomotionInterface()->GetFeet();
+	Msg( "NEO_FORENSIC_LADDERBEH t=%.2f p=%d beh=%s dir=%s ladder=%d pos=%.0f,%.0f,%.0f ladderbottom=%.0f laddertop=%.0f movetype=%d onground=%d reason=%s\n",
+		gpGlobals->curtime, me->entindex(), beh, goingUp ? "up" : "down", ladder ? ladder->GetID() : -1,
+		feet.x, feet.y, feet.z, ladder ? ladder->m_bottom.z : 0.0f, ladder ? ladder->m_top.z : 0.0f,
+		(int)me->GetMoveType(), me->GetGroundEntity() ? 1 : 0, reason );
+}
+
 //---------------------------------------------------------------------------------------------
 CNEOBotLadderClimb::CNEOBotLadderClimb( const CNavLadder *ladder, bool goingUp )
 	: m_ladder( ladder ), m_bGoingUp( goingUp ), m_flLastZ( 0.0f ),
@@ -37,6 +55,7 @@ ActionResult<CNEOBot> CNEOBotLadderClimb::OnStart( CNEOBot *me, Action<CNEOBot> 
 	m_flLastZ = mover->GetFeet().z;
 	m_stuckTimer.Start( STUCK_CHECK_INTERVAL );
 
+	bool bTeleported = false;	// NEO-HARNESS-TEMP
 	if ( m_bGoingUp )
 	{
 		// Hull trace check: Ensure clear path to climb in the intended direction.
@@ -65,6 +84,7 @@ ActionResult<CNEOBot> CNEOBotLadderClimb::OnStart( CNEOBot *me, Action<CNEOBot> 
 			}
 
 			// Fallback: Teleport to a center position on the ladder.
+			bTeleported = true;
 			mover->Reset(); // clear velocity cache in locomotion interface
 			me->SetAbsVelocity( vec3_origin );
 
@@ -105,6 +125,8 @@ ActionResult<CNEOBot> CNEOBotLadderClimb::OnStart( CNEOBot *me, Action<CNEOBot> 
 
 	ClaimLadder( me );
 
+	NeoLogLadderBeh( me, "climbstart", m_ladder, m_bGoingUp, bTeleported ? "tele=1" : "tele=0" );
+
 	return Continue();
 }
 
@@ -114,7 +136,7 @@ ActionResult<CNEOBot> CNEOBotLadderClimb::OnStart( CNEOBot *me, Action<CNEOBot> 
 void CNEOBotLadderClimb::ClaimLadder( CNEOBot *me ) const
 {
 	ILocomotion *mover = me->GetLocomotionInterface();
-	if ( mover->IsUsingLadder() )
+	if ( mover->IsUsingLadder() || neo_harness_ladder_pr_off.GetBool() )
 	{
 		return;
 	}
@@ -518,6 +540,7 @@ void CNEOBotLadderClimb::EnterDismountPhase( CNEOBot *me )
 	me->SetAbsVelocity( vec3_origin ); // stop momentum
 	m_bDismountPhase = true;
 	m_dismountTimer.Start( DISMOUNT_TIMEOUT );
+	NeoLogLadderBeh( me, "climbdismount", m_ladder, m_bGoingUp, "-" );
 	ResolveExitArea( me );
 
 	if ( me->IsDebugging( NEXTBOT_PATH ) )
@@ -531,6 +554,8 @@ void CNEOBotLadderClimb::EnterDismountPhase( CNEOBot *me )
 //---------------------------------------------------------------------------------------------
 void CNEOBotLadderClimb::OnEnd( CNEOBot *me, Action<CNEOBot> *nextAction )
 {
+	NeoLogLadderBeh( me, "climb", m_ladder, m_bGoingUp, "end" );
+
 	me->StartLookingAroundForEnemies();
 	me->ClearAttribute( CNEOBot::IGNORE_ENEMIES );
 

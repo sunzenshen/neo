@@ -43,6 +43,29 @@ static const float LADDER_CONTACT_RESET = 1.0f;
 static const float LADDER_MIN_DESCENT_RATE = 0.25f;
 #endif // NEO
 
+// NEO-HARNESS-TEMP test switch (upstream + PR A/B only, never in the PR): 1 = the unwanted-ladder release and
+// the climb's ladder claim are off, i.e. upstream behavior
+ConVar neo_harness_ladder_pr_off( "neo_harness_ladder_pr_off", "0", FCVAR_CHEAT, "Harness: 1 = the unwanted-ladder PR's behavior is off" );
+
+// NEO-HARNESS-TEMP: forensic instrumentation only. One NEO_FORENSIC_LADDER line per ladder-state transition in
+// TraverseLadder (harness/analysis/ladder_state.py). Never part of a PR.
+extern ConVar sv_neo_forensic_log;
+
+static const char *s_neoHarnessLadderStateNames[] =
+{
+	"none", "approach_up", "approach_down", "ascend", "descend", "dismount_top", "dismount_bottom"
+};
+
+static const char *NEOHarnessLadderStateName( int state )
+{
+	if ( state < 0 || state >= ARRAYSIZE( s_neoHarnessLadderStateNames ) )
+	{
+		return "?";
+	}
+
+	return s_neoHarnessLadderStateNames[state];
+}
+
 //-----------------------------------------------------------------------------------------------------
 PlayerLocomotion::PlayerLocomotion( INextBot *bot ) : ILocomotion( bot )
 {
@@ -222,6 +245,36 @@ bool PlayerLocomotion::IsForwardDownLadder( const CNavLadder *ladder ) const
 //-----------------------------------------------------------------------------------------------------
 bool PlayerLocomotion::TraverseLadder( void )
 {
+	// NEO-HARNESS-TEMP: log the transition this update makes
+	const LadderState stateBefore = m_ladderState;
+	const CNavLadder *pLadderBefore = m_ladderInfo;
+	const bool bTraversing = TraverseLadderInner();
+
+	if ( sv_neo_forensic_log.GetBool() && m_ladderState != stateBefore )
+	{
+		const CNavLadder *pLadder = m_ladderInfo ? m_ladderInfo : pLadderBefore;
+		const Vector &vecFeet = GetFeet();
+		const Vector &vecVel = GetBot()->GetEntity()->GetAbsVelocity();
+		const QAngle angEye = m_player->EyeAngles();
+		Msg( "NEO_FORENSIC_LADDER t=%.2f p=%d from=%s to=%s ladder=%d pos=%.0f,%.0f,%.0f "
+			"ladderbottom=%.0f laddertop=%.0f movetype=%d onground=%d vel=%.0f,%.0f,%.0f ang=%.0f,%.0f btn=%d\n",
+			gpGlobals->curtime, GetBot()->GetEntity()->entindex(),
+			NEOHarnessLadderStateName( stateBefore ), NEOHarnessLadderStateName( m_ladderState ),
+			pLadder ? pLadder->GetID() : -1,
+			vecFeet.x, vecFeet.y, vecFeet.z,
+			pLadder ? pLadder->m_bottom.z : 0.0f, pLadder ? pLadder->m_top.z : 0.0f,
+			(int)GetBot()->GetEntity()->GetMoveType(),
+			( GetBot()->GetEntity()->GetGroundEntity() != NULL ) ? 1 : 0,
+			vecVel.x, vecVel.y, vecVel.z, angEye.x, angEye.y, m_player->m_nButtons );
+	}
+
+	return bTraversing;
+}
+
+
+//-----------------------------------------------------------------------------------------------------
+bool PlayerLocomotion::TraverseLadderInner( void )
+{
 	switch( m_ladderState )
 	{
 	case APPROACHING_ASCENDING_LADDER:
@@ -258,7 +311,7 @@ bool PlayerLocomotion::TraverseLadder( void )
 #ifdef NEO
 			// HandleUnwantedLadder() may take the ladder over instead,
 			// in which case the state machine drives from here and we are done
-			if ( HandleUnwantedLadder() )
+			if ( !neo_harness_ladder_pr_off.GetBool() && HandleUnwantedLadder() )
 			{
 				break;
 			}
@@ -293,7 +346,7 @@ PlayerLocomotion::LadderState PlayerLocomotion::ApproachAscendingLadder( void )
 #ifdef NEO
 	// A bot already on the ladder is not too far below it, whatever the nav ladder's bottom says -
 	// on a ladder whose foot hangs above the floor the check below would drop a climb the bot has begun
-	if ( GetBot()->GetEntity()->GetMoveType() == MOVETYPE_LADDER )
+	if ( !neo_harness_ladder_pr_off.GetBool() && GetBot()->GetEntity()->GetMoveType() == MOVETYPE_LADDER )
 	{
 		return ASCENDING_LADDER;
 	}

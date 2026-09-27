@@ -135,6 +135,7 @@ private:
 	// enough on its own - CGameMovement::LadderMove() re-grabs from the bot's wish direction, so
 	// the two toggle each other until something breaks the loop. See TraverseLadder().
 	bool HandleUnwantedLadder( void );
+	bool TraverseLadderInner( void );	// NEO-HARNESS-TEMP: TraverseLadder() without the transition log
 	const CNavLadder *FindTouchedLadder( void ) const;
 	Vector GetIntoLadderFace( const CNavLadder *ladder ) const;	// into the face of the ladder brush we hold
 	float m_unwantedLadderSince;			// when the current bout of unwanted contact began
