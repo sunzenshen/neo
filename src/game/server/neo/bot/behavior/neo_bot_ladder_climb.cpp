@@ -13,6 +13,7 @@
 extern ConVar sv_neo_forensic_log;
 static float s_flNeoClimbStart[ MAX_PLAYERS + 1 ];	// patch 100: when each bot's current climb began
 static const float NEO_LADDER_TICK_TRACE_TIME = 1.2f;
+extern ConVar neo_harness_ladder_pr_off;	// NEO-HARNESS-TEMP A/B switch (NextBotPlayerLocomotion.cpp)
 static void NeoLogLadderBeh( CNEOBot *me, const char *beh, const CNavLadder *ladder, bool goingUp, const char *reason )
 {
 	if ( !sv_neo_forensic_log.GetBool() || !me )
@@ -382,7 +383,7 @@ ActionResult<CNEOBot> CNEOBotLadderClimb::OnStart( CNEOBot *me, Action<CNEOBot> 
 void CNEOBotLadderClimb::ClaimLadder( CNEOBot *me ) const
 {
 	ILocomotion *mover = me->GetLocomotionInterface();
-	if ( mover->IsUsingLadder() )
+	if ( mover->IsUsingLadder() || neo_harness_ladder_pr_off.GetBool() )
 	{
 		return;
 	}
@@ -1051,6 +1052,8 @@ void CNEOBotLadderClimb::EnterDismountPhase( CNEOBot *me, const char *why )
 void CNEOBotLadderClimb::OnEnd( CNEOBot *me, Action<CNEOBot> *nextAction )
 {
 	NeoSetLadderSettle( me, 0 );	// patch 102
+	NeoLogLadderBeh( me, "climb", m_ladder, m_bGoingUp, "end" );
+
 	me->StartLookingAroundForEnemies();
 	me->ClearAttribute( CNEOBot::IGNORE_ENEMIES );
 
