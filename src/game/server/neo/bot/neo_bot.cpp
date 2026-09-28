@@ -2230,6 +2230,38 @@ bool CNEOBot::IsFriendlyNearBarrel(float range) const
 }
 
 //-----------------------------------------------------------------------------------------------------
+// Same traces as CWeaponKnife::Swing(): a ray, then a hull if the ray misses
+bool CNEOBot::IsFriendlyInSwingReach() const
+{
+	if (!NEORules()->IsTeamplay())
+	{
+		return false;
+	}
+
+	constexpr float swingRange = NEO_WEP_KNIFE_RANGE;
+	constexpr float hullDim = 16.0f; // As weapon_knife.cpp's KNIFE_HULL_DIM
+	const Vector hullMins(-hullDim, -hullDim, -hullDim);
+	const Vector hullMaxs(hullDim, hullDim, hullDim);
+
+	CNEOBot* me = const_cast<CNEOBot*>(this);
+	Vector forward;
+	me->EyeVectors(&forward);
+	const Vector swingStart = me->Weapon_ShootPosition();
+
+	trace_t trace;
+	UTIL_TraceLine(swingStart, swingStart + forward * swingRange, MASK_SHOT_HULL, this, COLLISION_GROUP_NONE, &trace);
+	if (trace.fraction == 1.0f)
+	{
+		const float hullRadius = 1.732f * hullDim;
+		UTIL_TraceHull(swingStart, swingStart + forward * (swingRange - hullRadius), hullMins, hullMaxs,
+			MASK_SHOT_HULL, this, COLLISION_GROUP_NONE, &trace);
+	}
+
+	CBaseEntity* pHit = trace.m_pEnt;
+	return pHit && pHit->IsPlayer() && pHit->IsAlive() && IsFriend(pHit);
+}
+
+//-----------------------------------------------------------------------------------------------------
 // Return true if a weapon has no obstructions along the line between the given point and entity
 bool CNEOBot::IsLineOfFireClear(const Vector& from, CBaseEntity* who, const LineOfFireFlags flags) const
 {

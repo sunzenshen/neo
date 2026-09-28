@@ -1000,7 +1000,8 @@ void CNEOBotMainAction::FireWeaponAtEnemy( CNEOBot *me )
 
 	if ( me->IsBludgeon( myWeapon ) )
 	{
-		if ( me->IsRangeLessThan( threat->GetEntity(), 250.0f ) )
+		// The barrel check below ignores anyone this close, so test the swing itself
+		if ( me->IsRangeLessThan( threat->GetEntity(), 250.0f ) && !me->IsFriendlyInSwingReach() )
 		{
 			me->PressFireButton();
 		}
