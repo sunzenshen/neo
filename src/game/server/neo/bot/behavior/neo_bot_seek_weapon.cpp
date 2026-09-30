@@ -9,33 +9,39 @@
 static constexpr int BOT_WEP_PREF_RANK_UNPREFERRED = -1;
 static constexpr int BOT_WEP_PREF_RANK_EMPTY = -2;
 
-// A bot standing on its nearest nav area can pick up a weapon at most this far outside the area,
-// above or below the area's surface
-static constexpr float BOT_WEP_REACH_OUTSIDE_AREA = 40.0f;
-static constexpr float BOT_WEP_REACH_ABOVE_AREA = 72.0f;
-static constexpr float BOT_WEP_REACH_BELOW_AREA = 32.0f;
-static constexpr float BOT_WEP_AREA_SEARCH_RANGE = 256.0f;
+// A weapon lies on a nav area when it is over the area, or at most half a player's width past its edge
+// (generated areas stop that short of walls), and at most this far above the area's surface (a desk, a low
+// crate) or this far below it (an area's plane can pass above a stairway's treads)
+static constexpr float BOT_WEP_MAX_OUTSIDE_AREA = HalfHumanWidth;
+static constexpr float BOT_WEP_MAX_HEIGHT_ABOVE_AREA = 32.0f;
+static constexpr float BOT_WEP_MAX_DEPTH_BELOW_AREA = 8.0f;
+static constexpr float BOT_WEP_AREA_SEARCH_RANGE = 64.0f;
 
 //---------------------------------------------------------------------------------------------
-// Weapons can come to rest where no nav area reaches them: in a pit, behind a counter, out of a window
-static bool IsWeaponOffNavMesh( CBaseEntity *pWeapon )
+// Weapons can come to rest where no nav area is: in a pit, behind a counter, out of a window
+static CNavArea *GetWeaponNavArea( CBaseEntity *pWeapon )
 {
 	const Vector vecWeapon = pWeapon->WorldSpaceCenter();
-	const CNavArea *pArea = TheNavMesh->GetNearestNavArea( vecWeapon, false, BOT_WEP_AREA_SEARCH_RANGE, true, false );
+	CNavArea *pArea = TheNavMesh->GetNearestNavArea( vecWeapon, false, BOT_WEP_AREA_SEARCH_RANGE, true, false );
 	if ( !pArea )
 	{
-		return true;
+		return nullptr;
 	}
 
 	Vector vecClosest;
 	pArea->GetClosestPointOnArea( vecWeapon, &vecClosest );
-	if ( ( vecWeapon - vecClosest ).Length2D() > BOT_WEP_REACH_OUTSIDE_AREA )
+	if ( ( vecWeapon - vecClosest ).Length2D() > BOT_WEP_MAX_OUTSIDE_AREA )
 	{
-		return true;
+		return nullptr;
 	}
 
 	const float flHeightAboveArea = vecWeapon.z - vecClosest.z;
-	return flHeightAboveArea > BOT_WEP_REACH_ABOVE_AREA || flHeightAboveArea < -BOT_WEP_REACH_BELOW_AREA;
+	if ( flHeightAboveArea > BOT_WEP_MAX_HEIGHT_ABOVE_AREA || flHeightAboveArea < -BOT_WEP_MAX_DEPTH_BELOW_AREA )
+	{
+		return nullptr;
+	}
+
+	return pArea;
 }
 
 //---------------------------------------------------------------------------------------------
@@ -203,18 +209,15 @@ CBaseEntity *FindNearestPrimaryWeapon( const CNEOBot *me, bool bAllowDropGhost, 
 
 			if ( bBetterFound )
 			{
-				// Check if weapon candidate is in PVS of me
-				if ( pMyArea )
+				// A path to an off-mesh weapon ends with a straight walk to it, over whatever lies between
+				CNavArea *pWepArea = GetWeaponNavArea( pEntity );
+				if ( !pWepArea )
 				{
-					CNavArea *pWepArea = TheNavMesh->GetNavArea( pEntity->WorldSpaceCenter() );
-					if ( pWepArea && !pMyArea->IsPotentiallyVisible( pWepArea ) )
-					{
-						continue;
-					}
+					continue;
 				}
 
-				// A path to an off-mesh weapon ends with a straight walk to it, over whatever lies between
-				if ( IsWeaponOffNavMesh( pEntity ) )
+				// Check if weapon candidate is in PVS of me
+				if ( pMyArea && !pMyArea->IsPotentiallyVisible( pWepArea ) )
 				{
 					continue;
 				}
@@ -249,6 +252,24 @@ void CNEOBotSeekWeapon::IgnoreTargetWeapon( void )
 }
 
 //---------------------------------------------------------------------------------------------
+// Only a full path to the weapon's nav area: a partial one ends with a straight walk from the edge of the mesh
+bool CNEOBotSeekWeapon::PathToTargetWeapon( CNEOBot *me )
+{
+	// The weapon may have been knocked off the mesh since it was chosen
+	const CNavArea *pWepArea = GetWeaponNavArea( m_hTargetWeapon );
+	if ( !pWepArea )
+	{
+		m_path.Invalidate();
+		return false;
+	}
+
+	// Stay on the area: from its edge a bot still touches a weapon lying against the wall beyond it
+	Vector vecGoal;
+	pWepArea->GetClosestPointOnArea( m_hTargetWeapon->WorldSpaceCenter(), &vecGoal );
+	return CNEOBotPathCompute( me, m_path, vecGoal, FASTEST_ROUTE, PATH_NO_LENGTH_LIMIT, PATH_TRUNCATE_INCOMPLETE_PATH );
+}
+
+//---------------------------------------------------------------------------------------------
 CBaseEntity *CNEOBotSeekWeapon::FindAndPathToWeapon( CNEOBot *me )
 {
 	if ( !m_hTargetWeapon )
@@ -256,18 +277,15 @@ CBaseEntity *CNEOBotSeekWeapon::FindAndPathToWeapon( CNEOBot *me )
 		m_hTargetWeapon = FindNearestPrimaryWeapon( me, false, m_pIgnoredWeapons );
 	}
 	
-	if ( m_hTargetWeapon )
-	{
-		if ( !CNEOBotPathCompute( me, m_path, m_hTargetWeapon->GetAbsOrigin(), FASTEST_ROUTE ) || !m_path.IsValid() )
-		{
-			m_hTargetWeapon = nullptr;
-			m_path.Invalidate();
-		}
-	}
-	else
+	if ( !m_hTargetWeapon )
 	{
 		// no weapon found
 		m_path.Invalidate();
+	}
+	else if ( !PathToTargetWeapon( me ) )
+	{
+		IgnoreTargetWeapon();
+		m_hTargetWeapon = nullptr;
 	}
 
 	return m_hTargetWeapon;
@@ -297,6 +315,14 @@ ActionResult< CNEOBot >	CNEOBotSeekWeapon::OnStart( CNEOBot *me, Action< CNEOBot
 		return Done("No valid replacement primary found");
 	}
 
+	// Check the path before a ghost carrier drops the ghost for this weapon
+	if ( !PathToTargetWeapon( me ) )
+	{
+		IgnoreTargetWeapon();
+		return Done( "No full path to the weapon" );
+	}
+	m_repathTimer.Start( RandomFloat( 1.0f, 2.0f ) );
+
 	auto *pNeoPrimary = assert_cast<CNEOBaseCombatWeapon *>( pPrimary );
 	if ( pNeoPrimary && ( pNeoPrimary->GetNeoWepBits() & NEO_WEP_GHOST ) )
 	{
@@ -324,10 +350,10 @@ ActionResult< CNEOBot >	CNEOBotSeekWeapon::Update( CNEOBot *me, float interval )
 
 	if ( !m_repathTimer.HasStarted() || m_repathTimer.IsElapsed() )
 	{
-		if ( !CNEOBotPathCompute( me, m_path, m_hTargetWeapon->GetAbsOrigin(), FASTEST_ROUTE ) )
+		if ( !PathToTargetWeapon( me ) )
 		{
 			IgnoreTargetWeapon();
-			return Done("Unable to find a path to the nearest primary weapon");
+			return Done( "No full path to the weapon" );
 		}
 		m_repathTimer.Start( RandomFloat( 1.0f, 2.0f ) );
 	}
