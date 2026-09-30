@@ -9,6 +9,35 @@
 static constexpr int BOT_WEP_PREF_RANK_UNPREFERRED = -1;
 static constexpr int BOT_WEP_PREF_RANK_EMPTY = -2;
 
+// A bot standing on its nearest nav area can pick up a weapon at most this far outside the area,
+// above or below the area's surface
+static constexpr float BOT_WEP_REACH_OUTSIDE_AREA = 40.0f;
+static constexpr float BOT_WEP_REACH_ABOVE_AREA = 72.0f;
+static constexpr float BOT_WEP_REACH_BELOW_AREA = 32.0f;
+static constexpr float BOT_WEP_AREA_SEARCH_RANGE = 256.0f;
+
+//---------------------------------------------------------------------------------------------
+// Weapons can come to rest where no nav area reaches them: in a pit, behind a counter, out of a window
+static bool IsWeaponOffNavMesh( CBaseEntity *pWeapon )
+{
+	const Vector vecWeapon = pWeapon->WorldSpaceCenter();
+	const CNavArea *pArea = TheNavMesh->GetNearestNavArea( vecWeapon, false, BOT_WEP_AREA_SEARCH_RANGE, true, false );
+	if ( !pArea )
+	{
+		return true;
+	}
+
+	Vector vecClosest;
+	pArea->GetClosestPointOnArea( vecWeapon, &vecClosest );
+	if ( ( vecWeapon - vecClosest ).Length2D() > BOT_WEP_REACH_OUTSIDE_AREA )
+	{
+		return true;
+	}
+
+	const float flHeightAboveArea = vecWeapon.z - vecClosest.z;
+	return flHeightAboveArea > BOT_WEP_REACH_ABOVE_AREA || flHeightAboveArea < -BOT_WEP_REACH_BELOW_AREA;
+}
+
 //---------------------------------------------------------------------------------------------
 bool IsUndroppablePrimary( CBaseCombatWeapon *pPrimary )
 {
@@ -184,6 +213,12 @@ CBaseEntity *FindNearestPrimaryWeapon( const CNEOBot *me, bool bAllowDropGhost, 
 					}
 				}
 
+				// A path to an off-mesh weapon ends with a straight walk to it, over whatever lies between
+				if ( IsWeaponOffNavMesh( pEntity ) )
+				{
+					continue;
+				}
+
 				flClosestDistSq = flDistSq;
 				iBestWeaponRank = targetPrefRank;
 				pClosestWeapon = pEntity;
@@ -199,6 +234,18 @@ CNEOBotSeekWeapon::CNEOBotSeekWeapon( CBaseEntity *pTargetWeapon, CNEOIgnoredWea
 {
 	m_hTargetWeapon = pTargetWeapon;
 	m_pIgnoredWeapons = pIgnoredWeapons;
+}
+
+//---------------------------------------------------------------------------------------------
+// Remember a weapon the bot failed to reach, so the next scavenge does not pick it again
+void CNEOBotSeekWeapon::IgnoreTargetWeapon( void )
+{
+	if ( !m_hTargetWeapon || !m_pIgnoredWeapons || m_pIgnoredWeapons->Has( m_hTargetWeapon ) )
+	{
+		return;
+	}
+
+	m_pIgnoredWeapons->Add( m_hTargetWeapon );
 }
 
 //---------------------------------------------------------------------------------------------
@@ -271,6 +318,7 @@ ActionResult< CNEOBot >	CNEOBotSeekWeapon::Update( CNEOBot *me, float interval )
 
 	if ( m_giveUpTimer.IsElapsed() )
 	{
+		IgnoreTargetWeapon();
 		return Done("Gave up seeking weapon");
 	}
 
@@ -278,6 +326,7 @@ ActionResult< CNEOBot >	CNEOBotSeekWeapon::Update( CNEOBot *me, float interval )
 	{
 		if ( !CNEOBotPathCompute( me, m_path, m_hTargetWeapon->GetAbsOrigin(), FASTEST_ROUTE ) )
 		{
+			IgnoreTargetWeapon();
 			return Done("Unable to find a path to the nearest primary weapon");
 		}
 		m_repathTimer.Start( RandomFloat( 1.0f, 2.0f ) );
@@ -292,10 +341,7 @@ ActionResult< CNEOBot >	CNEOBotSeekWeapon::Update( CNEOBot *me, float interval )
 	const float flMaxEndpointDistSqr = 150.0f * 150.0f;
 	if ( m_path.GetEndPosition().DistToSqr( m_hTargetWeapon->GetAbsOrigin() ) > flMaxEndpointDistSqr )
 	{
-		if ( m_pIgnoredWeapons && !m_pIgnoredWeapons->Has( m_hTargetWeapon ) )
-		{
-			m_pIgnoredWeapons->Add( m_hTargetWeapon );
-		}
+		IgnoreTargetWeapon();
 		return Done("Weapon is unreachable (path doesn't get close enough)");
 	}
 
@@ -354,6 +400,7 @@ ActionResult< CNEOBot > CNEOBotSeekWeapon::OnResume( CNEOBot *me, Action< CNEOBo
 //---------------------------------------------------------------------------------------------
 EventDesiredResult< CNEOBot > CNEOBotSeekWeapon::OnStuck( CNEOBot *me )
 {
+	IgnoreTargetWeapon();
 	m_hTargetWeapon = nullptr;
 	m_repathTimer.Invalidate();
 	FindAndPathToWeapon(me);
@@ -369,6 +416,7 @@ EventDesiredResult< CNEOBot > CNEOBotSeekWeapon::OnMoveToSuccess( CNEOBot *me, c
 //---------------------------------------------------------------------------------------------
 EventDesiredResult< CNEOBot > CNEOBotSeekWeapon::OnMoveToFailure( CNEOBot *me, const Path *path, MoveToFailureType reason )
 {
+	IgnoreTargetWeapon();
 	m_hTargetWeapon = nullptr;
 	m_repathTimer.Invalidate();
 	FindAndPathToWeapon(me);
