@@ -11,6 +11,7 @@
 // dismount and end (harness/analysis/ladderread/ladtele2.py). Never part of a PR.
 extern ConVar neo_harness_ladder_pr_off;
 extern ConVar sv_neo_forensic_log;
+extern bool NEOHarnessLadderDescentOff( void );	// NEO-HARNESS-TEMP: #2176's descent half off
 
 static void NeoLogLadderBeh( CNEOBot *me, const char *beh, const CNavLadder *ladder, bool goingUp, const char *reason )
 {
@@ -136,7 +137,7 @@ ActionResult<CNEOBot> CNEOBotLadderClimb::OnStart( CNEOBot *me, Action<CNEOBot> 
 void CNEOBotLadderClimb::ClaimLadder( CNEOBot *me ) const
 {
 	ILocomotion *mover = me->GetLocomotionInterface();
-	if ( mover->IsUsingLadder() || neo_harness_ladder_pr_off.GetBool() )
+	if ( mover->IsUsingLadder() || neo_harness_ladder_pr_off.GetBool() )	// NEO-HARNESS-TEMP: off = no claim, as upstream
 	{
 		return;
 	}
@@ -292,7 +293,8 @@ ActionResult<CNEOBot> CNEOBotLadderClimb::Update( CNEOBot *me, float /*interval*
 		float targetZ = m_bGoingUp ? m_ladder->m_top.z : m_ladder->m_bottom.z;
 
 		// Going down, the bot holds still until its view makes forward take it down: not a stall
-		const bool bHoldForView = !m_bGoingUp && !me->GetLocomotionInterface()->IsForwardDownLadder( m_ladder );
+		const bool bHoldForView = !m_bGoingUp && !NEOHarnessLadderDescentOff()	// NEO-HARNESS-TEMP: off = never hold, as upstream
+			&& !me->GetLocomotionInterface()->IsForwardDownLadder( m_ladder );
 		if ( bHoldForView )
 		{
 			m_flLastZ = currentZ;
@@ -335,7 +337,8 @@ ActionResult<CNEOBot> CNEOBotLadderClimb::Update( CNEOBot *me, float /*interval*
 		if ( m_pExitArea )
 		{
 			float zDistToExit = currentZ - m_exitAreaCenter.z;
-			const bool bBelowTopFloor = m_bGoingUp || currentZ < m_ladder->m_top.z - body->GetStandHullHeight();
+			const bool bBelowTopFloor = m_bGoingUp || NEOHarnessLadderDescentOff()	// NEO-HARNESS-TEMP: off = upstream's jump-off
+				|| currentZ < m_ladder->m_top.z - body->GetStandHullHeight();
 
 			if ( zDistToExit > 0.0f && zDistToExit <= SAFE_FALL_DIST && bBelowTopFloor )
 			{
@@ -411,7 +414,7 @@ ActionResult<CNEOBot> CNEOBotLadderClimb::Update( CNEOBot *me, float /*interval*
 
 		// A descent the locomotion has claimed is aimed by its DescendLadder();
 		// a second MANDATORY aim here would hold the view back from it
-		if ( m_bGoingUp || !mover->IsUsingLadder() )
+		if ( m_bGoingUp || !mover->IsUsingLadder() || NEOHarnessLadderDescentOff() )	// NEO-HARNESS-TEMP: off = always aim, as upstream
 		{
 			// Look at and move to the dismount height, slightly behind the ladder
 			Vector lookTarget = m_ladder->GetPosAtHeight( dismountZ );
