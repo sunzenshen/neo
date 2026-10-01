@@ -11,6 +11,7 @@ public:
 	CNEOBotCtgSeek( float duration = -1.0f ) : CNEOBotSeekAndDestroy( duration ) { }
 
 	virtual ActionResult< CNEOBot >	Update( CNEOBot *me, float interval ) override;
+	virtual QueryResultType ShouldHurry( const INextBot *me ) const override;
 	virtual const char *GetName( void ) const override { return "ctgSeek"; };
 
 protected:

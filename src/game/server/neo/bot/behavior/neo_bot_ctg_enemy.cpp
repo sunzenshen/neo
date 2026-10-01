@@ -78,3 +78,29 @@ EventDesiredResult< CNEOBot > CNEOBotCtgEnemy::OnMoveToFailure( CNEOBot *me, con
 {
 	return TryContinue();
 }
+
+//---------------------------------------------------------------------------------------------
+QueryResultType CNEOBotCtgEnemy::ShouldHurry( const INextBot *me ) const
+{
+	return IsBehindEnemyGhostCarrier( static_cast<const CNEOBot *>( me ) ) ? ANSWER_YES : ANSWER_UNDEFINED;
+}
+
+//---------------------------------------------------------------------------------------------
+bool CNEOBotCtgEnemy::IsBehindEnemyGhostCarrier( const CNEOBot *me )
+{
+	CNEO_Player *pCarrier = ToNEOPlayer( UTIL_PlayerByIndex( NEORules()->GetGhosterPlayer() ) );
+	if ( !pCarrier || !pCarrier->IsAlive() || pCarrier->GetTeamNumber() == me->GetTeamNumber() )
+	{
+		return false;
+	}
+
+	const Vector vecCarrierGoal = NEORules()->GetNearestGhostCapPoint( pCarrier->GetTeamNumber(), pCarrier->GetAbsOrigin() );
+	if ( vecCarrierGoal == CNEO_Player::VECTOR_INVALID_WAYPOINT )
+	{
+		return false;
+	}
+
+	const float flCarrierToGoalSq = pCarrier->GetAbsOrigin().DistToSqr( vecCarrierGoal );
+	const float flMeToGoalSq = me->GetAbsOrigin().DistToSqr( vecCarrierGoal );
+	return flMeToGoalSq > flCarrierToGoalSq;
+}

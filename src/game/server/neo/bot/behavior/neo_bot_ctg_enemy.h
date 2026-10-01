@@ -18,6 +18,11 @@ public:
 	virtual EventDesiredResult< CNEOBot > OnMoveToSuccess( CNEOBot *me, const Path *path ) override;
 	virtual EventDesiredResult< CNEOBot > OnMoveToFailure( CNEOBot *me, const Path *path, MoveToFailureType reason ) override;
 
+	virtual QueryResultType ShouldHurry( const INextBot *me ) const override;
+
+	// True while an enemy is carrying the ghost and is nearer its capture zone than we are
+	static bool IsBehindEnemyGhostCarrier( const CNEOBot *me );
+
 	virtual const char *GetName( void ) const override { return "ctgEnemy"; }
 
 private:
