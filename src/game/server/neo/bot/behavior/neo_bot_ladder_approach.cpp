@@ -198,6 +198,9 @@ static void NeoLogLadderApproach( CNEOBot *me, const CNavLadder *ladder, bool go
 		(int)me->GetMoveType(), me->GetGroundEntity() ? 1 : 0, reason );
 }
 
+// NEO-HARNESS-TEMP: A/B switch on #2176's descent half (NextBotPlayerLocomotion.cpp). Never part of a PR.
+extern bool NEOHarnessLadderDescentOff( void );
+
 //---------------------------------------------------------------------------------------------
 CNEOBotLadderApproach::CNEOBotLadderApproach( const CNavLadder *ladder, bool goingUp )
 	: m_ladder( ladder ), m_bGoingUp( goingUp ), m_vecLastProgressPos( vec3_origin ), m_flLastProgressTime( 0.0f )
@@ -315,7 +318,7 @@ ActionResult<CNEOBot> CNEOBotLadderApproach::Update( CNEOBot *me, float )
 	Vector targetPos = m_bGoingUp ? m_ladder->m_bottom : m_ladder->m_top;
 
 	// Going down, head for where the bot will hang on the ladder: in front of its face, over the drop
-	if ( !m_bGoingUp )
+	if ( !m_bGoingUp && !NEOHarnessLadderDescentOff() )	// NEO-HARNESS-TEMP: off = upstream's top
 	{
 		targetPos += m_ladder->GetNormal() * ( body->GetHullWidth() * 0.5f + HANG_CLEARANCE );
 	}
@@ -345,7 +348,7 @@ ActionResult<CNEOBot> CNEOBotLadderApproach::Update( CNEOBot *me, float )
 
 	// Going down, look down the ladder instead: the forward press that grabs it stays held for a few
 	// ticks, and with a level view it climbs the bot up and off the top
-	if ( !m_bGoingUp )
+	if ( !m_bGoingUp && !NEOHarnessLadderDescentOff() )	// NEO-HARNESS-TEMP: off = upstream's eye-level look
 	{
 		lookTarget = m_ladder->m_bottom;
 	}
@@ -363,6 +366,67 @@ ActionResult<CNEOBot> CNEOBotLadderApproach::Update( CNEOBot *me, float )
 	{
 		NDebugOverlay::Cross3D( targetPos, 5.0f, 255, 255, 0, true, 0.1f );
 		NDebugOverlay::Line( myPos, targetPos, 255, 255, 0, true, 0.1f );
+	}
+
+	// NEO-HARNESS-TEMP: off = upstream c930bb404's mount logic, verbatim
+	if ( NEOHarnessLadderDescentOff() )
+	{
+		// Are we aligned and close enough to mount the ladder?
+		if ( range >= MOUNT_RANGE )
+		{
+			// Perpendicular alignment line
+			Vector2D alignNormal = ladderNormal2D;
+			if ( dot > 0.0f )
+			{
+				alignNormal = -alignNormal; // Target behind ladder
+			}
+
+			Vector goal = targetPos;
+			
+			// Pull the goal point outwards along the ladder's normal
+			// to guide bot movement along approach
+			float offsetDist = Clamp( range * 0.8f, 10.0f, ALIGN_RANGE );
+			goal.x += alignNormal.x * offsetDist;
+			goal.y += alignNormal.y * offsetDist;
+
+			mover->Approach( goal );
+
+			if ( me->IsDebugging( NEXTBOT_PATH ) )
+			{
+				NDebugOverlay::Cross3D( goal, 5.0f, 255, 0, 255, true, 0.1f );
+			}
+		}
+		else
+		{
+			// Within mount range - check if aligned to start climbing
+			bool onLadder = me->IsOnLadder();
+			if ( onLadder )
+			{
+				if ( me->IsDebugging( NEXTBOT_PATH ) )
+				{
+					DevMsg( "%s: Starting ladder climb\n", me->GetDebugIdentifier() );
+				}
+
+				// Stop the bot before behavior transition to prevent falling off the ladder
+				// there can be a delay in the state change, so momentum can cause a fall
+				me->SetAbsVelocity( vec3_origin );
+				// ChangeTo: if something goes wrong during climb, reevaluate situation
+				return ChangeTo( new CNEOBotLadderClimb( m_ladder, m_bGoingUp ), "Mounting ladder" );
+			}
+			else if ( !m_bGoingUp || dot < ALIGN_DOT_THRESHOLD )
+			{
+				// Aligned (or going down), push forward to attach to the ladder
+				me->PressForwardButton();
+				mover->Approach( targetPos );
+			}
+			else
+			{
+				// Close but not aligned - continue approaching to align
+				mover->Approach( targetPos );
+			}
+		}
+
+		return Continue();
 	}
 
 	// Going down, mount only once off the top: grabbed while still up there, on the landing or on the
