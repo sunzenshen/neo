@@ -61,9 +61,17 @@ static const float LADDER_CONTACT_RESET = 1.0f;
 static const float LADDER_MIN_DESCENT_RATE = 0.25f;
 #endif // NEO
 
-// NEO-HARNESS-TEMP test switch (upstream + PR A/B only, never in the PR): 1 = the unwanted-ladder release and
-// the climb's ladder claim are off, i.e. upstream behavior
-ConVar neo_harness_ladder_pr_off( "neo_harness_ladder_pr_off", "0", FCVAR_CHEAT, "Harness: 1 = the unwanted-ladder PR's behavior is off" );
+// NEO-HARNESS-TEMP test switches on the squashed #2176 (upstream + PR A/B only, never in the PR): 1 = all of it off,
+// so both halves run upstream c930bb404's ladder code,
+ConVar neo_harness_ladder_pr_off( "neo_harness_ladder_pr_off", "0", FCVAR_CHEAT, "Harness: 1 = all of #2176 (release and descent halves) is off, upstream ladder code" );
+// and 1 here = only the descent half (ex-#2187) off, the release half still on
+ConVar neo_harness_ladder_descent_off( "neo_harness_ladder_descent_off", "0", FCVAR_CHEAT, "Harness: 1 = #2176's descent half (ex-#2187) is off, upstream descent code" );
+
+// NEO-HARNESS-TEMP: true when the descent half runs upstream's code (either switch)
+bool NEOHarnessLadderDescentOff( void )
+{
+	return neo_harness_ladder_pr_off.GetBool() || neo_harness_ladder_descent_off.GetBool();
+}
 
 // NEO-HARNESS-TEMP: forensic instrumentation only. One NEO_FORENSIC_LADDER line per ladder-state transition in
 // TraverseLadder (harness/analysis/ladder_state.py). Never part of a PR.
@@ -329,7 +337,7 @@ bool PlayerLocomotion::TraverseLadderInner( void )
 #ifdef NEO
 			// HandleUnwantedLadder() may take the ladder over instead,
 			// in which case the state machine drives from here and we are done
-			if ( !neo_harness_ladder_pr_off.GetBool() && HandleUnwantedLadder() )
+			if ( !neo_harness_ladder_pr_off.GetBool() && HandleUnwantedLadder() )	// NEO-HARNESS-TEMP: off = upstream release
 			{
 				break;
 			}
@@ -417,7 +425,7 @@ PlayerLocomotion::LadderState PlayerLocomotion::ApproachAscendingLadder( void )
 #ifdef NEO
 	// A bot already on the ladder is not too far below it, whatever the nav ladder's bottom says -
 	// on a ladder whose foot hangs above the floor the check below would drop a climb the bot has begun
-	if ( !neo_harness_ladder_pr_off.GetBool() && GetBot()->GetEntity()->GetMoveType() == MOVETYPE_LADDER )
+	if ( !neo_harness_ladder_pr_off.GetBool() && GetBot()->GetEntity()->GetMoveType() == MOVETYPE_LADDER )	// NEO-HARNESS-TEMP: off = upstream check below
 	{
 		return ASCENDING_LADDER;
 	}
@@ -460,7 +468,7 @@ PlayerLocomotion::LadderState PlayerLocomotion::ApproachDescendingLadder( void )
 #ifdef NEO
 	// A bot already on the ladder climbs down it. Steering on towards the mount point presses forward
 	// with the view still level, which climbs it up and off the top; letting go drops it from there.
-	if ( GetBot()->GetEntity()->GetMoveType() == MOVETYPE_LADDER )
+	if ( !NEOHarnessLadderDescentOff() && GetBot()->GetEntity()->GetMoveType() == MOVETYPE_LADDER )	// NEO-HARNESS-TEMP: off = upstream approach below
 	{
 		return DESCENDING_LADDER;
 	}
@@ -616,6 +624,12 @@ PlayerLocomotion::LadderState PlayerLocomotion::DescendLadder( void )
 #ifdef NEO
 	// into its face (facing away, a bot still on the top floor is pushed off the ladder the moment it presses forward)
 	Vector goal = GetFeet() + 100.0f * ( GetIntoLadderFace( m_ladderInfo ) + Vector( 0, 0, -2 ) );
+
+	// NEO-HARNESS-TEMP: off = upstream's aim, the #else line below
+	if ( NEOHarnessLadderDescentOff() )
+	{
+		goal = GetFeet() + 100.0f * ( m_ladderInfo->GetNormal() + Vector( 0, 0, -2 ) );
+	}
 #else
 	Vector goal = GetFeet() + 100.0f * ( m_ladderInfo->GetNormal() + Vector( 0, 0, -2 ) );
 #endif
@@ -850,7 +864,8 @@ void PlayerLocomotion::Approach( const Vector &pos, float goalWeight )
 #endif
 
 #ifdef NEO
-	if ( m_player->IsOnLadder() && m_ladderState == DESCENDING_LADDER && m_ladderInfo && !IsForwardDownLadder( m_ladderInfo ) )
+	// NEO-HARNESS-TEMP: off = the condition is false, so upstream's if below runs
+	if ( !NEOHarnessLadderDescentOff() && m_player->IsOnLadder() && m_ladderState == DESCENDING_LADDER && m_ladderInfo && !IsForwardDownLadder( m_ladderInfo ) )
 	{
 		// On the way down, press nothing until forward would move us down. With the view still
 		// coming round it climbs us up, and from the top of the ladder, off it.
