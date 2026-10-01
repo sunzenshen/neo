@@ -236,5 +236,5 @@ Vector CNEOBotCtgLoneWolf::GetNearestEnemyCapPoint( CNEOBot *me ) const
 // The last one standing against a carrier that is nearer its zone has no time to spare
 QueryResultType CNEOBotCtgLoneWolf::ShouldHurry( const INextBot *me ) const
 {
-	return CNEOBotCtgEnemy::IsBehindEnemyGhostCarrier( static_cast<const CNEOBot *>( me ) ) ? ANSWER_YES : ANSWER_UNDEFINED;
+	return CNEOBotCtgEnemy::CarrierUrgency( static_cast<const CNEOBot *>( me ) );
 }
