@@ -911,13 +911,7 @@ void PlayerLocomotion::Approach( const Vector &pos, float goalWeight )
 	else
 	{
 		const float epsilon = 0.25f;
-		bool bMoveDirect = NextBotPlayerMoveDirect.GetBool();
-#ifdef NEO
-		// patch 109: on a fall edge, no quantized drift
-		const CNavArea *pArea = m_player->GetLastKnownArea();
-		bMoveDirect |= neo_bot_precise_move_direct.GetBool() && pArea && pArea->HasAttributes( NAV_MESH_PRECISE | NAV_MESH_CLIFF );
-#endif
-		if ( bMoveDirect )
+		if ( NextBotPlayerMoveDirect.GetBool() )
 		{
 			if ( goalDistance > epsilon )
 			{

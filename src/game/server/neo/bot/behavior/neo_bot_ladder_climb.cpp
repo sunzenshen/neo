@@ -666,7 +666,6 @@ ActionResult<CNEOBot> CNEOBotLadderClimb::Update( CNEOBot *me, float /*interval*
 				m_flLastZ = currentZ;	// no stall while settling
 				m_stuckTimer.Start( STUCK_CHECK_INTERVAL );
 			}
-			}
 		}
 
 		// Stuck detection: if we haven't made vertical progress, bail out gracefully
