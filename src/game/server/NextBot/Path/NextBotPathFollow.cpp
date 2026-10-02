@@ -34,6 +34,12 @@ ConVar NextBotAllowClimbing( "nb_allow_climbing", "1", FCVAR_CHEAT );
 ConVar NextBotAllowGapJumping( "nb_allow_gap_jumping", "1", FCVAR_CHEAT );
 
 ConVar NextBotDebugClimbing( "nb_debug_climbing", "0", FCVAR_CHEAT );
+
+#ifdef NEO
+// How far from its feet a bot that landed looks for a nav area, the range UpdateLastKnownArea() searches
+static const float LANDING_NAV_AREA_RANGE = 50.0f;
+#endif
+
 #ifdef NEO
 // NEO-HARNESS-TEMP research arm (2026-09-23, patch 58): trust a CLIMB_UP link once at its launch point.
 // 1 = climb as soon as the bot is within a hull width of the launch point; 2 = only when it is stuck there.
