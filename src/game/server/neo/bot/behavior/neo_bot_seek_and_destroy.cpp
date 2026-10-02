@@ -52,8 +52,6 @@ static bool BotInSoundPAS( CNEOBot *me, const Vector &vSoundPos )
 
 //---------------------------------------------------------------------------------------------
 // Returns true if m_path now leads to a combat sound the bot heard
-static bool IsStraightLineFallback( const PathFollower &path ); // research patch 65, below
-
 bool CNEOBotSeekAndDestroy::TryPathToCombatSound( CNEOBot *me )
 {
 	if ( !m_bListenForCombatSounds )
@@ -114,8 +112,7 @@ bool CNEOBotSeekAndDestroy::TryPathToCombatSound( CNEOBot *me )
 		m_combatSoundCommitTimer.Start( sv_neo_bot_seek_and_destroy_combat_sound_commit_time.GetFloat() );
 	}
 
-	if ( CNEOBotPathCompute( me, m_path, m_vCombatSoundSpot, DEFAULT_ROUTE )
-			&& m_path.IsValid() && m_path.GetResult() == Path::COMPLETE_PATH && !IsStraightLineFallback( m_path ) )
+	if ( TryPathToRoamGoal( me, m_vCombatSoundSpot ) )
 	{
 		m_vGoalPos = m_vCombatSoundSpot;
 		m_bGoingToTargetEntity = false;
@@ -133,6 +130,27 @@ bool CNEOBotSeekAndDestroy::TryPathToCombatSound( CNEOBot *me )
 	}
 
 	return false;
+}
+
+
+//---------------------------------------------------------------------------------------------
+// When no route reaches the goal and the search got no nearer to it than the bot's own area, Path::Compute
+// falls back to a straight line, labeled COMPLETE_PATH: two segments in two areas. A real route has three or more.
+static bool IsStraightLineFallback( const Path &path )
+{
+	const Path::Segment *pFirst = path.FirstSegment();
+	const Path::Segment *pLast = path.LastSegment();
+	return pFirst && path.NextSegment( pFirst ) == pLast && pFirst->area != pLast->area;
+}
+
+
+//---------------------------------------------------------------------------------------------
+// Roam goals are picked at random, so skip one that no route reaches instead of walking at it. A refused
+// attempt stays in m_path: the wander loop's last resort keeps it.
+bool CNEOBotSeekAndDestroy::TryPathToRoamGoal( CNEOBot *me, const Vector &vGoal )
+{
+	return CNEOBotPathCompute( me, m_path, vGoal, DEFAULT_ROUTE )
+		&& m_path.GetResult() == Path::COMPLETE_PATH && !IsStraightLineFallback( m_path );
 }
 
 
@@ -532,30 +550,6 @@ private:
 
 
 //---------------------------------------------------------------------------------------------
-// NEO research (patch 65): roam goals (spawn points, wander points, gunfire) in a region the bot cannot reach - a spawn
-// platform with no way up (yard's z 152 deck, sentinel_jgr's east platform) - come back as the search's straight-line
-// fallback, which BuildTrivialPath labels COMPLETE_PATH, so the "insist on a complete path" checks below accept it and
-// the bot walks into the wall under the platform. Reject that fallback here and try the next goal.
-ConVar neo_bot_roam_reject_fallback( "neo_bot_roam_reject_fallback", "0", FCVAR_CHEAT,
-	"Research: 1 = SeekAndDestroy's roam / gunfire goals reject a straight-line fallback path (the search never left the start area)" );
-
-static bool IsStraightLineFallback( const PathFollower &path )
-{
-	if ( !neo_bot_roam_reject_fallback.GetBool() )
-	{
-		return false;
-	}
-	// exactly two segments: start and goal
-	const Path::Segment *first = path.FirstSegment();
-	const Path::Segment *last = first ? path.NextSegment( first ) : nullptr;
-	if ( !last || path.NextSegment( last ) )
-	{
-		return false;
-	}
-	return first->area && last->area && first->area != last->area
-		&& !first->area->IsConnected( last->area, NUM_DIRECTIONS );
-}
-
 void CNEOBotSeekAndDestroy::RecomputeSeekPath( CNEOBot *me )
 {
 	if ( m_bOverrideApproach )
@@ -640,7 +634,7 @@ void CNEOBotSeekAndDestroy::RecomputeSeekPath( CNEOBot *me )
 				m_hTargetEntity = pSpawns[RandomInt( 0, pSpawns.Size() - 1 )];
 				m_bGoingToTargetEntity = true;
 				m_vGoalPos = m_hTargetEntity->WorldSpaceCenter();
-				if ( CNEOBotPathCompute( me, m_path, m_vGoalPos, DEFAULT_ROUTE ) && m_path.IsValid() && m_path.GetResult() == Path::COMPLETE_PATH && !IsStraightLineFallback( m_path ) )
+				if ( TryPathToRoamGoal( me, m_vGoalPos ) )
 					return;
 			}
 		}
@@ -652,11 +646,12 @@ void CNEOBotSeekAndDestroy::RecomputeSeekPath( CNEOBot *me )
 
 		Vector vWanderPoint = TheNavAreas[RandomInt( 0, TheNavAreas.Size() - 1 )]->GetCenter();
 		m_vGoalPos = vWanderPoint;
-		if ( CNEOBotPathCompute( me, m_path, vWanderPoint, DEFAULT_ROUTE ) && !IsStraightLineFallback( m_path ) )
+		if ( TryPathToRoamGoal( me, vWanderPoint ) )
 			return;
 	}
 
-	m_path.Invalidate();
+	// No wander point has a route either (a pocket, or hazards all round): keep the last one's partial or
+	// straight-line path rather than stand still
 }
 
 
