@@ -45,6 +45,11 @@ static const float FLOOR_HEIGHT_TOLERANCE = 40.0f;
 // the search crosses a prop only to get out from under one, and a route that has to cross one is no detour
 static const float OCCUPIED_CELL_COST = 1000.0f;
 
+// A prop this light that physics moves is shoved out of the way, as a player does:
+// its cells cost this many free cells, so a bot walks round one chair but through a crowd of them
+static const float PUSHABLE_PROP_MAX_MASS = 200.0f;
+static const float PUSHABLE_CELL_COST = 4.0f;
+
 static const float WAYPOINT_REACHED_RANGE = 12.0f;
 
 // A moving prop is kept clear of where it will be within this time, at its current velocity
@@ -71,6 +76,7 @@ namespace
 		CBaseEntity *entity;
 		Vector sweep;			// how far it moves within MOTION_PREDICT_TIME
 		Vector2D lo, hi;		// footprint over that time, grown by a hull half-width
+		bool isPushable;		// light enough to shove aside
 	};
 
 	// The bot's body as a box: from a step over the floor to its standing height
@@ -179,6 +185,17 @@ static Vector GetPropVelocity( CBaseEntity *entity )
 	Vector velocity;
 	physics->GetVelocity( &velocity, NULL );
 	return velocity.IsLengthGreaterThan( MOVING_PROP_MIN_SPEED ) ? velocity : vec3_origin;
+}
+
+
+//----------------------------------------------------------------------------------------------------------------
+// A light prop physics moves freely: walking into it shoves it aside.
+// An animated prop's bone followers move with their prop, however light they are
+static bool IsPushable( CBaseEntity *entity )
+{
+	IPhysicsObject *physics = entity->VPhysicsGetObject();
+	return physics && physics->IsMoveable() && physics->GetMass() <= PUSHABLE_PROP_MAX_MASS
+		&& !FClassnameIs( entity, "phys_bone_follower" );
 }
 
 
@@ -332,6 +349,7 @@ static void CollectProps( INextBot *bot, const Vector &floorLo, const Vector &fl
 		PropObstacle_t obstacle;
 		obstacle.entity = entity;
 		obstacle.sweep = sweep;
+		obstacle.isPushable = IsPushable( entity );
 		obstacle.lo.Init( sweptLo.x - halfWidth, sweptLo.y - halfWidth );
 		obstacle.hi.Init( sweptHi.x + halfWidth, sweptHi.y + halfWidth );
 		obstacles->AddToTail( obstacle );
@@ -353,6 +371,7 @@ public:
 	void Straighten( const CUtlVector< int > &route, CUtlVector< Vector > *waypoints ) const;
 
 	bool IsOccupied( int cell ) const { return GetState( cell ) == CELL_OCCUPIED; }
+	bool IsWalled( int cell ) const { CellState state = GetState( cell ); return state == CELL_OFF_MESH || state == CELL_OCCUPIED; }
 
 private:
 	enum CellState
@@ -360,6 +379,7 @@ private:
 		CELL_UNKNOWN,
 		CELL_OFF_MESH,
 		CELL_FREE,
+		CELL_PUSHABLE,		// the body there would touch only props it can shove aside
 		CELL_OCCUPIED,
 	};
 
@@ -446,7 +466,8 @@ CPropDetourGrid::CellState CPropDetourGrid::GetState( int cell ) const
 
 
 //----------------------------------------------------------------------------------------------------------------
-// A cell is occupied when the bot's body standing there would touch a prop, now or soon
+// A cell is occupied when the bot's body standing there would touch a prop, now or soon,
+// and pushable when every prop it would touch is light enough to shove
 void CPropDetourGrid::MarkProps( const CUtlVector< PropObstacle_t > &obstacles )
 {
 	const BodyBox_t body = GetBodyBox( m_bot );
@@ -464,7 +485,8 @@ void CPropDetourGrid::MarkProps( const CUtlVector< PropObstacle_t > &obstacles )
 			for ( int x = x0; x <= x1; ++x )
 			{
 				const int cell = y * m_width + x;
-				if ( GetState( cell ) != CELL_FREE )
+				const CellState state = GetState( cell );
+				if ( state == CELL_OFF_MESH || state == CELL_OCCUPIED || ( state == CELL_PUSHABLE && obstacle.isPushable ) )
 				{
 					continue;
 				}
@@ -478,7 +500,7 @@ void CPropDetourGrid::MarkProps( const CUtlVector< PropObstacle_t > &obstacles )
 				float fraction;
 				if ( BodyMeetsProp( body, at, at, obstacle, &fraction ) )
 				{
-					m_state[ cell ] = CELL_OCCUPIED;
+					m_state[ cell ] = obstacle.isPushable ? CELL_PUSHABLE : CELL_OCCUPIED;
 				}
 			}
 		}
@@ -640,16 +662,18 @@ bool CPropDetourGrid::FindRoute( const Vector &from, const Vector &to, CUtlVecto
 					continue;
 				}
 
-				// no cutting a corner past a cell off the mesh or a prop:
+				// no cutting a corner past a cell off the mesh or a prop the bot cannot shove:
 				// two props that touch at a corner leave no gap, however the cells fall
 				const bool isDiagonal = ( dx != 0 && dy != 0 );
-				if ( isDiagonal && ( GetState( cy * m_width + x ) != CELL_FREE || GetState( y * m_width + cx ) != CELL_FREE ) )
+				if ( isDiagonal && ( IsWalled( cy * m_width + x ) || IsWalled( y * m_width + cx ) ) )
 				{
 					continue;
 				}
 
 				const float stepLength = isDiagonal ? DIAGONAL_STEP_LENGTH : 1.0f;
-				const float stepCost = stepLength * ( IsOccupied( next ) ? OCCUPIED_CELL_COST : 1.0f );
+				const CellState nextState = GetState( next );
+				const float cellCost = ( nextState == CELL_OCCUPIED ) ? OCCUPIED_CELL_COST : ( nextState == CELL_PUSHABLE ) ? PUSHABLE_CELL_COST : 1.0f;
+				const float stepCost = stepLength * cellCost;
 				const float cost = costSoFar[ cell ] + stepCost;
 				if ( cost >= costSoFar[ next ] )
 				{
