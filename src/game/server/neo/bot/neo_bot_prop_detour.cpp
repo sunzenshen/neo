@@ -35,6 +35,9 @@ static const float WIDE_SEARCH_MAX_SIZE = GRID_MAX_CELLS_PER_SIDE * GRID_CELL_SI
 // and when even that finds no way round, the bot looks again after this long, not at every replan
 static const float WIDE_SEARCH_RETRY_INTERVAL = 1.0f;
 
+// The server tick of the last wide search: one a tick between all bots, so a crowd of blocked bots cannot stall a frame
+static int s_wideSearchTick = -1;
+
 // A detour stays on floor this close in height to the bot's feet or to where it rejoins the path
 static const float FLOOR_HEIGHT_TOLERANCE = 40.0f;
 
@@ -338,7 +341,8 @@ static void CollectProps( INextBot *bot, const Vector &floorLo, const Vector &fl
 
 //----------------------------------------------------------------------------------------------------------------
 // Cells over the nav mesh around the path ahead, each off the mesh, free, or occupied by a prop:
-// a search over them finds the way past the props that stays on the mesh
+// a search over them finds the way past the props that stays on the mesh.
+// A cell's nav area is looked up only when the search or a prop first reaches it
 class CPropDetourGrid
 {
 public:
@@ -348,15 +352,18 @@ public:
 	bool FindRoute( const Vector &from, const Vector &to, CUtlVector< int > *route ) const;
 	void Straighten( const CUtlVector< int > &route, CUtlVector< Vector > *waypoints ) const;
 
-	bool IsOccupied( int cell ) const { return m_state[ cell ] == CELL_OCCUPIED; }
+	bool IsOccupied( int cell ) const { return GetState( cell ) == CELL_OCCUPIED; }
 
 private:
 	enum CellState
 	{
+		CELL_UNKNOWN,
 		CELL_OFF_MESH,
 		CELL_FREE,
 		CELL_OCCUPIED,
 	};
+
+	CellState GetState( int cell ) const;
 
 	struct OpenCell_t
 	{
@@ -374,14 +381,18 @@ private:
 	bool IsLineClear( int from, int to ) const;
 
 	INextBot *m_bot;
+	int m_team;
 	Vector2D m_origin;
 	float m_cellSize;
 	int m_width;
 	int m_height;
+	float m_floorTop;
+	float m_floorRange;
 
-	CUtlVector< unsigned char > m_state;
-	CUtlVector< float > m_floor;
-	CUtlVector< const CNavArea * > m_area;
+	// filled in as cells are first looked at
+	mutable CUtlVector< unsigned char > m_state;
+	mutable CUtlVector< float > m_floor;
+	mutable CUtlVector< const CNavArea * > m_area;
 };
 
 
@@ -405,19 +416,32 @@ CPropDetourGrid::CPropDetourGrid( INextBot *bot, const Vector2D &lo, const Vecto
 	m_state.SetCount( cellCount );
 	m_floor.SetCount( cellCount );
 	m_area.SetCount( cellCount );
-
-	const int team = bot->GetEntity()->GetTeamNumber();
-	const float floorTop = floorHi + FLOOR_HEIGHT_TOLERANCE;
-	const float floorRange = floorTop - ( floorLo - FLOOR_HEIGHT_TOLERANCE );
 	for ( int cell = 0; cell < cellCount; ++cell )
 	{
+		m_state[ cell ] = CELL_UNKNOWN;
+	}
+
+	m_team = bot->GetEntity()->GetTeamNumber();
+	m_floorTop = floorHi + FLOOR_HEIGHT_TOLERANCE;
+	m_floorRange = m_floorTop - ( floorLo - FLOOR_HEIGHT_TOLERANCE );
+}
+
+
+//----------------------------------------------------------------------------------------------------------------
+// The cell's state, looking up its nav area the first time: free on an area not blocked for the bot's team
+CPropDetourGrid::CellState CPropDetourGrid::GetState( int cell ) const
+{
+	if ( m_state[ cell ] == CELL_UNKNOWN )
+	{
 		const Vector2D center = GetCellCenter( cell );
-		const CNavArea *area = TheNavMesh->GetNavArea( Vector( center.x, center.y, floorTop ), floorRange );
+		const CNavArea *area = TheNavMesh->GetNavArea( Vector( center.x, center.y, m_floorTop ), m_floorRange );
 
 		m_area[ cell ] = area;
-		m_state[ cell ] = ( area && !area->IsBlocked( team ) ) ? CELL_FREE : CELL_OFF_MESH;
+		m_state[ cell ] = ( area && !area->IsBlocked( m_team ) ) ? CELL_FREE : CELL_OFF_MESH;
 		m_floor[ cell ] = area ? area->GetZ( center.x, center.y ) : 0.0f;
 	}
+
+	return (CellState)m_state[ cell ];
 }
 
 
@@ -427,28 +451,35 @@ void CPropDetourGrid::MarkProps( const CUtlVector< PropObstacle_t > &obstacles )
 {
 	const BodyBox_t body = GetBodyBox( m_bot );
 
-	for ( int cell = 0; cell < m_state.Count(); ++cell )
+	// only a cell whose middle lies in a prop's footprint can touch the prop: visit those, not every cell
+	FOR_EACH_VEC( obstacles, i )
 	{
-		if ( m_state[ cell ] != CELL_FREE )
+		const PropObstacle_t &obstacle = obstacles[ i ];
+		const int x0 = MAX( 0, (int)floorf( ( obstacle.lo.x - m_origin.x ) / m_cellSize ) );
+		const int x1 = MIN( m_width - 1, (int)floorf( ( obstacle.hi.x - m_origin.x ) / m_cellSize ) );
+		const int y0 = MAX( 0, (int)floorf( ( obstacle.lo.y - m_origin.y ) / m_cellSize ) );
+		const int y1 = MIN( m_height - 1, (int)floorf( ( obstacle.hi.y - m_origin.y ) / m_cellSize ) );
+		for ( int y = y0; y <= y1; ++y )
 		{
-			continue;
-		}
-
-		const Vector at = GetCellFloor( cell );
-
-		FOR_EACH_VEC( obstacles, i )
-		{
-			const PropObstacle_t &obstacle = obstacles[ i ];
-			if ( at.x < obstacle.lo.x || at.x > obstacle.hi.x || at.y < obstacle.lo.y || at.y > obstacle.hi.y )
+			for ( int x = x0; x <= x1; ++x )
 			{
-				continue;
-			}
+				const int cell = y * m_width + x;
+				if ( GetState( cell ) != CELL_FREE )
+				{
+					continue;
+				}
 
-			float fraction;
-			if ( BodyMeetsProp( body, at, at, obstacle, &fraction ) )
-			{
-				m_state[ cell ] = CELL_OCCUPIED;
-				break;
+				const Vector at = GetCellFloor( cell );
+				if ( at.x < obstacle.lo.x || at.x > obstacle.hi.x || at.y < obstacle.lo.y || at.y > obstacle.hi.y )
+				{
+					continue;
+				}
+
+				float fraction;
+				if ( BodyMeetsProp( body, at, at, obstacle, &fraction ) )
+				{
+					m_state[ cell ] = CELL_OCCUPIED;
+				}
 			}
 		}
 	}
@@ -477,6 +508,7 @@ Vector2D CPropDetourGrid::GetCellCenter( int cell ) const
 // The floor at the middle of the cell
 Vector CPropDetourGrid::GetCellFloor( int cell ) const
 {
+	GetState( cell );
 	const Vector2D center = GetCellCenter( cell );
 	return Vector( center.x, center.y, m_floor[ cell ] );
 }
@@ -502,7 +534,7 @@ int CPropDetourGrid::GetNearestOnMesh( int cell ) const
 					continue;
 				}
 
-				if ( m_state[ y * m_width + x ] != CELL_OFF_MESH )
+				if ( GetState( y * m_width + x ) != CELL_OFF_MESH )
 				{
 					return y * m_width + x;
 				}
@@ -519,7 +551,7 @@ int CPropDetourGrid::GetNearestOnMesh( int cell ) const
 // (two areas either side of a wall are both on the mesh, but not connected)
 bool CPropDetourGrid::CanStep( int from, int to ) const
 {
-	if ( m_state[ to ] == CELL_OFF_MESH )
+	if ( GetState( to ) == CELL_OFF_MESH || GetState( from ) == CELL_OFF_MESH )
 	{
 		return false;
 	}
@@ -611,7 +643,7 @@ bool CPropDetourGrid::FindRoute( const Vector &from, const Vector &to, CUtlVecto
 				// no cutting a corner past a cell off the mesh or a prop:
 				// two props that touch at a corner leave no gap, however the cells fall
 				const bool isDiagonal = ( dx != 0 && dy != 0 );
-				if ( isDiagonal && ( m_state[ cy * m_width + x ] != CELL_FREE || m_state[ y * m_width + cx ] != CELL_FREE ) )
+				if ( isDiagonal && ( GetState( cy * m_width + x ) != CELL_FREE || GetState( y * m_width + cx ) != CELL_FREE ) )
 				{
 					continue;
 				}
@@ -658,7 +690,7 @@ bool CPropDetourGrid::IsLineClear( int from, int to ) const
 			continue;
 		}
 
-		if ( m_state[ cell ] != CELL_FREE || !CanStep( previous, cell ) )
+		if ( GetState( cell ) != CELL_FREE || !CanStep( previous, cell ) )
 		{
 			return false;
 		}
@@ -666,7 +698,7 @@ bool CPropDetourGrid::IsLineClear( int from, int to ) const
 		// a diagonal step passes the two cells beside it, as in the search
 		const int px = previous % m_width;
 		const int py = previous / m_width;
-		if ( px != x && py != y && ( m_state[ py * m_width + x ] != CELL_FREE || m_state[ y * m_width + px ] != CELL_FREE ) )
+		if ( px != x && py != y && ( GetState( py * m_width + x ) != CELL_FREE || GetState( y * m_width + px ) != CELL_FREE ) )
 		{
 			return false;
 		}
@@ -946,12 +978,22 @@ void CNEOBotPropDetour::Plan( INextBot *bot, const PathFollower &path )
 	CPropDetourGrid grid( bot, regionLo, regionHi, floorLo, floorHi );
 	grid.MarkProps( obstacles );
 
-	if ( !FindDetour( grid, mover->GetFeet(), rejoin, &m_waypoints )
-		&& !FindWideDetour( bot, lineLo, lineHi, floorLo, floorHi, rejoin, &regionLo, &regionHi, &m_waypoints ) )
+	if ( !FindDetour( grid, mover->GetFeet(), rejoin, &m_waypoints ) )
 	{
-		// a bot pushing a prop with no way round looks again less often: nothing changes quickly
-		m_replanTimer.Start( WIDE_SEARCH_RETRY_INTERVAL );
-		return;
+		// another bot had this tick's wide search: plan again at the next tick
+		if ( s_wideSearchTick == gpGlobals->tickcount )
+		{
+			m_replanTimer.Invalidate();
+			return;
+		}
+
+		s_wideSearchTick = gpGlobals->tickcount;
+		if ( !FindWideDetour( bot, lineLo, lineHi, floorLo, floorHi, rejoin, &regionLo, &regionHi, &m_waypoints ) )
+		{
+			// a bot pushing a prop with no way round looks again less often: nothing changes quickly
+			m_replanTimer.Start( WIDE_SEARCH_RETRY_INTERVAL );
+			return;
+		}
 	}
 
 	// the detour keeps this target while the props and the bot move
