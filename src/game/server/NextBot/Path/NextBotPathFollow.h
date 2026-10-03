@@ -9,6 +9,9 @@
 #include "nav_mesh.h"
 #include "nav_pathfind.h"
 #include "NextBotPath.h"
+#ifdef NEO
+#include "neo/bot/neo_bot_prop_detour.h"
+#endif
 
 class INextBot;
 class ILocomotion;
@@ -79,6 +82,10 @@ private:
 
 	bool LadderUpdate( INextBot *bot );				// move bot along ladder
 	CBaseEntity *FindBlocker( INextBot *bot );		// if entity is returned, it is blocking us from continuing along our path
+
+#ifdef NEO
+	CNEOBotPropDetour m_propDetour;					// steers around props the nav mesh does not know about
+#endif
 
 	float m_goalTolerance;
 };
