@@ -434,6 +434,20 @@ void CNEOBotLadderClimb::ResolveExitArea( CNEOBot *me )
 		}
 
 		constexpr int MAX_PATH_SEARCH_STEPS = 100;
+
+		// The path's current goal can still be the area at the ladder's foot when the climb reaches the
+		// top, and that area is no exit: the exit is the first area after this ladder
+		const Path::Segment *ladderSeg = neo_harness_ladder_pr_off.GetBool() ? NULL : seg;	// NEO-HARNESS-TEMP: off = upstream's scan
+		for ( int i = 0; ladderSeg && ladderSeg->ladder != m_ladder && i < MAX_PATH_SEARCH_STEPS; ++i )
+		{
+			ladderSeg = path->NextSegment( ladderSeg );
+		}
+
+		if ( ladderSeg && ladderSeg->ladder == m_ladder )
+		{
+			seg = ladderSeg;
+		}
+
 		int safetyCounter = 0;
 		while ( seg && safetyCounter < MAX_PATH_SEARCH_STEPS )
 		{
