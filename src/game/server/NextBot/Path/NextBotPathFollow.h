@@ -9,6 +9,9 @@
 #include "nav_mesh.h"
 #include "nav_pathfind.h"
 #include "NextBotPath.h"
+#ifdef NEO
+#include "neo/bot/neo_bot_prop_detour.h"
+#endif
 
 class INextBot;
 class ILocomotion;
@@ -41,6 +44,10 @@ public:
 	void SetGoalTolerance( float range );			// set tolerance within at which we're considered to be at our goal
 
 	Path::ResultType GetResult() const { return m_result;  }
+
+#ifdef NEO
+	bool IsPropDetouring() const { return m_propDetour.IsDetouring(); }	// NEO-HARNESS-TEMP: stuck telemetry
+#endif
 
 private:
 	const Path::Segment *m_goal;					// our current goal along the path
@@ -83,6 +90,8 @@ private:
 #ifdef NEO
 	bool HasFallenBelowPath( INextBot *bot ) const;	// return true if we stand off the path, more than a step below it
 	bool m_wasOnGround;
+
+	CNEOBotPropDetour m_propDetour;					// steers around props the nav mesh does not know about
 #endif
 
 	float m_goalTolerance;
@@ -92,7 +101,7 @@ private:
 	// stand across the next stretch of path; the nav mesh keeps doing the routing, this only steers
 	Vector PropDetour( INextBot *bot, const Vector &goalPos );
 	bool PlanPropDetour( INextBot *bot );
-	CUtlVector< Vector > m_propDetour;				// remaining detour waypoints, nearest first
+	CUtlVector< Vector > m_gridPropDetour;			// remaining detour waypoints, nearest first
 	CountdownTimer m_propDetourTimer;				// replan interval
 #endif
 };
