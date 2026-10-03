@@ -41,4 +41,5 @@ private:
 	Vector2D m_regionHi;
 	float m_floorLo;
 	float m_floorHi;
+	bool m_isWide;		// found by the wide search, so its replans share the one wide search a tick
 };

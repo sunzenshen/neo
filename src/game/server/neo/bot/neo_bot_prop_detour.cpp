@@ -35,15 +35,13 @@ static const float WIDE_SEARCH_MAX_SIZE = GRID_MAX_CELLS_PER_SIDE * GRID_CELL_SI
 // and when even that finds no way round, the bot looks again after this long, not at every replan
 static const float WIDE_SEARCH_RETRY_INTERVAL = 1.0f;
 
-// The server tick of the last wide search: one a tick between all bots, so a crowd of blocked bots cannot stall a frame
-static int s_wideSearchTick = -1;
-
 // A detour stays on floor this close in height to the bot's feet or to where it rejoins the path
 static const float FLOOR_HEIGHT_TOLERANCE = 40.0f;
 
 // Stepping through a cell a prop occupies costs as much as this many free cells:
 // the search crosses a prop only to get out from under one, and a route that has to cross one is no detour
 static const float OCCUPIED_CELL_COST = 1000.0f;
+static const float FREE_CELL_COST = 1.0f;
 
 // A prop this light that physics moves is shoved out of the way, as a player does:
 // its cells cost this many free cells, so a bot walks round one chair but through a crowd of them
@@ -190,12 +188,12 @@ static Vector GetPropVelocity( CBaseEntity *entity )
 
 //----------------------------------------------------------------------------------------------------------------
 // A light prop physics moves freely: walking into it shoves it aside.
-// An animated prop's bone followers move with their prop, however light they are
+// One hung on a rope or a hinge swings back, and an animated prop's bone followers move with their prop
 static bool IsPushable( CBaseEntity *entity )
 {
 	IPhysicsObject *physics = entity->VPhysicsGetObject();
 	return physics && physics->IsMoveable() && physics->GetMass() <= PUSHABLE_PROP_MAX_MASS
-		&& !FClassnameIs( entity, "phys_bone_follower" );
+		&& !physics->IsAttachedToConstraint( false ) && !FClassnameIs( entity, "phys_bone_follower" );
 }
 
 
@@ -371,7 +369,6 @@ public:
 	void Straighten( const CUtlVector< int > &route, CUtlVector< Vector > *waypoints ) const;
 
 	bool IsOccupied( int cell ) const { return GetState( cell ) == CELL_OCCUPIED; }
-	bool IsWalled( int cell ) const { CellState state = GetState( cell ); return state == CELL_OFF_MESH || state == CELL_OCCUPIED; }
 
 private:
 	enum CellState
@@ -384,6 +381,8 @@ private:
 	};
 
 	CellState GetState( int cell ) const;
+	bool IsWalled( int cell ) const;
+	float GetStepCost( int cell ) const;
 
 	struct OpenCell_t
 	{
@@ -462,6 +461,31 @@ CPropDetourGrid::CellState CPropDetourGrid::GetState( int cell ) const
 	}
 
 	return (CellState)m_state[ cell ];
+}
+
+
+//----------------------------------------------------------------------------------------------------------------
+// The cell is off the mesh or under a prop the bot cannot shove: nothing gets past it
+bool CPropDetourGrid::IsWalled( int cell ) const
+{
+	const CellState state = GetState( cell );
+	return state == CELL_OFF_MESH || state == CELL_OCCUPIED;
+}
+
+
+//----------------------------------------------------------------------------------------------------------------
+// What stepping into the cell costs: a light prop's cell costs a little more than a free one, a heavy prop's a lot
+float CPropDetourGrid::GetStepCost( int cell ) const
+{
+	switch ( GetState( cell ) )
+	{
+	case CELL_OCCUPIED:
+		return OCCUPIED_CELL_COST;
+	case CELL_PUSHABLE:
+		return PUSHABLE_CELL_COST;
+	default:
+		return FREE_CELL_COST;
+	}
 }
 
 
@@ -671,9 +695,7 @@ bool CPropDetourGrid::FindRoute( const Vector &from, const Vector &to, CUtlVecto
 				}
 
 				const float stepLength = isDiagonal ? DIAGONAL_STEP_LENGTH : 1.0f;
-				const CellState nextState = GetState( next );
-				const float cellCost = ( nextState == CELL_OCCUPIED ) ? OCCUPIED_CELL_COST : ( nextState == CELL_PUSHABLE ) ? PUSHABLE_CELL_COST : 1.0f;
-				const float stepCost = stepLength * cellCost;
+				const float stepCost = stepLength * GetStepCost( next );
 				const float cost = costSoFar[ cell ] + stepCost;
 				if ( cost >= costSoFar[ next ] )
 				{
@@ -831,6 +853,22 @@ static void GrowOverProps( const CUtlVector< PropObstacle_t > &obstacles, Vector
 
 
 //----------------------------------------------------------------------------------------------------------------
+// One wide search a server tick between all bots, so a crowd of blocked bots cannot stall a frame:
+// return true if this tick's is still free, and take it
+static int s_wideSearchTick = -1;
+static bool ClaimWideSearch()
+{
+	if ( s_wideSearchTick == gpGlobals->tickcount )
+	{
+		return false;
+	}
+
+	s_wideSearchTick = gpGlobals->tickcount;
+	return true;
+}
+
+
+//----------------------------------------------------------------------------------------------------------------
 // With no way round near the path, as past a row or a wall of props that runs on beyond the props the path crosses:
 // look for props further round the path, and search again over a region grown over the props it touches.
 // On success the region is the grown one, so a replan searches the same floor
@@ -881,6 +919,7 @@ void CNEOBotPropDetour::Reset()
 	m_pathGoal = NULL;
 	m_rejoinGoal = NULL;
 	m_resumeGoal = NULL;
+	m_isWide = false;
 }
 
 
@@ -896,6 +935,11 @@ void CNEOBotPropDetour::Update( INextBot *bot, const PathFollower &path )
 		if ( !IsDetouring() )
 		{
 			Plan( bot, path );
+		}
+		else if ( m_isWide && !ClaimWideSearch() )
+		{
+			// a detour the wide search found searches its whole region again: wait for a free tick
+			m_replanTimer.Invalidate();
 		}
 		else if ( !Replan( bot ) )
 		{
@@ -1002,22 +1046,24 @@ void CNEOBotPropDetour::Plan( INextBot *bot, const PathFollower &path )
 	CPropDetourGrid grid( bot, regionLo, regionHi, floorLo, floorHi );
 	grid.MarkProps( obstacles );
 
+	bool isWide = false;
 	if ( !FindDetour( grid, mover->GetFeet(), rejoin, &m_waypoints ) )
 	{
 		// another bot had this tick's wide search: plan again at the next tick
-		if ( s_wideSearchTick == gpGlobals->tickcount )
+		if ( !ClaimWideSearch() )
 		{
 			m_replanTimer.Invalidate();
 			return;
 		}
 
-		s_wideSearchTick = gpGlobals->tickcount;
 		if ( !FindWideDetour( bot, lineLo, lineHi, floorLo, floorHi, rejoin, &regionLo, &regionHi, &m_waypoints ) )
 		{
 			// a bot pushing a prop with no way round looks again less often: nothing changes quickly
 			m_replanTimer.Start( WIDE_SEARCH_RETRY_INTERVAL );
 			return;
 		}
+
+		isWide = true;
 	}
 
 	// the detour keeps this target while the props and the bot move
@@ -1028,6 +1074,7 @@ void CNEOBotPropDetour::Plan( INextBot *bot, const PathFollower &path )
 	m_regionHi = regionHi;
 	m_floorLo = floorLo;
 	m_floorHi = floorHi;
+	m_isWide = isWide;
 }
 
 
