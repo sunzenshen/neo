@@ -337,6 +337,10 @@ void PathFollower::Invalidate( void )
 	m_avoidTimer.Invalidate();
 	m_waitTimer.Invalidate();
 	m_hindrance = NULL;
+
+#ifdef NEO
+	m_propDetour.Reset();
+#endif
 }
 
 
@@ -349,6 +353,10 @@ void PathFollower::OnPathChanged( INextBot *bot, Path::ResultType result )
 	// start from the beginning
 	m_goal = FirstSegment();
 	m_result = result;
+
+#ifdef NEO
+	m_propDetour.Reset();
+#endif
 }
 
 
@@ -961,6 +969,29 @@ void PathFollower::Update( INextBot *bot )
 		return;
 	}
 
+#ifdef NEO
+	// walk around props in the way, which the nav mesh does not know about,
+	// heading for the path segment past them rather than turning back for a goal the detour went around
+	// NEO-HARNESS-TEMP: neo_harness_propavoid 0 = upstream (no prop detour); the PR runs the detour always
+	extern ConVar neo_harness_propavoid;
+	if ( !neo_harness_propavoid.GetBool() )
+	{
+		m_propDetour.Reset();
+	}
+	else
+	{
+		m_propDetour.Update( bot, *this );
+	}
+
+	const Path::Segment *detourPathGoal = m_propDetour.GetPathGoal();
+	if ( detourPathGoal )
+	{
+		m_goal = detourPathGoal;
+	}
+
+	const bool isDetouring = m_propDetour.IsDetouring();
+#endif
+
 	// use the direction towards the goal as 'forward' direction
 	Vector forward = m_goal->pos - mover->GetFeet();
 
@@ -1016,8 +1047,15 @@ void PathFollower::Update( INextBot *bot )
 		NDebugOverlay::Line( mover->GetFeet(), mover->GetFeet() + axisSize * left, 0, 0, 255, true, 0.1f );
 	}
 
+#ifdef NEO
+	// a detour crosses only walkable floor, and the prop it goes around is no ledge to climb
+	const bool shouldClimb = !isDetouring;
+#else
+	const bool shouldClimb = true;
+#endif
+
 	// climb up ledges
-	if ( !Climbing( bot, m_goal, forward, left, goalRange ) )
+	if ( shouldClimb && !Climbing( bot, m_goal, forward, left, goalRange ) )
 	{
 		// a failed climb could mean an invalid path
 		if ( !IsValid() )
@@ -1133,6 +1171,11 @@ void PathFollower::Update( INextBot *bot )
 	Vector goalPos = m_goal->pos;
 
 #ifdef NEO
+	if ( isDetouring )
+	{
+		goalPos = m_propDetour.GetMoveGoal();
+	}
+
 	// NEO-HARNESS-TEMP research arm (patch 51): steer round physics props across the path ahead
 	goalPos = PropDetour( bot, goalPos );
 #endif
@@ -2466,7 +2509,7 @@ Vector PathFollower::PropDetour( INextBot *bot, const Vector &goalPos )
 {
 	if ( !neo_bot_prop_detour.GetBool() )
 	{
-		m_propDetour.RemoveAll();
+		m_gridPropDetour.RemoveAll();
 		return goalPos;
 	}
 
@@ -2491,16 +2534,16 @@ Vector PathFollower::PropDetour( INextBot *bot, const Vector &goalPos )
 	}
 
 	const Vector &feet = bot->GetLocomotionInterface()->GetFeet();
-	while ( m_propDetour.Count() && ( m_propDetour[0].AsVector2D() - feet.AsVector2D() ).IsLengthLessThan( 12.0f ) )
+	while ( m_gridPropDetour.Count() && ( m_gridPropDetour[0].AsVector2D() - feet.AsVector2D() ).IsLengthLessThan( 12.0f ) )
 	{
-		m_propDetour.Remove( 0 );
+		m_gridPropDetour.Remove( 0 );
 	}
-	return m_propDetour.Count() ? m_propDetour[0] : goalPos;
+	return m_gridPropDetour.Count() ? m_gridPropDetour[0] : goalPos;
 }
 
 bool PathFollower::PlanPropDetour( INextBot *bot )
 {
-	m_propDetour.RemoveAll();
+	m_gridPropDetour.RemoveAll();
 	if ( !m_goal || m_goal->ladder || m_goal->type != ON_GROUND )
 	{
 		return false;
@@ -2864,10 +2907,10 @@ bool PathFollower::PlanPropDetour( INextBot *bot )
 		if ( k == cells.Count() - 1 || !lineFree( cells[anchor], cells[k + 1] ) )
 		{
 			const int i = cells[k];
-			m_propDetour.AddToTail( Vector( gLo.x + ( i % nx + 0.5f ) * flCell, gLo.y + ( i / nx + 0.5f ) * flCell, height[i] ) );
+			m_gridPropDetour.AddToTail( Vector( gLo.x + ( i % nx + 0.5f ) * flCell, gLo.y + ( i / nx + 0.5f ) * flCell, height[i] ) );
 			anchor = k;
 		}
 	}
-	return m_propDetour.Count() > 0;
+	return m_gridPropDetour.Count() > 0;
 }
 #endif // NEO

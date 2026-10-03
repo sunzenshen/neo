@@ -3275,7 +3275,7 @@ static void CNEOBotLogStuckForensic( CNEOBot *me, const char *reason, INextBotEv
 		"threat=%.0f,%.0f,%.0f threatarea=%d threatvis=%d "
 		"end=%.0f,%.0f,%.0f endarea=%d endnav=%d endhaz=%d "
 		"startblk=%d starthaz=%d nbr=%d nbrblk=%d nbrhaz=%d blkdesc=%s contacts=%s "
-		"pathsegs=%d trivial=%d pathage=%.1f strafe=%d onpath=%d goalidx=%d patharea=%s skipprobe=%d blkahead=%d\n",
+		"pathsegs=%d trivial=%d pathage=%.1f strafe=%d onpath=%d goalidx=%d patharea=%s skipprobe=%d blkahead=%d detour=%d\n",
 		gpGlobals->curtime, me->entindex(), reason,
 		vecOrigin.x, vecOrigin.y, vecOrigin.z, pArea ? pArea->GetID() : -1,
 		vecHullMins.x, vecHullMins.y, vecHullMins.z, vecHullMaxs.x, vecHullMaxs.y, vecHullMaxs.z,
@@ -3290,7 +3290,8 @@ static void CNEOBotLogStuckForensic( CNEOBot *me, const char *reason, INextBotEv
 		vecThreat.x, vecThreat.y, vecThreat.z, iThreatArea, iThreatVisible,
 		vecEnd.x, vecEnd.y, vecEnd.z, iEndArea, iEndNav, iEndHazard,
 		iStartBlocked, iStartHazard, iNbr, iNbrBlocked, iNbrHazard, szBlkDesc, szContacts,
-		iPathSegs, iTrivial, flPathAge, iStrafe, iOnPath, iGoalIdx, szPathAreas[0] ? szPathAreas : "-", iSkipProbe, iBlockedAhead );
+		iPathSegs, iTrivial, flPathAge, iStrafe, iOnPath, iGoalIdx, szPathAreas[0] ? szPathAreas : "-", iSkipProbe, iBlockedAhead,
+		( pPath && pPath->IsPropDetouring() ) ? 1 : 0 );
 }
 
 // NEO-HARNESS-TEMP research arm (2026-09-23): remember the crossing a bot got stuck making, so the next
