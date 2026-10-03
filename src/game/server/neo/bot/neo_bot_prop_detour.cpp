@@ -24,8 +24,16 @@ static const float REJOIN_PAST_PROP = 32.0f;
 // Floor around the path and the props that a detour may use
 static const float GRID_MARGIN = 48.0f;
 static const float GRID_CELL_SIZE = 16.0f;
-static const int GRID_MAX_CELLS_PER_SIDE = 64;
-static const int SEARCH_MAX_EXPANSIONS = 4096;
+static const int GRID_MAX_CELLS_PER_SIDE = 96;
+static const int SEARCH_MAX_EXPANSIONS = GRID_MAX_CELLS_PER_SIDE * GRID_MAX_CELLS_PER_SIDE;
+
+// With no way round near the path, as past a row of props that runs on beyond the ones the path crosses,
+// props are looked for this much further round the path,
+static const float WIDE_SEARCH_RANGE = 384.0f;
+// and the search region grows over the ones it touches, as far as cells of the finest size reach,
+static const float WIDE_SEARCH_MAX_SIZE = GRID_MAX_CELLS_PER_SIDE * GRID_CELL_SIZE;
+// and when even that finds no way round, the bot looks again after this long, not at every replan
+static const float WIDE_SEARCH_RETRY_INTERVAL = 1.0f;
 
 // A detour stays on floor this close in height to the bot's feet or to where it rejoins the path
 static const float FLOOR_HEIGHT_TOLERANCE = 40.0f;
@@ -42,7 +50,6 @@ static const float MOVING_PROP_MIN_SPEED = 10.0f;
 
 // Props are looked for up to this high above the path, so one coming down is seen in time
 static const float PROP_QUERY_HEADROOM = 512.0f;
-static const int PROP_QUERY_MAX_ENTITIES = 256;
 
 // A prop smaller than this in every direction (a can, a bottle) is pushed aside, not walked around
 static const Vector SMALL_PROP_SIZE( 16.0f, 16.0f, 40.0f );
@@ -127,6 +134,33 @@ static bool IsSolidToPlayers( CBaseEntity *entity )
 	}
 
 	return g_pGameRules->ShouldCollide( COLLISION_GROUP_PLAYER_MOVEMENT, entity->GetCollisionGroup() );
+}
+
+
+//----------------------------------------------------------------------------------------------------------------
+namespace
+{
+	// The movable props solid to players a spatial partition query meets, however much else lies there:
+	// a box query into a fixed-size list fills up with everything it finds, cans, weapons and triggers alike
+	class CMovablePropEnum : public IPartitionEnumerator
+	{
+	public:
+		explicit CMovablePropEnum( CUtlVector< CBaseEntity * > *props ) : m_props( props ) {}
+
+		virtual IterationRetval_t EnumElement( IHandleEntity *handleEntity )
+		{
+			CBaseEntity *entity = gEntList.GetBaseEntity( handleEntity->GetRefEHandle() );
+			if ( entity && IsMovableProp( entity ) && IsSolidToPlayers( entity ) )
+			{
+				m_props->AddToTail( entity );
+			}
+
+			return ITERATION_CONTINUE;
+		}
+
+	private:
+		CUtlVector< CBaseEntity * > *m_props;
+	};
 }
 
 
@@ -260,16 +294,12 @@ static void CollectProps( INextBot *bot, const Vector &floorLo, const Vector &fl
 	const Vector queryLo = floorLo - Vector( GRID_MARGIN, GRID_MARGIN, FLOOR_HEIGHT_TOLERANCE );
 	const Vector queryHi = floorHi + Vector( GRID_MARGIN, GRID_MARGIN, PROP_QUERY_HEADROOM );
 
-	CBaseEntity *list[ PROP_QUERY_MAX_ENTITIES ];
-	const int count = UTIL_EntitiesInBox( list, ARRAYSIZE( list ), queryLo, queryHi, 0 );
-	for ( int i = 0; i < count; ++i )
+	CUtlVector< CBaseEntity * > props;
+	CMovablePropEnum propEnum( &props );
+	partition->EnumerateElementsInBox( PARTITION_ENGINE_NON_STATIC_EDICTS, queryLo, queryHi, false, &propEnum );
+	FOR_EACH_VEC( props, i )
 	{
-		CBaseEntity *entity = list[ i ];
-		if ( !IsMovableProp( entity ) || !IsSolidToPlayers( entity ) )
-		{
-			continue;
-		}
-
+		CBaseEntity *entity = props[ i ];
 		Vector propLo, propHi;
 		entity->CollisionProp()->WorldSpaceAABB( &propLo, &propHi );
 
@@ -578,9 +608,10 @@ bool CPropDetourGrid::FindRoute( const Vector &from, const Vector &to, CUtlVecto
 					continue;
 				}
 
-				// no cutting a corner past a cell off the mesh
+				// no cutting a corner past a cell off the mesh or a prop:
+				// two props that touch at a corner leave no gap, however the cells fall
 				const bool isDiagonal = ( dx != 0 && dy != 0 );
-				if ( isDiagonal && ( m_state[ cy * m_width + x ] == CELL_OFF_MESH || m_state[ y * m_width + cx ] == CELL_OFF_MESH ) )
+				if ( isDiagonal && ( m_state[ cy * m_width + x ] != CELL_FREE || m_state[ y * m_width + cx ] != CELL_FREE ) )
 				{
 					continue;
 				}
@@ -628,6 +659,14 @@ bool CPropDetourGrid::IsLineClear( int from, int to ) const
 		}
 
 		if ( m_state[ cell ] != CELL_FREE || !CanStep( previous, cell ) )
+		{
+			return false;
+		}
+
+		// a diagonal step passes the two cells beside it, as in the search
+		const int px = previous % m_width;
+		const int py = previous / m_width;
+		if ( px != x && py != y && ( m_state[ py * m_width + x ] != CELL_FREE || m_state[ y * m_width + px ] != CELL_FREE ) )
 		{
 			return false;
 		}
@@ -683,6 +722,91 @@ static bool FindDetour( const CPropDetourGrid &grid, const Vector &from, const V
 
 	grid.Straighten( route, waypoints );
 	return waypoints->Count() > 0;
+}
+
+
+//----------------------------------------------------------------------------------------------------------------
+// Grow the region over every prop it touches, with a margin round each so the way round the prop is in it too,
+// as long as the region stays within the wide search's size
+static void GrowOverProps( const CUtlVector< PropObstacle_t > &obstacles, Vector2D *regionLo, Vector2D *regionHi )
+{
+	const Vector2D margin( GRID_MARGIN, GRID_MARGIN );
+	for ( ;; )
+	{
+		// the prop that grows the region least goes in first,
+		// so the near end of a long row is in before its far end uses up the size
+		Vector2D bestLo, bestHi;
+		float bestArea = FLT_MAX;
+		FOR_EACH_VEC( obstacles, i )
+		{
+			const PropObstacle_t &obstacle = obstacles[ i ];
+			const bool isTouching = obstacle.hi.x > regionLo->x && obstacle.lo.x < regionHi->x
+				&& obstacle.hi.y > regionLo->y && obstacle.lo.y < regionHi->y;
+			if ( !isTouching )
+			{
+				continue;
+			}
+
+			const Vector2D lo = regionLo->Min( obstacle.lo - margin );
+			const Vector2D hi = regionHi->Max( obstacle.hi + margin );
+			const Vector2D size = hi - lo;
+			if ( ( lo == *regionLo && hi == *regionHi ) || size.x > WIDE_SEARCH_MAX_SIZE || size.y > WIDE_SEARCH_MAX_SIZE )
+			{
+				continue;
+			}
+
+			if ( size.x * size.y < bestArea )
+			{
+				bestArea = size.x * size.y;
+				bestLo = lo;
+				bestHi = hi;
+			}
+		}
+
+		if ( bestArea == FLT_MAX )
+		{
+			return;
+		}
+
+		*regionLo = bestLo;
+		*regionHi = bestHi;
+	}
+}
+
+
+//----------------------------------------------------------------------------------------------------------------
+// With no way round near the path, as past a row or a wall of props that runs on beyond the props the path crosses:
+// look for props further round the path, and search again over a region grown over the props it touches.
+// On success the region is the grown one, so a replan searches the same floor
+static bool FindWideDetour( INextBot *bot, const Vector &lineLo, const Vector &lineHi, float floorLo, float floorHi,
+	const Vector &rejoin, Vector2D *regionLo, Vector2D *regionHi, CUtlVector< Vector > *waypoints )
+{
+	CUtlVector< PropObstacle_t > obstacles;
+	const Vector range( WIDE_SEARCH_RANGE, WIDE_SEARCH_RANGE, 0.0f );
+	CollectProps( bot, lineLo - range, lineHi + range, &obstacles );
+
+	Vector2D lo = *regionLo;
+	Vector2D hi = *regionHi;
+	GrowOverProps( obstacles, &lo, &hi );
+	if ( lo == *regionLo && hi == *regionHi )
+	{
+		return false;
+	}
+
+	// the region may have grown past the props looked for: every prop on it has to be marked
+	obstacles.RemoveAll();
+	CollectProps( bot, Vector( lo.x, lo.y, floorLo ), Vector( hi.x, hi.y, floorHi ), &obstacles );
+
+	CPropDetourGrid grid( bot, lo, hi, floorLo, floorHi );
+	grid.MarkProps( obstacles );
+	if ( !FindDetour( grid, bot->GetLocomotionInterface()->GetFeet(), rejoin, waypoints ) )
+	{
+		return false;
+	}
+
+	*regionLo = lo;
+	*regionHi = hi;
+	return true;
 }
 
 
@@ -822,8 +946,11 @@ void CNEOBotPropDetour::Plan( INextBot *bot, const PathFollower &path )
 	CPropDetourGrid grid( bot, regionLo, regionHi, floorLo, floorHi );
 	grid.MarkProps( obstacles );
 
-	if ( !FindDetour( grid, mover->GetFeet(), rejoin, &m_waypoints ) )
+	if ( !FindDetour( grid, mover->GetFeet(), rejoin, &m_waypoints )
+		&& !FindWideDetour( bot, lineLo, lineHi, floorLo, floorHi, rejoin, &regionLo, &regionHi, &m_waypoints ) )
 	{
+		// a bot pushing a prop with no way round looks again less often: nothing changes quickly
+		m_replanTimer.Start( WIDE_SEARCH_RETRY_INTERVAL );
 		return;
 	}
 
