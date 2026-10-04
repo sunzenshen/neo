@@ -751,10 +751,10 @@ bool CPropDetourGrid::IsLineClear( int from, int to ) const
 			return false;
 		}
 
-		// a diagonal step passes the two cells beside it, as in the search
+		// a diagonal step cuts no corner past a cell off the mesh or a prop the bot cannot shove, as in the search
 		const int px = previous % m_width;
 		const int py = previous / m_width;
-		if ( px != x && py != y && ( GetState( py * m_width + x ) != CELL_FREE || GetState( y * m_width + px ) != CELL_FREE ) )
+		if ( px != x && py != y && ( IsWalled( py * m_width + x ) || IsWalled( y * m_width + px ) ) )
 		{
 			return false;
 		}
