@@ -1090,10 +1090,11 @@ void CNEOBotPropDetour::Plan( INextBot *bot, const PathFollower &path )
 
 	if ( result == DETOUR_NONE )
 	{
-		// another bot had this tick's wide search: plan again at the next tick
+		// another bot had this tick's wide search: plan again within a replan interval,
+		// at a random tick so blocked bots take turns instead of all planning again at the next one
 		if ( !ClaimWideSearch() )
 		{
-			m_replanTimer.Invalidate();
+			m_replanTimer.Start( RandomFloat( gpGlobals->interval_per_tick, REPLAN_INTERVAL ) );
 			return;
 		}
 
