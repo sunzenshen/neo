@@ -388,6 +388,7 @@ public:
 
 	bool IsOccupied( int cell ) const { return GetState( cell ) == CELL_OCCUPIED; }
 	bool IsPushableCell( int cell ) const { return GetState( cell ) == CELL_PUSHABLE; }
+	bool IsNearFeet( int cell, const Vector &feet ) const;
 
 private:
 	enum CellState
@@ -566,6 +567,15 @@ Vector2D CPropDetourGrid::GetCellCenter( int cell ) const
 	const int x = cell % m_width;
 	const int y = cell / m_width;
 	return Vector2D( m_origin.x + ( x + 0.5f ) * m_cellSize, m_origin.y + ( y + 0.5f ) * m_cellSize );
+}
+
+
+//----------------------------------------------------------------------------------------------------------------
+// The cell's middle is within a hull width of the bot's feet
+bool CPropDetourGrid::IsNearFeet( int cell, const Vector &feet ) const
+{
+	const float hullWidth = m_bot->GetBodyInterface()->GetHullWidth();
+	return ( GetCellCenter( cell ) - feet.AsVector2D() ).IsLengthLessThan( hullWidth );
 }
 
 
@@ -792,7 +802,7 @@ void CPropDetourGrid::Straighten( const CUtlVector< int > &route, CUtlVector< Ve
 
 //----------------------------------------------------------------------------------------------------------------
 // A route from the bot to the rejoin point as waypoints:
-// past the cells the bot starts in, a route through a prop is no way around it
+// past the prop cells by the bot's feet, a route through a prop is no way around it
 static DetourResult FindDetour( const CPropDetourGrid &grid, const Vector &from, const Vector &rejoin, PushableRoute pushableRoute,
 	CUtlVector< Vector > *waypoints )
 {
@@ -802,8 +812,10 @@ static DetourResult FindDetour( const CPropDetourGrid &grid, const Vector &from,
 		return DETOUR_NONE;
 	}
 
+	// the route may start through the prop cells by the bot's feet, so a bot under or against a prop gets out,
+	// but no further: a bot against a wall of props would otherwise route through the whole wall
 	int k = 0;
-	while ( k < route.Count() && grid.IsOccupied( route[ k ] ) )
+	while ( k < route.Count() && grid.IsOccupied( route[ k ] ) && grid.IsNearFeet( route[ k ], from ) )
 	{
 		++k;
 	}
