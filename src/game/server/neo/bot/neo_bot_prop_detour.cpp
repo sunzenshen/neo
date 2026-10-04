@@ -1229,6 +1229,12 @@ bool CNEOBotPropDetour::Replan( INextBot *bot )
 // After a search that found a detour: note where the bot sets out from, and whether the props in the region rest
 void CNEOBotPropDetour::NoteSearch( const Vector &feet )
 {
+	// only a wide detour's replans are skipped while its props rest
+	if ( !m_isWide )
+	{
+		return;
+	}
+
 	m_legStart = feet;
 	m_restingPropCount = CountRestingProps( Vector( m_regionLo.x, m_regionLo.y, m_floorLo ), Vector( m_regionHi.x, m_regionHi.y, m_floorHi ) );
 	m_searchAgeTimer.Start( AT_REST_REPLAN_INTERVAL );
