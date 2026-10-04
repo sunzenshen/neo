@@ -11,68 +11,71 @@
 // memdbgon must be the last include file in a .cpp file!!!
 #include "tier0/memdbgon.h"
 
+namespace
+{
 // How often the path ahead is checked, so a prop that is pushed or animates is followed
-static const float REPLAN_INTERVAL = 0.25f;
-// While every prop in a detour's region rests where the last search saw it, the detour is searched again only this often:
+constexpr float PROP_DETOUR_REPLAN_INTERVAL = 0.25f;
+// While every prop in a wide detour's region rests where the last search saw it, the detour is searched again only this often:
 // the bot may since have come to see props that were out of its sight
-static const float AT_REST_REPLAN_INTERVAL = 1.0f;
-// A bot this far off the straight line to its next waypoint has left the route the search checked
-static const float OFF_ROUTE_RANGE = 16.0f;
+constexpr float PROP_DETOUR_AT_REST_REPLAN_INTERVAL = 1.0f;
 // What a count of the props resting in a region says when one of them is awake
-static const int PROPS_MOVING = -1;
+constexpr int PROP_DETOUR_PROPS_MOVING = -1;
+
+// A waypoint this close is reached,
+constexpr float PROP_DETOUR_WAYPOINT_REACHED_RANGE = 12.0f;
+// and a bot this far off the straight line to its next waypoint has left the route the search checked
+constexpr float PROP_DETOUR_OFF_ROUTE_RANGE = 16.0f;
 
 // How far along the path props are looked for, and how much further the detour may rejoin it
-static const float LOOK_AHEAD_RANGE = 256.0f;
-static const float REJOIN_EXTRA_RANGE = 128.0f;
+constexpr float PROP_DETOUR_LOOK_AHEAD_RANGE = 256.0f;
+constexpr float PROP_DETOUR_REJOIN_EXTRA_RANGE = 128.0f;
 
 // The detour rejoins the path this far past the last prop in the way
-static const float REJOIN_PAST_PROP = 32.0f;
+constexpr float PROP_DETOUR_REJOIN_PAST_PROP = 32.0f;
 
 // Floor around the path and the props that a detour may use
-static const float GRID_MARGIN = 48.0f;
-static const float GRID_CELL_SIZE = 16.0f;
-static const int GRID_MAX_CELLS_PER_SIDE = 96;
+constexpr float PROP_DETOUR_GRID_MARGIN = 48.0f;
+constexpr float PROP_DETOUR_GRID_CELL_SIZE = 16.0f;
+constexpr int PROP_DETOUR_GRID_MAX_CELLS_PER_SIDE = 96;
 
 // With no way around near the path, as past a row of props that runs on beyond the ones the path crosses,
 // the search region grows over the props it touches, as far as cells of the finest size reach,
-static const float WIDE_SEARCH_MAX_SIZE = GRID_MAX_CELLS_PER_SIDE * GRID_CELL_SIZE;
+constexpr float PROP_DETOUR_WIDE_SEARCH_MAX_SIZE = PROP_DETOUR_GRID_MAX_CELLS_PER_SIDE * PROP_DETOUR_GRID_CELL_SIZE;
 // and when even that finds no way around, the bot looks again after this long, not at every replan
-static const float WIDE_SEARCH_RETRY_INTERVAL = 1.0f;
+constexpr float PROP_DETOUR_WIDE_SEARCH_RETRY_INTERVAL = 1.0f;
 
 // A detour stays on floor this close in height to the bot's feet or to where it rejoins the path
-static const float FLOOR_HEIGHT_TOLERANCE = 40.0f;
+constexpr float PROP_DETOUR_FLOOR_HEIGHT_TOLERANCE = 40.0f;
 
 // Stepping through a cell a prop occupies costs as much as this many free cells:
 // the search crosses a prop only to get out from under one, and a route that has to cross one is no detour
-static const float OCCUPIED_CELL_COST = 1000.0f;
-static const float FREE_CELL_COST = 1.0f;
+constexpr float PROP_DETOUR_OCCUPIED_CELL_COST = 1000.0f;
+constexpr float PROP_DETOUR_FREE_CELL_COST = 1.0f;
 
 // A prop this light that physics moves is shoved out of the way, as a player does:
 // its cells cost this many free cells, so a bot walks around one chair where there is room,
-static const float PUSHABLE_PROP_MAX_MASS = 200.0f;
-static const float PUSHABLE_CELL_COST = 4.0f;
+constexpr float PROP_DETOUR_PUSHABLE_PROP_MAX_MASS = 200.0f;
+constexpr float PROP_DETOUR_PUSHABLE_CELL_COST = 4.0f;
 // and when every prop in the way on the path is that light, a route through them past its first few cells is no detour:
 // the bot keeps its path, shoves through or climbs over them as a player does, and looks again after this long
-static const int ROUTE_START_CELLS = 3;
-static const float PUSH_THROUGH_RETRY_INTERVAL = 1.0f;
-
-static const float WAYPOINT_REACHED_RANGE = 12.0f;
+constexpr int PROP_DETOUR_ROUTE_START_CELLS = 3;
+constexpr float PROP_DETOUR_PUSH_THROUGH_RETRY_INTERVAL = 1.0f;
 
 // A moving prop is kept clear of where it will be within this time, at its current velocity
-static const float MOTION_PREDICT_TIME = 1.0f;
-static const float MOVING_PROP_MIN_SPEED = 10.0f;
+constexpr float PROP_DETOUR_MOTION_PREDICT_TIME = 1.0f;
+constexpr float PROP_DETOUR_MOVING_PROP_MIN_SPEED = 10.0f;
 
 // Props are looked for up to this high above the path, so one coming down is seen in time
-static const float PROP_QUERY_HEADROOM = 512.0f;
+constexpr float PROP_DETOUR_PROP_QUERY_HEADROOM = 512.0f;
 
 // A prop smaller than this in every direction (a can, a bottle) is pushed aside, not walked around
-static const Vector SMALL_PROP_SIZE( 16.0f, 16.0f, 40.0f );
+const Vector PROP_DETOUR_SMALL_PROP_SIZE( 16.0f, 16.0f, 40.0f );
 
-static const float DIAGONAL_STEP_LENGTH = 1.41421356f;
+constexpr float PROP_DETOUR_DIAGONAL_STEP_LENGTH = 1.41421356f;
 
 // The body box is this much narrower than the hull, so a prop the bot only brushes is not in its way
-static const float BODY_CLEARANCE = 1.0f;
-
+constexpr float PROP_DETOUR_BODY_CLEARANCE = 1.0f;
+}
 
 //----------------------------------------------------------------------------------------------------------------
 namespace
@@ -80,7 +83,7 @@ namespace
 	struct PropObstacle_t
 	{
 		CBaseEntity *entity;
-		Vector sweep;			// how far it moves within MOTION_PREDICT_TIME
+		Vector sweep;			// how far it moves within PROP_DETOUR_MOTION_PREDICT_TIME
 		Vector2D lo, hi;		// footprint over that time, grown by a hull half-width
 		bool isPushable;		// light enough to shove aside
 	};
@@ -205,7 +208,7 @@ static Vector GetPropVelocity( CBaseEntity *entity )
 
 	Vector velocity;
 	physics->GetVelocity( &velocity, NULL );
-	return velocity.IsLengthGreaterThan( MOVING_PROP_MIN_SPEED ) ? velocity : vec3_origin;
+	return velocity.IsLengthGreaterThan( PROP_DETOUR_MOVING_PROP_MIN_SPEED ) ? velocity : vec3_origin;
 }
 
 
@@ -215,7 +218,7 @@ static Vector GetPropVelocity( CBaseEntity *entity )
 static bool IsPushable( CBaseEntity *entity )
 {
 	IPhysicsObject *physics = entity->VPhysicsGetObject();
-	return physics && physics->IsMoveable() && physics->GetMass() <= PUSHABLE_PROP_MAX_MASS
+	return physics && physics->IsMoveable() && physics->GetMass() <= PROP_DETOUR_PUSHABLE_PROP_MAX_MASS
 		&& !physics->IsAttachedToConstraint( false ) && !FClassnameIs( entity, "phys_bone_follower" );
 }
 
@@ -234,7 +237,7 @@ static bool IsInSight( INextBot *bot, CBaseEntity *entity )
 //----------------------------------------------------------------------------------------------------------------
 static BodyBox_t GetBodyBox( INextBot *bot )
 {
-	const float halfWidth = 0.5f * bot->GetBodyInterface()->GetHullWidth() - BODY_CLEARANCE;
+	const float halfWidth = 0.5f * bot->GetBodyInterface()->GetHullWidth() - PROP_DETOUR_BODY_CLEARANCE;
 
 	BodyBox_t box;
 	box.mins.Init( -halfWidth, -halfWidth, bot->GetLocomotionInterface()->GetStepHeight() );
@@ -329,8 +332,8 @@ static Vector GetPointAlong( const CUtlVector< Vector > &line, float distance, i
 // Every movable prop solid to players around the floor in the box, from below it up to the headroom above it
 static void FindMovableProps( const Vector &floorLo, const Vector &floorHi, CUtlVector< CBaseEntity * > *props )
 {
-	const Vector queryLo = floorLo - Vector( GRID_MARGIN, GRID_MARGIN, FLOOR_HEIGHT_TOLERANCE );
-	const Vector queryHi = floorHi + Vector( GRID_MARGIN, GRID_MARGIN, PROP_QUERY_HEADROOM );
+	const Vector queryLo = floorLo - Vector( PROP_DETOUR_GRID_MARGIN, PROP_DETOUR_GRID_MARGIN, PROP_DETOUR_FLOOR_HEIGHT_TOLERANCE );
+	const Vector queryHi = floorHi + Vector( PROP_DETOUR_GRID_MARGIN, PROP_DETOUR_GRID_MARGIN, PROP_DETOUR_PROP_QUERY_HEADROOM );
 
 	CMovablePropEnum propEnum( props );
 	partition->EnumerateElementsInBox( PARTITION_ENGINE_NON_STATIC_EDICTS, queryLo, queryHi, false, &propEnum );
@@ -353,12 +356,12 @@ static void CollectProps( INextBot *bot, const Vector &floorLo, const Vector &fl
 		entity->CollisionProp()->WorldSpaceAABB( &propLo, &propHi );
 
 		const Vector size = propHi - propLo;
-		if ( size.x < SMALL_PROP_SIZE.x && size.y < SMALL_PROP_SIZE.y && size.z < SMALL_PROP_SIZE.z )
+		if ( size.x < PROP_DETOUR_SMALL_PROP_SIZE.x && size.y < PROP_DETOUR_SMALL_PROP_SIZE.y && size.z < PROP_DETOUR_SMALL_PROP_SIZE.z )
 		{
 			continue;
 		}
 
-		const Vector sweep = GetPropVelocity( entity ) * MOTION_PREDICT_TIME;
+		const Vector sweep = GetPropVelocity( entity ) * PROP_DETOUR_MOTION_PREDICT_TIME;
 		Vector sweptLo = propLo;
 		Vector sweptHi = propHi;
 		VectorMin( sweptLo, propLo + sweep, sweptLo );
@@ -387,7 +390,7 @@ static void CollectProps( INextBot *bot, const Vector &floorLo, const Vector &fl
 
 
 //----------------------------------------------------------------------------------------------------------------
-// How many movable props stand around the floor in the box, or PROPS_MOVING if any of them is awake:
+// How many movable props stand around the floor in the box, or PROP_DETOUR_PROPS_MOVING if any of them is awake:
 // physics puts a prop to sleep once it comes to rest, and wakes it when it is touched or moved
 static int CountRestingProps( const Vector &floorLo, const Vector &floorHi )
 {
@@ -398,7 +401,7 @@ static int CountRestingProps( const Vector &floorLo, const Vector &floorHi )
 		IPhysicsObject *physics = props[ i ]->VPhysicsGetObject();
 		if ( physics && !physics->IsAsleep() )
 		{
-			return PROPS_MOVING;
+			return PROP_DETOUR_PROPS_MOVING;
 		}
 	}
 
@@ -475,8 +478,8 @@ CPropDetourGrid::CPropDetourGrid( INextBot *bot, const Vector2D &lo, const Vecto
 	m_origin = lo;
 
 	// coarser cells for a big region, so the search stays cheap
-	m_cellSize = GRID_CELL_SIZE;
-	while ( ( hi.x - lo.x ) / m_cellSize > GRID_MAX_CELLS_PER_SIDE || ( hi.y - lo.y ) / m_cellSize > GRID_MAX_CELLS_PER_SIDE )
+	m_cellSize = PROP_DETOUR_GRID_CELL_SIZE;
+	while ( ( hi.x - lo.x ) / m_cellSize > PROP_DETOUR_GRID_MAX_CELLS_PER_SIDE || ( hi.y - lo.y ) / m_cellSize > PROP_DETOUR_GRID_MAX_CELLS_PER_SIDE )
 	{
 		m_cellSize *= 1.5f;
 	}
@@ -494,8 +497,8 @@ CPropDetourGrid::CPropDetourGrid( INextBot *bot, const Vector2D &lo, const Vecto
 	}
 
 	m_team = bot->GetEntity()->GetTeamNumber();
-	m_floorTop = floorHi + FLOOR_HEIGHT_TOLERANCE;
-	m_floorRange = m_floorTop - ( floorLo - FLOOR_HEIGHT_TOLERANCE );
+	m_floorTop = floorHi + PROP_DETOUR_FLOOR_HEIGHT_TOLERANCE;
+	m_floorRange = m_floorTop - ( floorLo - PROP_DETOUR_FLOOR_HEIGHT_TOLERANCE );
 }
 
 
@@ -533,11 +536,11 @@ float CPropDetourGrid::GetStepCost( int cell ) const
 	switch ( GetState( cell ) )
 	{
 	case CELL_OCCUPIED:
-		return OCCUPIED_CELL_COST;
+		return PROP_DETOUR_OCCUPIED_CELL_COST;
 	case CELL_PUSHABLE:
-		return PUSHABLE_CELL_COST;
+		return PROP_DETOUR_PUSHABLE_CELL_COST;
 	default:
-		return FREE_CELL_COST;
+		return PROP_DETOUR_FREE_CELL_COST;
 	}
 }
 
@@ -754,7 +757,7 @@ bool CPropDetourGrid::FindRoute( const Vector &from, const Vector &to, CUtlVecto
 					continue;
 				}
 
-				const float stepLength = isDiagonal ? DIAGONAL_STEP_LENGTH : 1.0f;
+				const float stepLength = isDiagonal ? PROP_DETOUR_DIAGONAL_STEP_LENGTH : 1.0f;
 				const float stepCost = stepLength * GetStepCost( next );
 				const float cost = costSoFar[ cell ] + stepCost;
 				if ( cost >= costSoFar[ next ] )
@@ -873,7 +876,7 @@ static DetourResult FindDetour( const CPropDetourGrid &grid, const Vector &from,
 	if ( pushableRoute == PUSHABLE_ROUTE_IS_NO_DETOUR )
 	{
 		int start = 0;
-		while ( start < route.Count() && start < ROUTE_START_CELLS && ( grid.IsOccupied( route[ start ] ) || grid.IsPushableCell( route[ start ] ) ) )
+		while ( start < route.Count() && start < PROP_DETOUR_ROUTE_START_CELLS && ( grid.IsOccupied( route[ start ] ) || grid.IsPushableCell( route[ start ] ) ) )
 		{
 			++start;
 		}
@@ -897,7 +900,7 @@ static DetourResult FindDetour( const CPropDetourGrid &grid, const Vector &from,
 // as long as the region stays within the wide search's size
 static void GrowOverProps( const CUtlVector< PropObstacle_t > &obstacles, Vector2D *regionLo, Vector2D *regionHi )
 {
-	const Vector2D margin( GRID_MARGIN, GRID_MARGIN );
+	const Vector2D margin( PROP_DETOUR_GRID_MARGIN, PROP_DETOUR_GRID_MARGIN );
 	for ( ;; )
 	{
 		// the prop that grows the region least goes in first,
@@ -918,7 +921,7 @@ static void GrowOverProps( const CUtlVector< PropObstacle_t > &obstacles, Vector
 			const Vector2D lo = regionLo->Min( obstacle.lo - margin );
 			const Vector2D hi = regionHi->Max( obstacle.hi + margin );
 			const Vector2D size = hi - lo;
-			if ( ( lo == *regionLo && hi == *regionHi ) || size.x > WIDE_SEARCH_MAX_SIZE || size.y > WIDE_SEARCH_MAX_SIZE )
+			if ( ( lo == *regionLo && hi == *regionHi ) || size.x > PROP_DETOUR_WIDE_SEARCH_MAX_SIZE || size.y > PROP_DETOUR_WIDE_SEARCH_MAX_SIZE )
 			{
 				continue;
 			}
@@ -967,7 +970,7 @@ static bool FindWideDetour( INextBot *bot, float floorLo, float floorHi, const V
 {
 	// the region grows to at most the wide search's size either way from the near one,
 	// so every prop it could reach lies in this box: twice that size less the near region a side, and at least the near region
-	const Vector2D reach( WIDE_SEARCH_MAX_SIZE, WIDE_SEARCH_MAX_SIZE );
+	const Vector2D reach( PROP_DETOUR_WIDE_SEARCH_MAX_SIZE, PROP_DETOUR_WIDE_SEARCH_MAX_SIZE );
 	const Vector2D reachLo = ( *regionHi - reach ).Min( *regionLo );
 	const Vector2D reachHi = ( *regionLo + reach ).Max( *regionHi );
 
@@ -1014,7 +1017,7 @@ void CNEOBotPropDetour::Reset()
 	m_isWide = false;
 	m_isPathPushable = false;
 	m_legStart = vec3_origin;
-	m_restingPropCount = PROPS_MOVING;
+	m_restingPropCount = PROP_DETOUR_PROPS_MOVING;
 	m_searchAgeTimer.Invalidate();
 }
 
@@ -1026,7 +1029,7 @@ void CNEOBotPropDetour::Update( INextBot *bot, const PathFollower &path )
 
 	if ( m_replanTimer.IsElapsed() )
 	{
-		m_replanTimer.Start( REPLAN_INTERVAL );
+		m_replanTimer.Start( PROP_DETOUR_REPLAN_INTERVAL );
 
 		if ( !IsDetouring() )
 		{
@@ -1050,7 +1053,7 @@ void CNEOBotPropDetour::Update( INextBot *bot, const PathFollower &path )
 	}
 
 	const Vector &feet = bot->GetLocomotionInterface()->GetFeet();
-	while ( m_waypoints.Count() && ( m_waypoints[ 0 ].AsVector2D() - feet.AsVector2D() ).IsLengthLessThan( WAYPOINT_REACHED_RANGE ) )
+	while ( m_waypoints.Count() && ( m_waypoints[ 0 ].AsVector2D() - feet.AsVector2D() ).IsLengthLessThan( PROP_DETOUR_WAYPOINT_REACHED_RANGE ) )
 	{
 		m_legStart = m_waypoints[ 0 ];
 		m_waypoints.Remove( 0 );
@@ -1076,7 +1079,7 @@ void CNEOBotPropDetour::Plan( INextBot *bot, const PathFollower &path )
 
 	CUtlVector< Vector > line;
 	CUtlVector< const Path::Segment * > segments;
-	GetPathAhead( path, mover->GetFeet(), LOOK_AHEAD_RANGE + REJOIN_EXTRA_RANGE, &line, &segments );
+	GetPathAhead( path, mover->GetFeet(), PROP_DETOUR_LOOK_AHEAD_RANGE + PROP_DETOUR_REJOIN_EXTRA_RANGE, &line, &segments );
 	if ( line.Count() < 2 )
 	{
 		return;
@@ -1106,15 +1109,15 @@ void CNEOBotPropDetour::Plan( INextBot *bot, const PathFollower &path )
 	FOR_EACH_VEC( obstacles, i )
 	{
 		float legStart = 0.0f;
-		for ( int leg = 0; leg + 1 < line.Count() && legStart < LOOK_AHEAD_RANGE; ++leg )
+		for ( int leg = 0; leg + 1 < line.Count() && legStart < PROP_DETOUR_LOOK_AHEAD_RANGE; ++leg )
 		{
 			const float legLength = ( line[ leg + 1 ] - line[ leg ] ).Length2D();
 			float fraction, enter, exit;
 			if ( BodyMeetsProp( body, line[ leg ], line[ leg + 1 ], obstacles[ i ], &fraction )
-				&& legStart + fraction * legLength < LOOK_AHEAD_RANGE
+				&& legStart + fraction * legLength < PROP_DETOUR_LOOK_AHEAD_RANGE
 				&& SegmentCrossesBox( line[ leg ].AsVector2D(), line[ leg + 1 ].AsVector2D(), obstacles[ i ].lo, obstacles[ i ].hi, &enter, &exit ) )
 			{
-				rejoinDistance = MAX( rejoinDistance, legStart + exit * legLength + REJOIN_PAST_PROP );
+				rejoinDistance = MAX( rejoinDistance, legStart + exit * legLength + PROP_DETOUR_REJOIN_PAST_PROP );
 				isPathPushable = isPathPushable && obstacles[ i ].isPushable;
 				regionLo = regionLo.Min( obstacles[ i ].lo );
 				regionHi = regionHi.Max( obstacles[ i ].hi );
@@ -1143,8 +1146,8 @@ void CNEOBotPropDetour::Plan( INextBot *bot, const PathFollower &path )
 		distance += ( i + 1 < line.Count() ) ? ( line[ i + 1 ] - line[ i ] ).Length2D() : 0.0f;
 	}
 
-	regionLo = regionLo.Min( rejoin.AsVector2D() ) - Vector2D( GRID_MARGIN, GRID_MARGIN );
-	regionHi = regionHi.Max( rejoin.AsVector2D() ) + Vector2D( GRID_MARGIN, GRID_MARGIN );
+	regionLo = regionLo.Min( rejoin.AsVector2D() ) - Vector2D( PROP_DETOUR_GRID_MARGIN, PROP_DETOUR_GRID_MARGIN );
+	regionHi = regionHi.Max( rejoin.AsVector2D() ) + Vector2D( PROP_DETOUR_GRID_MARGIN, PROP_DETOUR_GRID_MARGIN );
 
 	// the region reaches past the props looked for around the path, by the footprints of those it crosses,
 	// so every prop on it is looked for again, as a replan does
@@ -1160,7 +1163,7 @@ void CNEOBotPropDetour::Plan( INextBot *bot, const PathFollower &path )
 	if ( result == DETOUR_THROUGH_PUSHABLE )
 	{
 		// the bot keeps its path through props it can shove, so no wide search for a way around them
-		m_replanTimer.Start( PUSH_THROUGH_RETRY_INTERVAL );
+		m_replanTimer.Start( PROP_DETOUR_PUSH_THROUGH_RETRY_INTERVAL );
 		return;
 	}
 
@@ -1170,14 +1173,14 @@ void CNEOBotPropDetour::Plan( INextBot *bot, const PathFollower &path )
 		// at a random tick so blocked bots take turns instead of all planning again at the next one
 		if ( !ClaimWideSearch() )
 		{
-			m_replanTimer.Start( RandomFloat( gpGlobals->interval_per_tick, REPLAN_INTERVAL ) );
+			m_replanTimer.Start( RandomFloat( gpGlobals->interval_per_tick, PROP_DETOUR_REPLAN_INTERVAL ) );
 			return;
 		}
 
 		if ( !FindWideDetour( bot, floorLo, floorHi, rejoin, pushableRoute, &regionLo, &regionHi, &m_waypoints ) )
 		{
 			// a bot pushing a prop with no way around looks again less often: nothing changes quickly
-			m_replanTimer.Start( WIDE_SEARCH_RETRY_INTERVAL );
+			m_replanTimer.Start( PROP_DETOUR_WIDE_SEARCH_RETRY_INTERVAL );
 			return;
 		}
 
@@ -1210,7 +1213,7 @@ bool CNEOBotPropDetour::Replan( INextBot *bot )
 	}
 
 	const Vector &feet = mover->GetFeet();
-	const Vector2D margin( GRID_MARGIN, GRID_MARGIN );
+	const Vector2D margin( PROP_DETOUR_GRID_MARGIN, PROP_DETOUR_GRID_MARGIN );
 	const Vector2D regionLo = m_regionLo.Min( feet.AsVector2D() - margin );
 	const Vector2D regionHi = m_regionHi.Max( feet.AsVector2D() + margin );
 	const float floorLo = MIN( m_floorLo, feet.z );
@@ -1247,7 +1250,7 @@ void CNEOBotPropDetour::NoteSearch( const Vector &feet )
 
 	m_legStart = feet;
 	m_restingPropCount = CountRestingProps( Vector( m_regionLo.x, m_regionLo.y, m_floorLo ), Vector( m_regionHi.x, m_regionHi.y, m_floorHi ) );
-	m_searchAgeTimer.Start( AT_REST_REPLAN_INTERVAL );
+	m_searchAgeTimer.Start( PROP_DETOUR_AT_REST_REPLAN_INTERVAL );
 }
 
 
@@ -1255,13 +1258,13 @@ void CNEOBotPropDetour::NoteSearch( const Vector &feet )
 // The last search still holds: the props in the region rest where it saw them, and the bot keeps to its route
 bool CNEOBotPropDetour::IsLastSearchValid( INextBot *bot ) const
 {
-	if ( m_restingPropCount == PROPS_MOVING || m_searchAgeTimer.IsElapsed() )
+	if ( m_restingPropCount == PROP_DETOUR_PROPS_MOVING || m_searchAgeTimer.IsElapsed() )
 	{
 		return false;
 	}
 
 	const Vector &feet = bot->GetLocomotionInterface()->GetFeet();
-	if ( CalcDistanceToLineSegment2D( feet.AsVector2D(), m_legStart.AsVector2D(), m_waypoints[ 0 ].AsVector2D() ) > OFF_ROUTE_RANGE )
+	if ( CalcDistanceToLineSegment2D( feet.AsVector2D(), m_legStart.AsVector2D(), m_waypoints[ 0 ].AsVector2D() ) > PROP_DETOUR_OFF_ROUTE_RANGE )
 	{
 		return false;
 	}
