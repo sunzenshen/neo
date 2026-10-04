@@ -53,6 +53,18 @@ ConVar neo_bot_path_ladder_crossing_cost("neo_bot_path_ladder_crossing_cost", "0
 ConVar neo_bot_path_duck_clearance("neo_bot_path_duck_clearance", "0", FCVAR_CHEAT,
 	"Research: close crouch-area portals too low for this bot's ducked hull (Support, Juggernaut)");
 
+// NEO-HARNESS-TEMP research arm (2026-10-03, patch 121): patch 68 narrowed. A portal closes only when no lane
+// across it holds the hull, tested a step above the floor as the bot moves (notes/phase3/support-crouch.md)
+ConVar neo_bot_path_duck_lane("neo_bot_path_duck_lane", "0", FCVAR_CHEAT,
+	"Research: close portals no lane of this bot's hull fits through. 1 = crouch-area portals, for a ducked hull "
+	"taller than the mesh's crouch height; 2 = also such a bot's standing hull into other areas");
+ConVar neo_bot_path_duck_lane_min("neo_bot_path_duck_lane_min", "1", FCVAR_CHEAT,
+	"Research: clear lanes (4 u apart) a portal needs to stay open under neo_bot_path_duck_lane", true, 1.0f, false, 0.0f);
+ConVar neo_bot_path_duck_lane_level("neo_bot_path_duck_lane_level", "0", FCVAR_CHEAT,
+	"Research: neo_bot_path_duck_lane tests level portals only (rise within a step); climbs and drops stay open");
+ConVar neo_bot_path_duck_lane_log("neo_bot_path_duck_lane_log", "0", FCVAR_CHEAT,
+	"Harness: log NEO_DUCKLANE for each portal neo_bot_path_duck_lane tests");
+
 ConVar neo_bot_path_penalty_exposure_base("neo_bot_path_penalty_exposure_base", "5.0", FCVAR_CHEAT,
 	"General additional penalty per visible area for bots to avoid exposed areas", true, 0.0f, false, 0.0f);
 
@@ -154,6 +166,250 @@ static bool NeoDuckHullFitsPortal( const CNavArea *from, const CNavArea *to, con
 	return bFits;
 }
 
+static constexpr float NEO_LANE_SPACING = 4.0f;		// between lanes across a portal
+static constexpr float NEO_LANE_REACH_LEVEL = 2.0f;	// into each area on a level crossing
+static constexpr float NEO_LANE_INSET = 0.5f;			// lane ends stay this far inside their area
+
+// patch 121: a lane end inside the area, on the floor under the hull's footprint (the nav plane can sit
+// a few units off it)
+static Vector NeoLaneEnd( const CNavArea *area, float x, float y, const Vector &vecMins, const Vector &vecMaxs )
+{
+	const Vector &nw = area->GetCorner( NORTH_WEST );
+	const Vector &se = area->GetCorner( SOUTH_EAST );
+	const float flInsetX = MIN( NEO_LANE_INSET, ( se.x - nw.x ) / 2.0f );
+	const float flInsetY = MIN( NEO_LANE_INSET, ( se.y - nw.y ) / 2.0f );
+	Vector pos( clamp( x, nw.x + flInsetX, se.x - flInsetX ), clamp( y, nw.y + flInsetY, se.y - flInsetY ), 0.0f );
+	pos.z = area->GetZ( pos.x, pos.y );
+
+	CNeoStaticGeometryFilter filter;
+	trace_t tr;
+	UTIL_TraceHull( pos + Vector( 0, 0, StepHeight ), pos - Vector( 0, 0, StepHeight ), Vector( vecMins.x, vecMins.y, 0 ),
+		Vector( vecMaxs.x, vecMaxs.y, 1.0f ), MASK_PLAYERSOLID, &filter, &tr );
+	if ( !tr.startsolid && tr.fraction < 1.0f )
+	{
+		pos.z = tr.endpos.z;
+	}
+
+	return pos;
+}
+
+static bool s_bLaneVerbose = false;	// NEO-HARNESS-TEMP: neo_bot_path_duck_lane_dump with area ids
+
+// patch 121: sweep the hull along the legs with its underside a step above the floor, as CGameMovement
+// steps: lips and slopes under a step do not block it
+static bool NeoLaneClear( const Vector *legs, int nLegs, const Vector &vecMins, const Vector &vecMaxs )
+{
+	const Vector mins( vecMins.x, vecMins.y, StepHeight );
+	const Vector maxs( vecMaxs.x, vecMaxs.y, vecMaxs.z - vecMins.z );
+	CNeoStaticGeometryFilter filter;
+	for ( int i = 0; i + 1 < nLegs; ++i )
+	{
+		trace_t tr;
+		UTIL_TraceHull( legs[i], legs[i + 1], mins, maxs, MASK_PLAYERSOLID, &filter, &tr );
+		if ( tr.startsolid || tr.fraction < 1.0f )
+		{
+			if ( s_bLaneVerbose )
+			{
+				Msg( "NEO_DUCKLANE_LEG leg=%d of=%d from=%.0f,%.0f,%.0f to=%.0f,%.0f,%.0f solid=%d frac=%.2f hit=%s ent=%s\n", i, nLegs - 1,
+					legs[i].x, legs[i].y, legs[i].z, legs[i + 1].x, legs[i + 1].y, legs[i + 1].z, tr.startsolid ? 1 : 0, tr.fraction,
+					tr.surface.name ? tr.surface.name : "-", tr.m_pEnt ? tr.m_pEnt->GetClassname() : "-" );
+			}
+			return false;
+		}
+	}
+
+	return true;
+}
+
+// patch 121: clear lanes, 4 u apart, across the portal from 'from' into 'to', a step deep each side. A climb
+// rises a hull's width back from the edge, then moves over; a drop walks to the edge (legs: feet positions)
+static int NeoCountHullLanes( const CNavArea *from, const CNavArea *to, const Vector &vecMins, const Vector &vecMaxs,
+	int nEnough, int *pLanes )
+{
+	*pLanes = 0;
+	NavDirType dir = NUM_DIRECTIONS;
+	for ( int d = 0; d < NUM_DIRECTIONS; ++d )
+	{
+		if ( from->IsConnected( to, (NavDirType)d ) )
+		{
+			dir = (NavDirType)d;
+			break;
+		}
+	}
+
+	if ( dir == NUM_DIRECTIONS )
+	{
+		return 0;
+	}
+
+	Vector center;
+	float flHalfWidth;
+	from->ComputePortal( to, dir, &center, &flHalfWidth );
+	Vector2D across( 0, 0 );
+	DirectionToVector2D( dir, &across );
+	const Vector2D along( across.y != 0.0f ? 1.0f : 0.0f, across.x != 0.0f ? 1.0f : 0.0f );
+	const float flRise = from->ComputeAdjacentConnectionHeightChange( to );
+	const bool bLevel = fabs( flRise ) <= StepHeight;
+	const float flReach = ( bLevel || flRise < 0.0f ) ? NEO_LANE_REACH_LEVEL : vecMaxs.x + 1.0f;
+	const float flSpan = MAX( 0.0f, flHalfWidth - NEO_LANE_INSET );
+	const int nLanes = 1 + (int)( 2.0f * flSpan / NEO_LANE_SPACING );
+
+	int nClear = 0;
+	for ( int l = 0; l < nLanes && nClear < nEnough; ++l )
+	{
+		const float flOffset = ( nLanes == 1 ) ? 0.0f : -flSpan + 2.0f * flSpan * l / ( nLanes - 1 );
+		const float x = center.x + along.x * flOffset;
+		const float y = center.y + along.y * flOffset;
+		const Vector a = NeoLaneEnd( from, x - across.x * flReach, y - across.y * flReach, vecMins, vecMaxs );
+		Vector legs[4];
+		int nLegs = 0;
+		legs[nLegs++] = a;
+		if ( flRise < -StepHeight )
+		{
+			// a drop needs room only to walk to the edge: the bot falls once its hull leaves the ledge
+			legs[nLegs++] = Vector( x + across.x * flReach, y + across.y * flReach, a.z );
+		}
+		else
+		{
+			const Vector b = NeoLaneEnd( to, x + across.x * flReach, y + across.y * flReach, vecMins, vecMaxs );
+			const float flTop = MAX( a.z, b.z );
+			legs[nLegs++] = Vector( a.x, a.y, flTop );
+			legs[nLegs++] = Vector( b.x, b.y, flTop );
+			legs[nLegs++] = b;
+		}
+
+		*pLanes = l + 1;
+		if ( NeoLaneClear( legs, nLegs, vecMins, vecMaxs ) )
+		{
+			++nClear;
+		}
+	}
+
+	return nClear;
+}
+
+// patch 121: the hull this bot crosses the portal with, when the mesh does not promise room for it: its
+// ducked hull on a crouch portal above HumanCrouchHeight; with mode 2 such a bot's standing hull elsewhere
+static bool NeoUnpromisedHull( CNEOBot *me, const CNavArea *from, const CNavArea *to, Vector *pMins, Vector *pMaxs )
+{
+	const Vector vecDuckMins = VEC_DUCK_HULL_MIN_SCALED( me );
+	const Vector vecDuckMaxs = VEC_DUCK_HULL_MAX_SCALED( me );
+	if ( vecDuckMaxs.z - vecDuckMins.z <= HumanCrouchHeight )
+	{
+		return false;
+	}
+
+	if ( neo_bot_path_duck_lane_level.GetBool() && fabs( from->ComputeAdjacentConnectionHeightChange( to ) ) > StepHeight )
+	{
+		return false;
+	}
+
+	if ( from->HasAttributes( NAV_MESH_CROUCH ) || to->HasAttributes( NAV_MESH_CROUCH ) )
+	{
+		*pMins = vecDuckMins;
+		*pMaxs = vecDuckMaxs;
+		return true;
+	}
+
+	*pMins = VEC_HULL_MIN_SCALED( me );
+	*pMaxs = VEC_HULL_MAX_SCALED( me );
+	return neo_bot_path_duck_lane.GetInt() >= 2 && pMaxs->z - pMins->z <= HumanHeight;
+}
+
+// patch 121: is there a lane across this portal for the hull? Cached for the map: static geometry only
+static bool NeoHullLaneOpen( const CNavArea *from, const CNavArea *to, const Vector &vecMins, const Vector &vecMaxs )
+{
+	static CUtlMap<uint64, bool> s_cache( DefLessFunc( uint64 ) );
+	static string_t s_mapName = NULL_STRING;
+	if ( s_mapName != gpGlobals->mapname )
+	{
+		s_cache.RemoveAll();
+		s_mapName = gpGlobals->mapname;
+	}
+
+	const uint64 key = ( (uint64)from->GetID() << 32 ) | ( (uint64)to->GetID() << 8 ) | ( (int)( vecMaxs.z - vecMins.z ) & 0xFF );
+	const unsigned short idx = s_cache.Find( key );
+	if ( idx != s_cache.InvalidIndex() )
+	{
+		return s_cache[idx];
+	}
+
+	const bool bLog = neo_bot_path_duck_lane_log.GetBool();
+	const int nMin = neo_bot_path_duck_lane_min.GetInt();
+	int nLanes = 0;
+	const int nClear = NeoCountHullLanes( from, to, vecMins, vecMaxs, bLog ? INT_MAX : nMin, &nLanes );
+	const bool bOpen = nClear >= nMin;
+	if ( bLog )
+	{
+		Msg( "NEO_DUCKLANE map=%s from=%u to=%u h=%.0f lanes=%d clear=%d open=%d crouch=%d,%d\n", STRING( gpGlobals->mapname ),
+			from->GetID(), to->GetID(), vecMaxs.z - vecMins.z, nLanes, nClear, bOpen ? 1 : 0,
+			from->HasAttributes( NAV_MESH_CROUCH ) ? 1 : 0, to->HasAttributes( NAV_MESH_CROUCH ) ? 1 : 0 );
+	}
+
+	s_cache.Insert( key, bOpen );
+	return bOpen;
+}
+
+// NEO-HARNESS-TEMP (patch 121): every walk connection the rule would test for a Support (the base hull),
+// with its lane count: crouch portals always, other portals under mode 2. Logged closed ones, or all with 'all'
+CON_COMMAND_F( neo_bot_path_duck_lane_dump, "Harness: log the lanes neo_bot_path_duck_lane finds for a Support. [all]", FCVAR_CHEAT )
+{
+	if ( !UTIL_IsCommandIssuedByServerAdmin() )
+	{
+		return;
+	}
+
+	const bool bAll = args.ArgC() > 1 && !V_stricmp( args.Arg( 1 ), "all" );
+	const unsigned int iFrom = ( args.ArgC() > 2 ) ? atoi( args.Arg( 1 ) ) : 0;
+	const unsigned int iTo = ( args.ArgC() > 2 ) ? atoi( args.Arg( 2 ) ) : 0;
+	const bool bStanding = neo_bot_path_duck_lane.GetInt() >= 2;
+	int nTested[2] = { 0, 0 }, nClosed[2] = { 0, 0 };
+	FOR_EACH_VEC( TheNavAreas, it )
+	{
+		const CNavArea *from = TheNavAreas[it];
+		for ( int d = 0; d < NUM_DIRECTIONS; ++d )
+		{
+			for ( int i = 0; i < from->GetAdjacentCount( (NavDirType)d ); ++i )
+			{
+				const CNavArea *to = from->GetAdjacentArea( (NavDirType)d, i );
+				const bool bCrouch = from->HasAttributes( NAV_MESH_CROUCH ) || to->HasAttributes( NAV_MESH_CROUCH );
+				if ( iFrom && ( from->GetID() != iFrom || to->GetID() != iTo ) )
+				{
+					continue;
+				}
+
+				if ( !bCrouch && !bStanding && !iFrom )
+				{
+					continue;
+				}
+
+				s_bLaneVerbose = iFrom != 0;
+
+				const Vector vecMins = bCrouch ? VEC_DUCK_HULL_MIN : VEC_HULL_MIN;
+				const Vector vecMaxs = bCrouch ? VEC_DUCK_HULL_MAX : VEC_HULL_MAX;
+				int nLanes = 0;
+				const int nMin = neo_bot_path_duck_lane_min.GetInt();
+				const int nClear = NeoCountHullLanes( from, to, vecMins, vecMaxs, ( bAll || bCrouch ) ? INT_MAX : nMin, &nLanes );
+				const bool bOpen = nClear >= nMin;
+				++nTested[bCrouch];
+				nClosed[bCrouch] += bOpen ? 0 : 1;
+				s_bLaneVerbose = false;
+				if ( bAll || !bOpen || iFrom )
+				{
+					const int iPatch68 = bCrouch ? ( NeoDuckHullFitsPortal( from, to, vecMins, vecMaxs ) ? 1 : 0 ) : -1;
+					Msg( "NEO_DUCKLANE map=%s from=%u to=%u h=%.0f lanes=%d clear=%d open=%d crouch=%d,%d rise=%.1f p68=%d\n",
+						STRING( gpGlobals->mapname ), from->GetID(), to->GetID(), vecMaxs.z - vecMins.z, nLanes, nClear,
+						bOpen ? 1 : 0, from->HasAttributes( NAV_MESH_CROUCH ) ? 1 : 0, to->HasAttributes( NAV_MESH_CROUCH ) ? 1 : 0,
+						from->ComputeAdjacentConnectionHeightChange( to ), iPatch68 );
+				}
+			}
+		}
+	}
+
+	Msg( "NEO_DUCKLANE_SUMMARY map=%s crouch_tested=%d crouch_closed=%d other_tested=%d other_closed=%d\n",
+		STRING( gpGlobals->mapname ), nTested[1], nClosed[1], nTested[0], nClosed[0] );
+}
+
 //-------------------------------------------------------------------------------------------------
 float CNEOBotPathCost::operator()(CNavArea* baseArea, CNavArea* fromArea, const CNavLadder* ladder, const CFuncElevator* elevator, float length) const
 {
@@ -182,6 +438,14 @@ float CNEOBotPathCost::operator()(CNavArea* baseArea, CNavArea* fromArea, const 
 		{
 			return -1.0f;
 		}
+	}
+
+	// NEO-HARNESS-TEMP research arm (patch 121): see neo_bot_path_duck_lane
+	Vector vecHullMins, vecHullMaxs;
+	if ( !ladder && neo_bot_path_duck_lane.GetBool() && NeoUnpromisedHull( m_me, fromArea, area, &vecHullMins, &vecHullMaxs )
+		&& !NeoHullLaneOpen( fromArea, area, vecHullMins, vecHullMaxs ) )
+	{
+		return -1.0f;
 	}
 
 	if ( !m_bIgnoreHazards && CNEOBotPathReservations()->IsAreaHazardous(area->GetID(), m_me) )
