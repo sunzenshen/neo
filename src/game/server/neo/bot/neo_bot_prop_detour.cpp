@@ -1043,6 +1043,11 @@ void CNEOBotPropDetour::Plan( INextBot *bot, const PathFollower &path )
 	regionLo = regionLo.Min( rejoin.AsVector2D() ) - Vector2D( GRID_MARGIN, GRID_MARGIN );
 	regionHi = regionHi.Max( rejoin.AsVector2D() ) + Vector2D( GRID_MARGIN, GRID_MARGIN );
 
+	// the region reaches past the props looked for around the path, by the footprints of those it crosses,
+	// so every prop on it is looked for again, as a replan does
+	obstacles.RemoveAll();
+	CollectProps( bot, Vector( regionLo.x, regionLo.y, floorLo ), Vector( regionHi.x, regionHi.y, floorHi ), &obstacles );
+
 	CPropDetourGrid grid( bot, regionLo, regionHi, floorLo, floorHi );
 	grid.MarkProps( obstacles );
 
