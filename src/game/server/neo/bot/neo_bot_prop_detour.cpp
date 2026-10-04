@@ -912,9 +912,16 @@ static bool FindWideDetour( INextBot *bot, const Vector &lineLo, const Vector &l
 		return false;
 	}
 
-	// the region may have grown past the props looked for: every prop on it has to be marked
-	obstacles.RemoveAll();
-	CollectProps( bot, Vector( lo.x, lo.y, floorLo ), Vector( hi.x, hi.y, floorHi ), &obstacles );
+	// the margin props were looked for in, around this box, covers the footprint of every prop that touches it:
+	// a region grown past the box needs every prop on it looked for again
+	const Vector2D lookedLo = lineLo.AsVector2D() - range.AsVector2D();
+	const Vector2D lookedHi = lineHi.AsVector2D() + range.AsVector2D();
+	const bool isInLookedBox = ( lo.x >= lookedLo.x && lo.y >= lookedLo.y && hi.x <= lookedHi.x && hi.y <= lookedHi.y );
+	if ( !isInLookedBox )
+	{
+		obstacles.RemoveAll();
+		CollectProps( bot, Vector( lo.x, lo.y, floorLo ), Vector( hi.x, hi.y, floorHi ), &obstacles );
+	}
 
 	CPropDetourGrid grid( bot, lo, hi, floorLo, floorHi );
 	grid.MarkProps( obstacles );
