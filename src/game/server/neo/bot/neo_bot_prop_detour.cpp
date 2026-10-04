@@ -13,6 +13,11 @@
 
 // How often the path ahead is checked, so a prop that is pushed or animates is followed
 static const float REPLAN_INTERVAL = 0.25f;
+// While every prop in a detour's region rests where the last search saw it, the detour is searched again only this often:
+// the bot may since have come to see props that were out of its sight
+static const float AT_REST_REPLAN_INTERVAL = 1.0f;
+// A bot this far off the straight line to its next waypoint has left the route the search checked
+static const float OFF_ROUTE_RANGE = 16.0f;
 
 // How far along the path props are looked for, and how much further the detour may rejoin it
 static const float LOOK_AHEAD_RANGE = 256.0f;
@@ -319,18 +324,26 @@ static Vector GetPointAlong( const CUtlVector< Vector > &line, float distance, i
 
 
 //----------------------------------------------------------------------------------------------------------------
+// Every movable prop solid to players around the floor in the box, from below it up to the headroom above it
+static void FindMovableProps( const Vector &floorLo, const Vector &floorHi, CUtlVector< CBaseEntity * > *props )
+{
+	const Vector queryLo = floorLo - Vector( GRID_MARGIN, GRID_MARGIN, FLOOR_HEIGHT_TOLERANCE );
+	const Vector queryHi = floorHi + Vector( GRID_MARGIN, GRID_MARGIN, PROP_QUERY_HEADROOM );
+
+	CMovablePropEnum propEnum( props );
+	partition->EnumerateElementsInBox( PARTITION_ENGINE_NON_STATIC_EDICTS, queryLo, queryHi, false, &propEnum );
+}
+
+
+//----------------------------------------------------------------------------------------------------------------
 // Movable props the bot can see that stand, or will soon stand, in its body space over the floor in the box
 static void CollectProps( INextBot *bot, const Vector &floorLo, const Vector &floorHi, CUtlVector< PropObstacle_t > *obstacles )
 {
 	const BodyBox_t body = GetBodyBox( bot );
 	const float halfWidth = 0.5f * bot->GetBodyInterface()->GetHullWidth();
 
-	const Vector queryLo = floorLo - Vector( GRID_MARGIN, GRID_MARGIN, FLOOR_HEIGHT_TOLERANCE );
-	const Vector queryHi = floorHi + Vector( GRID_MARGIN, GRID_MARGIN, PROP_QUERY_HEADROOM );
-
 	CUtlVector< CBaseEntity * > props;
-	CMovablePropEnum propEnum( &props );
-	partition->EnumerateElementsInBox( PARTITION_ENGINE_NON_STATIC_EDICTS, queryLo, queryHi, false, &propEnum );
+	FindMovableProps( floorLo, floorHi, &props );
 	FOR_EACH_VEC( props, i )
 	{
 		CBaseEntity *entity = props[ i ];
@@ -368,6 +381,27 @@ static void CollectProps( INextBot *bot, const Vector &floorLo, const Vector &fl
 		obstacle.hi.Init( sweptHi.x + halfWidth, sweptHi.y + halfWidth );
 		obstacles->AddToTail( obstacle );
 	}
+}
+
+
+//----------------------------------------------------------------------------------------------------------------
+// How many movable props stand around the floor in the box, or PROPS_MOVING if any of them is awake:
+// physics puts a prop to sleep once it comes to rest, and wakes it when it is touched or moved
+static const int PROPS_MOVING = -1;
+static int CountRestingProps( const Vector &floorLo, const Vector &floorHi )
+{
+	CUtlVector< CBaseEntity * > props;
+	FindMovableProps( floorLo, floorHi, &props );
+	FOR_EACH_VEC( props, i )
+	{
+		IPhysicsObject *physics = props[ i ]->VPhysicsGetObject();
+		if ( physics && !physics->IsAsleep() )
+		{
+			return PROPS_MOVING;
+		}
+	}
+
+	return props.Count();
 }
 
 
@@ -969,6 +1003,9 @@ void CNEOBotPropDetour::Reset()
 	m_resumeGoal = NULL;
 	m_isWide = false;
 	m_isPathPushable = false;
+	m_legStart = vec3_origin;
+	m_restingPropCount = PROPS_MOVING;
+	m_searchAgeTimer.Invalidate();
 }
 
 
@@ -984,6 +1021,10 @@ void CNEOBotPropDetour::Update( INextBot *bot, const PathFollower &path )
 		if ( !IsDetouring() )
 		{
 			Plan( bot, path );
+		}
+		else if ( m_isWide && IsLastSearchValid( bot ) )
+		{
+			// nothing in the wide detour's region has moved and the bot keeps to its route: the detour holds
 		}
 		else if ( m_isWide && !ClaimWideSearch() )
 		{
@@ -1001,6 +1042,7 @@ void CNEOBotPropDetour::Update( INextBot *bot, const PathFollower &path )
 	const Vector &feet = bot->GetLocomotionInterface()->GetFeet();
 	while ( m_waypoints.Count() && ( m_waypoints[ 0 ].AsVector2D() - feet.AsVector2D() ).IsLengthLessThan( WAYPOINT_REACHED_RANGE ) )
 	{
+		m_legStart = m_waypoints[ 0 ];
 		m_waypoints.Remove( 0 );
 	}
 
@@ -1142,6 +1184,7 @@ void CNEOBotPropDetour::Plan( INextBot *bot, const PathFollower &path )
 	m_floorHi = floorHi;
 	m_isWide = isWide;
 	m_isPathPushable = isPathPushable;
+	NoteSearch( mover->GetFeet() );
 }
 
 
@@ -1172,5 +1215,40 @@ bool CNEOBotPropDetour::Replan( INextBot *bot )
 	// the same question the plan answered: whether only light props were in the way
 	const PushableRoute pushableRoute = m_isPathPushable ? PUSHABLE_ROUTE_IS_NO_DETOUR : PUSHABLE_ROUTE_IS_DETOUR;
 	m_waypoints.RemoveAll();
-	return FindDetour( grid, feet, m_rejoin, pushableRoute, &m_waypoints ) == DETOUR_FOUND;
+	if ( FindDetour( grid, feet, m_rejoin, pushableRoute, &m_waypoints ) != DETOUR_FOUND )
+	{
+		return false;
+	}
+
+	NoteSearch( feet );
+	return true;
+}
+
+
+//----------------------------------------------------------------------------------------------------------------
+// After a search that found a detour: note where the bot sets out from, and whether the props in the region rest
+void CNEOBotPropDetour::NoteSearch( const Vector &feet )
+{
+	m_legStart = feet;
+	m_restingPropCount = CountRestingProps( Vector( m_regionLo.x, m_regionLo.y, m_floorLo ), Vector( m_regionHi.x, m_regionHi.y, m_floorHi ) );
+	m_searchAgeTimer.Start( AT_REST_REPLAN_INTERVAL );
+}
+
+
+//----------------------------------------------------------------------------------------------------------------
+// The last search still holds: the props in the region rest where it saw them, and the bot keeps to its route
+bool CNEOBotPropDetour::IsLastSearchValid( INextBot *bot ) const
+{
+	if ( m_restingPropCount == PROPS_MOVING || m_searchAgeTimer.IsElapsed() )
+	{
+		return false;
+	}
+
+	const Vector &feet = bot->GetLocomotionInterface()->GetFeet();
+	if ( CalcDistanceToLineSegment2D( feet.AsVector2D(), m_legStart.AsVector2D(), m_waypoints[ 0 ].AsVector2D() ) > OFF_ROUTE_RANGE )
+	{
+		return false;
+	}
+
+	return CountRestingProps( Vector( m_regionLo.x, m_regionLo.y, m_floorLo ), Vector( m_regionHi.x, m_regionHi.y, m_floorHi ) ) == m_restingPropCount;
 }
