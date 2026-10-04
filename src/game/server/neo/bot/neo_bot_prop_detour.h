@@ -42,4 +42,5 @@ private:
 	float m_floorLo;
 	float m_floorHi;
 	bool m_isWide;		// found by the wide search, so its replans share the one wide search a tick
+	bool m_isPathPushable;		// every prop in the way on the path was light, so a route through light props is no detour
 };
