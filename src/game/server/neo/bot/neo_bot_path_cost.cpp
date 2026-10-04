@@ -316,22 +316,32 @@ static bool NeoUnpromisedHull( CNEOBot *me, const CNavArea *from, const CNavArea
 	return neo_bot_path_duck_lane.GetInt() >= 2 && pMaxs->z - pMins->z <= HumanHeight;
 }
 
+// patch 130: the lane traces see only the world and static props, so a verdict holds until the level changes
+static CUtlMap<uint64, bool> s_hullLaneVerdicts( DefLessFunc( uint64 ) );
+
+class CNeoHullLaneReset : public CAutoGameSystem
+{
+public:
+	CNeoHullLaneReset() : CAutoGameSystem( "CNeoHullLaneReset" )
+	{
+	}
+
+	virtual void LevelShutdownPostEntity() override
+	{
+		s_hullLaneVerdicts.RemoveAll();
+	}
+};
+
+static CNeoHullLaneReset s_hullLaneReset;
+
 // patch 130: is there a lane across this portal for the hull? Cached for the map: static geometry only
 static bool NeoHullLaneOpen( const CNavArea *from, const CNavArea *to, const Vector &vecMins, const Vector &vecMaxs )
 {
-	static CUtlMap<uint64, bool> s_cache( DefLessFunc( uint64 ) );
-	static string_t s_mapName = NULL_STRING;
-	if ( s_mapName != gpGlobals->mapname )
-	{
-		s_cache.RemoveAll();
-		s_mapName = gpGlobals->mapname;
-	}
-
 	const uint64 key = ( (uint64)from->GetID() << 32 ) | ( (uint64)to->GetID() << 8 ) | ( (int)( vecMaxs.z - vecMins.z ) & 0xFF );
-	const unsigned short idx = s_cache.Find( key );
-	if ( idx != s_cache.InvalidIndex() )
+	const unsigned short idx = s_hullLaneVerdicts.Find( key );
+	if ( idx != s_hullLaneVerdicts.InvalidIndex() )
 	{
-		return s_cache[idx];
+		return s_hullLaneVerdicts[idx];
 	}
 
 	const bool bLog = neo_bot_path_duck_lane_log.GetBool();
@@ -346,7 +356,7 @@ static bool NeoHullLaneOpen( const CNavArea *from, const CNavArea *to, const Vec
 			from->HasAttributes( NAV_MESH_CROUCH ) ? 1 : 0, to->HasAttributes( NAV_MESH_CROUCH ) ? 1 : 0 );
 	}
 
-	s_cache.Insert( key, bOpen );
+	s_hullLaneVerdicts.Insert( key, bOpen );
 	return bOpen;
 }
 
