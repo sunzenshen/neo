@@ -26,12 +26,12 @@ static const float GRID_MARGIN = 48.0f;
 static const float GRID_CELL_SIZE = 16.0f;
 static const int GRID_MAX_CELLS_PER_SIDE = 96;
 
-// With no way round near the path, as past a row of props that runs on beyond the ones the path crosses,
-// props are looked for this much further round the path,
+// With no way around near the path, as past a row of props that runs on beyond the ones the path crosses,
+// props are looked for this much further around the path,
 static const float WIDE_SEARCH_RANGE = 384.0f;
 // and the search region grows over the ones it touches, as far as cells of the finest size reach,
 static const float WIDE_SEARCH_MAX_SIZE = GRID_MAX_CELLS_PER_SIDE * GRID_CELL_SIZE;
-// and when even that finds no way round, the bot looks again after this long, not at every replan
+// and when even that finds no way around, the bot looks again after this long, not at every replan
 static const float WIDE_SEARCH_RETRY_INTERVAL = 1.0f;
 
 // A detour stays on floor this close in height to the bot's feet or to where it rejoins the path
@@ -566,7 +566,7 @@ Vector2D CPropDetourGrid::GetCellCenter( int cell ) const
 // The floor at the middle of the cell
 Vector CPropDetourGrid::GetCellFloor( int cell ) const
 {
-	GetState( cell );
+	GetState( cell );	// looks the floor up with the state, the first time the cell is reached
 	const Vector2D center = GetCellCenter( cell );
 	return Vector( center.x, center.y, m_floor[ cell ] );
 }
@@ -829,7 +829,7 @@ static DetourResult FindDetour( const CPropDetourGrid &grid, const Vector &from,
 
 
 //----------------------------------------------------------------------------------------------------------------
-// Grow the region over every prop it touches, with a margin round each so the way round the prop is in it too,
+// Grow the region over every prop it touches, with a margin around each so the way around the prop is in it too,
 // as long as the region stays within the wide search's size
 static void GrowOverProps( const CUtlVector< PropObstacle_t > &obstacles, Vector2D *regionLo, Vector2D *regionHi )
 {
@@ -894,8 +894,8 @@ static bool ClaimWideSearch()
 
 
 //----------------------------------------------------------------------------------------------------------------
-// With no way round near the path, as past a row or a wall of props that runs on beyond the props the path crosses:
-// look for props further round the path, and search again over a region grown over the props it touches.
+// With no way around near the path, as past a row or a wall of props that runs on beyond the props the path crosses:
+// look for props further around the path, and search again over a region grown over the props it touches.
 // On success the region is the grown one, so a replan searches the same floor
 static bool FindWideDetour( INextBot *bot, const Vector &lineLo, const Vector &lineHi, float floorLo, float floorHi,
 	const Vector &rejoin, Vector2D *regionLo, Vector2D *regionHi, CUtlVector< Vector > *waypoints )
@@ -1104,7 +1104,7 @@ void CNEOBotPropDetour::Plan( INextBot *bot, const PathFollower &path )
 
 		if ( !FindWideDetour( bot, lineLo, lineHi, floorLo, floorHi, rejoin, &regionLo, &regionHi, &m_waypoints ) )
 		{
-			// a bot pushing a prop with no way round looks again less often: nothing changes quickly
+			// a bot pushing a prop with no way around looks again less often: nothing changes quickly
 			m_replanTimer.Start( WIDE_SEARCH_RETRY_INTERVAL );
 			return;
 		}
