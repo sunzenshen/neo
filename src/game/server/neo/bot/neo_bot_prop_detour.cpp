@@ -914,7 +914,9 @@ static bool FindWideDetour( INextBot *bot, const Vector &lineLo, const Vector &l
 {
 	CUtlVector< PropObstacle_t > obstacles;
 	const Vector range( WIDE_SEARCH_RANGE, WIDE_SEARCH_RANGE, 0.0f );
-	CollectProps( bot, lineLo - range, lineHi + range, &obstacles );
+	const Vector lookedLo = lineLo - range;
+	const Vector lookedHi = lineHi + range;
+	CollectProps( bot, lookedLo, lookedHi, &obstacles );
 
 	Vector2D lo = *regionLo;
 	Vector2D hi = *regionHi;
@@ -924,10 +926,8 @@ static bool FindWideDetour( INextBot *bot, const Vector &lineLo, const Vector &l
 		return false;
 	}
 
-	// the margin props were looked for in, around this box, covers the footprint of every prop that touches it:
-	// a region grown past the box needs every prop on it looked for again
-	const Vector2D lookedLo = lineLo.AsVector2D() - range.AsVector2D();
-	const Vector2D lookedHi = lineHi.AsVector2D() + range.AsVector2D();
+	// props were looked for over this box, so a region that stayed within it has every prop that touches it:
+	// one grown past it needs them looked for again
 	const bool isInLookedBox = ( lo.x >= lookedLo.x && lo.y >= lookedLo.y && hi.x <= lookedHi.x && hi.y <= lookedHi.y );
 	if ( !isInLookedBox )
 	{
