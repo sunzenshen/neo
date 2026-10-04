@@ -25,7 +25,6 @@ static const float REJOIN_PAST_PROP = 32.0f;
 static const float GRID_MARGIN = 48.0f;
 static const float GRID_CELL_SIZE = 16.0f;
 static const int GRID_MAX_CELLS_PER_SIDE = 96;
-static const int SEARCH_MAX_EXPANSIONS = GRID_MAX_CELLS_PER_SIDE * GRID_MAX_CELLS_PER_SIDE;
 
 // With no way round near the path, as past a row of props that runs on beyond the ones the path crosses,
 // props are looked for this much further round the path,
@@ -657,8 +656,7 @@ bool CPropDetourGrid::FindRoute( const Vector &from, const Vector &to, CUtlVecto
 	costSoFar[ start ] = 0.0f;
 	open.Insert( { 0.0f, start } );
 
-	int expanded = 0;
-	while ( open.Count() && expanded < SEARCH_MAX_EXPANSIONS )
+	while ( open.Count() )
 	{
 		const int cell = open.ElementAtHead().cell;
 		open.RemoveAtHead();
@@ -668,7 +666,6 @@ bool CPropDetourGrid::FindRoute( const Vector &from, const Vector &to, CUtlVecto
 		}
 
 		isClosed[ cell ] = true;
-		++expanded;
 
 		if ( cell == goal )
 		{
