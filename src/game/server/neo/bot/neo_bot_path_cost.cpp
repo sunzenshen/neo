@@ -53,7 +53,7 @@ ConVar neo_bot_path_ladder_crossing_cost("neo_bot_path_ladder_crossing_cost", "0
 ConVar neo_bot_path_duck_clearance("neo_bot_path_duck_clearance", "0", FCVAR_CHEAT,
 	"Research: close crouch-area portals too low for this bot's ducked hull (Support, Juggernaut)");
 
-// NEO-HARNESS-TEMP research arm (2026-10-03, patch 121): patch 68 narrowed. A portal closes only when no lane
+// NEO-HARNESS-TEMP research arm (2026-10-03, patch 130): patch 68 narrowed. A portal closes only when no lane
 // across it holds the hull, tested a step above the floor as the bot moves (notes/phase3/support-crouch.md)
 ConVar neo_bot_path_duck_lane("neo_bot_path_duck_lane", "0", FCVAR_CHEAT,
 	"Research: close portals no lane of this bot's hull fits through. 1 = crouch-area portals, for a ducked hull "
@@ -170,7 +170,7 @@ static constexpr float NEO_LANE_SPACING = 4.0f;		// between lanes across a porta
 static constexpr float NEO_LANE_REACH_LEVEL = 2.0f;	// into each area on a level crossing
 static constexpr float NEO_LANE_INSET = 0.5f;			// lane ends stay this far inside their area
 
-// patch 121: a lane end inside the area, on the floor under the hull's footprint (the nav plane can sit
+// patch 130: a lane end inside the area, on the floor under the hull's footprint (the nav plane can sit
 // a few units off it)
 static Vector NeoLaneEnd( const CNavArea *area, float x, float y, const Vector &vecMins, const Vector &vecMaxs )
 {
@@ -195,7 +195,7 @@ static Vector NeoLaneEnd( const CNavArea *area, float x, float y, const Vector &
 
 static bool s_bLaneVerbose = false;	// NEO-HARNESS-TEMP: neo_bot_path_duck_lane_dump with area ids
 
-// patch 121: sweep the hull along the legs with its underside a step above the floor, as CGameMovement
+// patch 130: sweep the hull along the legs with its underside a step above the floor, as CGameMovement
 // steps: lips and slopes under a step do not block it
 static bool NeoLaneClear( const Vector *legs, int nLegs, const Vector &vecMins, const Vector &vecMaxs )
 {
@@ -221,7 +221,7 @@ static bool NeoLaneClear( const Vector *legs, int nLegs, const Vector &vecMins, 
 	return true;
 }
 
-// patch 121: clear lanes, 4 u apart, across the portal from 'from' into 'to', a step deep each side. A climb
+// patch 130: clear lanes, 4 u apart, across the portal from 'from' into 'to', a step deep each side. A climb
 // rises a hull's width back from the edge, then moves over; a drop walks to the edge (legs: feet positions)
 static int NeoCountHullLanes( const CNavArea *from, const CNavArea *to, const Vector &vecMins, const Vector &vecMaxs,
 	int nEnough, int *pLanes )
@@ -288,7 +288,7 @@ static int NeoCountHullLanes( const CNavArea *from, const CNavArea *to, const Ve
 	return nClear;
 }
 
-// patch 121: the hull this bot crosses the portal with, when the mesh does not promise room for it: its
+// patch 130: the hull this bot crosses the portal with, when the mesh does not promise room for it: its
 // ducked hull on a crouch portal above HumanCrouchHeight; with mode 2 such a bot's standing hull elsewhere
 static bool NeoUnpromisedHull( CNEOBot *me, const CNavArea *from, const CNavArea *to, Vector *pMins, Vector *pMaxs )
 {
@@ -316,7 +316,7 @@ static bool NeoUnpromisedHull( CNEOBot *me, const CNavArea *from, const CNavArea
 	return neo_bot_path_duck_lane.GetInt() >= 2 && pMaxs->z - pMins->z <= HumanHeight;
 }
 
-// patch 121: is there a lane across this portal for the hull? Cached for the map: static geometry only
+// patch 130: is there a lane across this portal for the hull? Cached for the map: static geometry only
 static bool NeoHullLaneOpen( const CNavArea *from, const CNavArea *to, const Vector &vecMins, const Vector &vecMaxs )
 {
 	static CUtlMap<uint64, bool> s_cache( DefLessFunc( uint64 ) );
@@ -350,7 +350,7 @@ static bool NeoHullLaneOpen( const CNavArea *from, const CNavArea *to, const Vec
 	return bOpen;
 }
 
-// NEO-HARNESS-TEMP (patch 121): every walk connection the rule would test for a Support (the base hull),
+// NEO-HARNESS-TEMP (patch 130): every walk connection the rule would test for a Support (the base hull),
 // with its lane count: crouch portals always, other portals under mode 2. Logged closed ones, or all with 'all'
 CON_COMMAND_F( neo_bot_path_duck_lane_dump, "Harness: log the lanes neo_bot_path_duck_lane finds for a Support. [all]", FCVAR_CHEAT )
 {
@@ -440,7 +440,7 @@ float CNEOBotPathCost::operator()(CNavArea* baseArea, CNavArea* fromArea, const 
 		}
 	}
 
-	// NEO-HARNESS-TEMP research arm (patch 121): see neo_bot_path_duck_lane
+	// NEO-HARNESS-TEMP research arm (patch 130): see neo_bot_path_duck_lane
 	Vector vecHullMins, vecHullMaxs;
 	if ( !ladder && neo_bot_path_duck_lane.GetBool() && NeoUnpromisedHull( m_me, fromArea, area, &vecHullMins, &vecHullMaxs )
 		&& !NeoHullLaneOpen( fromArea, area, vecHullMins, vecHullMaxs ) )
