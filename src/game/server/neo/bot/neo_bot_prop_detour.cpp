@@ -44,9 +44,13 @@ static const float OCCUPIED_CELL_COST = 1000.0f;
 static const float FREE_CELL_COST = 1.0f;
 
 // A prop this light that physics moves is shoved out of the way, as a player does:
-// its cells cost this many free cells, so a bot walks round one chair but through a crowd of them
+// its cells cost this many free cells, so a bot walks around one chair where there is room,
 static const float PUSHABLE_PROP_MAX_MASS = 200.0f;
 static const float PUSHABLE_CELL_COST = 4.0f;
+// but a route through such props past its first few cells, which the bot may stand in, is no detour:
+// the bot keeps its path, shoves through or climbs over them as a player does, and looks again after this long
+static const int ROUTE_START_CELLS = 3;
+static const float PUSH_THROUGH_RETRY_INTERVAL = 1.0f;
 
 static const float WAYPOINT_REACHED_RANGE = 12.0f;
 
@@ -75,6 +79,14 @@ namespace
 		Vector sweep;			// how far it moves within MOTION_PREDICT_TIME
 		Vector2D lo, hi;		// footprint over that time, grown by a hull half-width
 		bool isPushable;		// light enough to shove aside
+	};
+
+	// What a search for a way past the props found
+	enum DetourResult
+	{
+		DETOUR_FOUND,
+		DETOUR_NONE,				// no way past that keeps clear of the props
+		DETOUR_THROUGH_PUSHABLE,	// the way past is through props the bot can shove aside
 	};
 
 	// The bot's body as a box: from a step over the floor to its standing height
@@ -369,6 +381,7 @@ public:
 	void Straighten( const CUtlVector< int > &route, CUtlVector< Vector > *waypoints ) const;
 
 	bool IsOccupied( int cell ) const { return GetState( cell ) == CELL_OCCUPIED; }
+	bool IsPushableCell( int cell ) const { return GetState( cell ) == CELL_PUSHABLE; }
 
 private:
 	enum CellState
@@ -776,12 +789,12 @@ void CPropDetourGrid::Straighten( const CUtlVector< int > &route, CUtlVector< Ve
 //----------------------------------------------------------------------------------------------------------------
 // A route from the bot to the rejoin point as waypoints:
 // past the cells the bot starts in, a route through a prop is no way around it
-static bool FindDetour( const CPropDetourGrid &grid, const Vector &from, const Vector &rejoin, CUtlVector< Vector > *waypoints )
+static DetourResult FindDetour( const CPropDetourGrid &grid, const Vector &from, const Vector &rejoin, CUtlVector< Vector > *waypoints )
 {
 	CUtlVector< int > route;
 	if ( !grid.FindRoute( from, rejoin, &route ) )
 	{
-		return false;
+		return DETOUR_NONE;
 	}
 
 	int k = 0;
@@ -794,12 +807,27 @@ static bool FindDetour( const CPropDetourGrid &grid, const Vector &from, const V
 	{
 		if ( grid.IsOccupied( route[ k ] ) )
 		{
-			return false;
+			return DETOUR_NONE;
+		}
+	}
+
+	// a long run of light props' cells costs little, so only the route's first cells count as where the bot starts
+	int start = 0;
+	while ( start < route.Count() && start < ROUTE_START_CELLS && ( grid.IsOccupied( route[ start ] ) || grid.IsPushableCell( route[ start ] ) ) )
+	{
+		++start;
+	}
+
+	for ( k = start; k < route.Count(); ++k )
+	{
+		if ( grid.IsPushableCell( route[ k ] ) )
+		{
+			return DETOUR_THROUGH_PUSHABLE;
 		}
 	}
 
 	grid.Straighten( route, waypoints );
-	return waypoints->Count() > 0;
+	return ( waypoints->Count() > 0 ) ? DETOUR_FOUND : DETOUR_NONE;
 }
 
 
@@ -893,7 +921,7 @@ static bool FindWideDetour( INextBot *bot, const Vector &lineLo, const Vector &l
 
 	CPropDetourGrid grid( bot, lo, hi, floorLo, floorHi );
 	grid.MarkProps( obstacles );
-	if ( !FindDetour( grid, bot->GetLocomotionInterface()->GetFeet(), rejoin, waypoints ) )
+	if ( FindDetour( grid, bot->GetLocomotionInterface()->GetFeet(), rejoin, waypoints ) != DETOUR_FOUND )
 	{
 		return false;
 	}
@@ -1052,7 +1080,15 @@ void CNEOBotPropDetour::Plan( INextBot *bot, const PathFollower &path )
 	grid.MarkProps( obstacles );
 
 	bool isWide = false;
-	if ( !FindDetour( grid, mover->GetFeet(), rejoin, &m_waypoints ) )
+	const DetourResult result = FindDetour( grid, mover->GetFeet(), rejoin, &m_waypoints );
+	if ( result == DETOUR_THROUGH_PUSHABLE )
+	{
+		// the bot keeps its path through props it can shove, so no wide search for a way around them
+		m_replanTimer.Start( PUSH_THROUGH_RETRY_INTERVAL );
+		return;
+	}
+
+	if ( result == DETOUR_NONE )
 	{
 		// another bot had this tick's wide search: plan again at the next tick
 		if ( !ClaimWideSearch() )
@@ -1108,5 +1144,5 @@ bool CNEOBotPropDetour::Replan( INextBot *bot )
 	grid.MarkProps( obstacles );
 
 	m_waypoints.RemoveAll();
-	return FindDetour( grid, feet, m_rejoin, &m_waypoints );
+	return FindDetour( grid, feet, m_rejoin, &m_waypoints ) == DETOUR_FOUND;
 }
