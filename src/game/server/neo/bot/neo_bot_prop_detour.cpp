@@ -18,6 +18,8 @@ static const float REPLAN_INTERVAL = 0.25f;
 static const float AT_REST_REPLAN_INTERVAL = 1.0f;
 // A bot this far off the straight line to its next waypoint has left the route the search checked
 static const float OFF_ROUTE_RANGE = 16.0f;
+// What a count of the props resting in a region says when one of them is awake
+static const int PROPS_MOVING = -1;
 
 // How far along the path props are looked for, and how much further the detour may rejoin it
 static const float LOOK_AHEAD_RANGE = 256.0f;
@@ -387,7 +389,6 @@ static void CollectProps( INextBot *bot, const Vector &floorLo, const Vector &fl
 //----------------------------------------------------------------------------------------------------------------
 // How many movable props stand around the floor in the box, or PROPS_MOVING if any of them is awake:
 // physics puts a prop to sleep once it comes to rest, and wakes it when it is touched or moved
-static const int PROPS_MOVING = -1;
 static int CountRestingProps( const Vector &floorLo, const Vector &floorHi )
 {
 	CUtlVector< CBaseEntity * > props;
@@ -956,12 +957,13 @@ static bool ClaimWideSearch()
 static bool FindWideDetour( INextBot *bot, float floorLo, float floorHi, const Vector &rejoin, PushableRoute pushableRoute,
 	Vector2D *regionLo, Vector2D *regionHi, CUtlVector< Vector > *waypoints )
 {
-	// the region grows to at most the wide search's size, so every prop it could reach lies in this box,
-	// which also holds the near region, however wide
+	// the region grows to at most the wide search's size either way from the near one,
+	// so every prop it could reach lies in this box: twice that size less the near region a side, and at least the near region
 	const Vector2D reach( WIDE_SEARCH_MAX_SIZE, WIDE_SEARCH_MAX_SIZE );
 	const Vector2D reachLo = ( *regionHi - reach ).Min( *regionLo );
 	const Vector2D reachHi = ( *regionLo + reach ).Max( *regionHi );
 
+	// every prop in the box within the floor's height band costs a sight trace, before the grown region is known
 	CUtlVector< PropObstacle_t > obstacles;
 	CollectProps( bot, Vector( reachLo.x, reachLo.y, floorLo ), Vector( reachHi.x, reachHi.y, floorHi ), &obstacles );
 
