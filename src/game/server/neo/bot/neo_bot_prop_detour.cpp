@@ -820,6 +820,13 @@ bool CPropDetourGrid::IsLineClear( int from, int to ) const
 // Keep only the cells of the route a straight line cannot skip
 void CPropDetourGrid::Straighten( const CUtlVector< int > &route, CUtlVector< Vector > *waypoints ) const
 {
+	// a route of one cell: the bot stands in the rejoin cell, which is then the one waypoint
+	if ( route.Count() == 1 )
+	{
+		waypoints->AddToTail( GetCellFloor( route[ 0 ] ) );
+		return;
+	}
+
 	int anchor = 0;
 	for ( int k = 1; k < route.Count(); ++k )
 	{
