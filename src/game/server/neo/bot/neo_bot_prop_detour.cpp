@@ -895,7 +895,8 @@ static void GrowOverProps( const CUtlVector< PropObstacle_t > &obstacles, Vector
 	{
 		// the prop that grows the region least goes in first,
 		// so the near end of a long row is in before its far end uses up the size
-		Vector2D bestLo, bestHi;
+		Vector2D bestLo = *regionLo;
+		Vector2D bestHi = *regionHi;
 		float bestArea = FLT_MAX;
 		FOR_EACH_VEC( obstacles, i )
 		{
