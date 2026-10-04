@@ -27,9 +27,7 @@ static const float GRID_CELL_SIZE = 16.0f;
 static const int GRID_MAX_CELLS_PER_SIDE = 96;
 
 // With no way around near the path, as past a row of props that runs on beyond the ones the path crosses,
-// props are looked for this much further around the path,
-static const float WIDE_SEARCH_RANGE = 384.0f;
-// and the search region grows over the ones it touches, as far as cells of the finest size reach,
+// the search region grows over the props it touches, as far as cells of the finest size reach,
 static const float WIDE_SEARCH_MAX_SIZE = GRID_MAX_CELLS_PER_SIDE * GRID_CELL_SIZE;
 // and when even that finds no way around, the bot looks again after this long, not at every replan
 static const float WIDE_SEARCH_RETRY_INTERVAL = 1.0f;
@@ -919,16 +917,19 @@ static bool ClaimWideSearch()
 
 //----------------------------------------------------------------------------------------------------------------
 // With no way around near the path, as past a row or a wall of props that runs on beyond the props the path crosses:
-// look for props further around the path, and search again over a region grown over the props it touches.
+// search again over a region grown over the props it touches, up to the wide search's size.
 // On success the region is the grown one, so a replan searches the same floor
-static bool FindWideDetour( INextBot *bot, const Vector &lineLo, const Vector &lineHi, float floorLo, float floorHi,
-	const Vector &rejoin, PushableRoute pushableRoute, Vector2D *regionLo, Vector2D *regionHi, CUtlVector< Vector > *waypoints )
+static bool FindWideDetour( INextBot *bot, float floorLo, float floorHi, const Vector &rejoin, PushableRoute pushableRoute,
+	Vector2D *regionLo, Vector2D *regionHi, CUtlVector< Vector > *waypoints )
 {
+	// the region grows to at most the wide search's size, so every prop it could reach lies in this box,
+	// which also holds the near region, however wide
+	const Vector2D reach( WIDE_SEARCH_MAX_SIZE, WIDE_SEARCH_MAX_SIZE );
+	const Vector2D reachLo = ( *regionHi - reach ).Min( *regionLo );
+	const Vector2D reachHi = ( *regionLo + reach ).Max( *regionHi );
+
 	CUtlVector< PropObstacle_t > obstacles;
-	const Vector range( WIDE_SEARCH_RANGE, WIDE_SEARCH_RANGE, 0.0f );
-	const Vector lookedLo = lineLo - range;
-	const Vector lookedHi = lineHi + range;
-	CollectProps( bot, lookedLo, lookedHi, &obstacles );
+	CollectProps( bot, Vector( reachLo.x, reachLo.y, floorLo ), Vector( reachHi.x, reachHi.y, floorHi ), &obstacles );
 
 	Vector2D lo = *regionLo;
 	Vector2D hi = *regionHi;
@@ -936,15 +937,6 @@ static bool FindWideDetour( INextBot *bot, const Vector &lineLo, const Vector &l
 	if ( lo == *regionLo && hi == *regionHi )
 	{
 		return false;
-	}
-
-	// props were looked for over this box, so a region that stayed within it has every prop that touches it:
-	// one grown past it needs them looked for again
-	const bool isInLookedBox = ( lo.x >= lookedLo.x && lo.y >= lookedLo.y && hi.x <= lookedHi.x && hi.y <= lookedHi.y );
-	if ( !isInLookedBox )
-	{
-		obstacles.RemoveAll();
-		CollectProps( bot, Vector( lo.x, lo.y, floorLo ), Vector( hi.x, hi.y, floorHi ), &obstacles );
 	}
 
 	CPropDetourGrid grid( bot, lo, hi, floorLo, floorHi );
@@ -1130,7 +1122,7 @@ void CNEOBotPropDetour::Plan( INextBot *bot, const PathFollower &path )
 			return;
 		}
 
-		if ( !FindWideDetour( bot, lineLo, lineHi, floorLo, floorHi, rejoin, pushableRoute, &regionLo, &regionHi, &m_waypoints ) )
+		if ( !FindWideDetour( bot, floorLo, floorHi, rejoin, pushableRoute, &regionLo, &regionHi, &m_waypoints ) )
 		{
 			// a bot pushing a prop with no way around looks again less often: nothing changes quickly
 			m_replanTimer.Start( WIDE_SEARCH_RETRY_INTERVAL );
