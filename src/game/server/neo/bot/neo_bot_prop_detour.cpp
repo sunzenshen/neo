@@ -410,9 +410,8 @@ static int CountRestingProps( const Vector &floorLo, const Vector &floorHi )
 
 
 //----------------------------------------------------------------------------------------------------------------
-// Cells over the nav mesh around the path ahead, each off the mesh, free, or occupied by a prop:
-// a search over them finds the way past the props that stays on the mesh.
-// A cell's nav area is looked up only when the search or a prop first reaches it
+// Cells over the nav mesh around the path ahead, each off the mesh, free, or occupied by a prop, searched for a way past the props;
+// a cell's nav area is looked up only when the search or a prop first reaches it
 class CPropDetourGrid
 {
 public:
@@ -896,6 +895,20 @@ static DetourResult FindDetour( const CPropDetourGrid &grid, const Vector &from,
 
 
 //----------------------------------------------------------------------------------------------------------------
+// Search the region for a way from the bot's feet to the rejoin point, around every prop on it
+static DetourResult SearchRegion( INextBot *bot, const Vector2D &lo, const Vector2D &hi, float floorLo, float floorHi,
+	const Vector &rejoin, PushableRoute pushableRoute, CUtlVector< Vector > *waypoints )
+{
+	CUtlVector< PropObstacle_t > obstacles;
+	CollectProps( bot, Vector( lo.x, lo.y, floorLo ), Vector( hi.x, hi.y, floorHi ), &obstacles );
+
+	CPropDetourGrid grid( bot, lo, hi, floorLo, floorHi );
+	grid.MarkProps( obstacles );
+	return FindDetour( grid, bot->GetLocomotionInterface()->GetFeet(), rejoin, pushableRoute, waypoints );
+}
+
+
+//----------------------------------------------------------------------------------------------------------------
 // Grow the region over every prop it touches, with a margin around each so the way around the prop is in it too,
 // as long as the region stays within the wide search's size
 static void GrowOverProps( const CUtlVector< PropObstacle_t > &obstacles, Vector2D *regionLo, Vector2D *regionHi )
@@ -962,9 +975,8 @@ static bool ClaimWideSearch()
 
 
 //----------------------------------------------------------------------------------------------------------------
-// With no way around near the path, as past a row or a wall of props that runs on beyond the props the path crosses:
-// search again over a region grown over the props it touches, up to the wide search's size.
-// On success the region is the grown one, so a replan searches the same floor
+// With no way around near the path, as past a wall of props that runs on beyond the ones the path crosses,
+// search again over a region grown over the props it touches, and on success hand back that region for the replans
 static bool FindWideDetour( INextBot *bot, float floorLo, float floorHi, const Vector &rejoin, PushableRoute pushableRoute,
 	Vector2D *regionLo, Vector2D *regionHi, CUtlVector< Vector > *waypoints )
 {
@@ -1150,16 +1162,10 @@ void CNEOBotPropDetour::Plan( INextBot *bot, const PathFollower &path )
 	regionHi = regionHi.Max( rejoin.AsVector2D() ) + Vector2D( PROP_DETOUR_GRID_MARGIN, PROP_DETOUR_GRID_MARGIN );
 
 	// the region reaches past the props looked for around the path, by the footprints of those it crosses,
-	// so every prop on it is looked for again, as a replan does
-	obstacles.RemoveAll();
-	CollectProps( bot, Vector( regionLo.x, regionLo.y, floorLo ), Vector( regionHi.x, regionHi.y, floorHi ), &obstacles );
-
-	CPropDetourGrid grid( bot, regionLo, regionHi, floorLo, floorHi );
-	grid.MarkProps( obstacles );
-
+	// so the search looks for every prop on it again, as a replan does
 	bool isWide = false;
 	const PushableRoute pushableRoute = isPathPushable ? PUSHABLE_ROUTE_IS_NO_DETOUR : PUSHABLE_ROUTE_IS_DETOUR;
-	const DetourResult result = FindDetour( grid, mover->GetFeet(), rejoin, pushableRoute, &m_waypoints );
+	const DetourResult result = SearchRegion( bot, regionLo, regionHi, floorLo, floorHi, rejoin, pushableRoute, &m_waypoints );
 	if ( result == DETOUR_THROUGH_PUSHABLE )
 	{
 		// the bot keeps its path through props it can shove, so no wide search for a way around them
@@ -1219,16 +1225,10 @@ bool CNEOBotPropDetour::Replan( INextBot *bot )
 	const float floorLo = MIN( m_floorLo, feet.z );
 	const float floorHi = MAX( m_floorHi, feet.z );
 
-	CUtlVector< PropObstacle_t > obstacles;
-	CollectProps( bot, Vector( regionLo.x, regionLo.y, floorLo ), Vector( regionHi.x, regionHi.y, floorHi ), &obstacles );
-
-	CPropDetourGrid grid( bot, regionLo, regionHi, floorLo, floorHi );
-	grid.MarkProps( obstacles );
-
 	// the same question the plan answered: whether only light props were in the way
 	const PushableRoute pushableRoute = m_isPathPushable ? PUSHABLE_ROUTE_IS_NO_DETOUR : PUSHABLE_ROUTE_IS_DETOUR;
 	m_waypoints.RemoveAll();
-	if ( FindDetour( grid, feet, m_rejoin, pushableRoute, &m_waypoints ) != DETOUR_FOUND )
+	if ( SearchRegion( bot, regionLo, regionHi, floorLo, floorHi, m_rejoin, pushableRoute, &m_waypoints ) != DETOUR_FOUND )
 	{
 		return false;
 	}
