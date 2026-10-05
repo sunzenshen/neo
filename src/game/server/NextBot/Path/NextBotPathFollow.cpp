@@ -366,6 +366,65 @@ bool PathFollower::RecheckGoal( INextBot *bot )
 }
 #endif
 
+#ifdef NEO
+// NEO-HARNESS-TEMP research arm (2026-10-04, patch 133): a bot that lands on a ledge part way down a planned drop
+// walks on off it, instead of re-pathing to the same drop every tick (ghost's vent rim, notes/atlas-1004)
+ConVar neo_bot_path_drop_land_fix( "neo_bot_path_drop_land_fix", "0", FCVAR_CHEAT,
+	"Research: 1 = a bot stopped part way down a drop steers on over the landing, and fell-off re-paths that leave it in place stop resetting the stuck monitor; 2 = the steer only" );
+
+// A bot part way down a drop stands within this range of the drop's column (the top and the landing share x and y)
+static const float NEO_DROP_COLUMN_RANGE = 50.0f;
+// Fell-off re-paths this many times in a row,
+static const int NEO_FELLOFF_REPEATS = 3;
+// each within this long of the last,
+static const float NEO_FELLOFF_REPEAT_TIME = 2.0f;
+// with the feet moved less than this, are a loop the stuck monitor has to see
+static const float NEO_FELLOFF_REPEAT_RANGE = 8.0f;
+
+// The goal is a drop's top more than a jump above us and the landing is below us: we stopped on a ledge part way down.
+// The stock check tests the landing from the feet on a diagonal that hits the ledge's rim, so test it level instead.
+bool PathFollower::IsPartWayDownDrop( INextBot *bot ) const
+{
+	const Segment *landing = NextSegment( m_goal );
+	if ( !neo_bot_path_drop_land_fix.GetBool() || m_goal->type != DROP_DOWN || !landing )
+	{
+		return false;
+	}
+
+	ILocomotion *mover = bot->GetLocomotionInterface();
+	const Vector &feet = mover->GetFeet();
+	if ( !mover->IsOnGround() || feet.z < landing->pos.z + mover->GetStepHeight() )
+	{
+		return false;
+	}
+
+	if ( !( landing->pos - feet ).AsVector2D().IsLengthLessThan( NEO_DROP_COLUMN_RANGE ) )
+	{
+		return false;
+	}
+
+	const Vector landingLevel( landing->pos.x, landing->pos.y, feet.z );
+	return mover->IsPotentiallyTraversable( feet, landingLevel );
+}
+
+// Return true when this fell-off re-path is one of a run that left the bot where it was
+bool PathFollower::IsFellOffLoop( INextBot *bot )
+{
+	const Vector &feet = bot->GetLocomotionInterface()->GetFeet();
+	const bool isRepeat = ( feet - m_fellOffFeet ).IsLengthLessThan( NEO_FELLOFF_REPEAT_RANGE ) &&
+		gpGlobals->curtime - m_fellOffTime < NEO_FELLOFF_REPEAT_TIME;
+
+	m_fellOffCount = isRepeat ? m_fellOffCount + 1 : 1;
+	m_fellOffTime = gpGlobals->curtime;
+	if ( !isRepeat )
+	{
+		m_fellOffFeet = feet;
+	}
+
+	return neo_bot_path_drop_land_fix.GetInt() == 1 && m_fellOffCount >= NEO_FELLOFF_REPEATS;
+}
+#endif
+
 
 //--------------------------------------------------------------------------------------------------------------
 /**
@@ -392,6 +451,10 @@ PathFollower::PathFollower( void )
 	m_recheckFeetPos = vec3_invalid;
 	m_recheckCount = 0;
 	m_recheckHoldTimer.Invalidate();
+
+	m_fellOffFeet = vec3_invalid;
+	m_fellOffTime = 0.0f;
+	m_fellOffCount = 0;
 #endif
 }
 
@@ -1235,6 +1298,13 @@ void PathFollower::Update( INextBot *bot )
 
 			// check if we can reach the next segment, in case this was a "jump down" situation
 			const Path::Segment *next = NextSegment( m_goal );
+#ifdef NEO
+			if ( IsPartWayDownDrop( bot ) )
+			{
+				// patch 133: keep the drop's top as the goal and steer at it, which walks us off the ledge over the landing
+			}
+			else
+#endif
 			if ( mover->IsStuck() || !next || ( next->pos.z - mover->GetFeet().z > mover->GetMaxJumpHeight() ) || !mover->IsPotentiallyTraversable( mover->GetFeet(), next->pos ) )
 			{
 				// the next node is too high, too - we really did fall off the path
@@ -1252,7 +1322,15 @@ void PathFollower::Update( INextBot *bot )
 				}
 
 				// reset stuck status since we're (likely) repathing anyways. otherwise, we could be stuck in a loop here and not move
+#ifdef NEO
+				// patch 133: unless re-paths keep handing back the same path and we have not moved, so let the stuck monitor see it
+				if ( !IsFellOffLoop( bot ) )
+				{
+					mover->ClearStuckStatus( "Fell off path" );
+				}
+#else
 				mover->ClearStuckStatus( "Fell off path" );
+#endif
 
 				return;
 			}
