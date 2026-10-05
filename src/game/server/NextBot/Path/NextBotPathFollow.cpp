@@ -272,6 +272,50 @@ static bool NeoIsSkipTraversable( INextBot *bot, const Vector &from, const Vecto
 	// a hull already in contact tells nothing either way: keep the probe's answer
 	return result.startsolid || result.fraction >= 1.0f;
 }
+
+// NEO-HARNESS-TEMP research arm (2026-10-04): an off-path bot re-checks that it can still walk to its goal
+ConVar neo_bot_path_goal_recheck( "neo_bot_path_goal_recheck", "0", FCVAR_CHEAT,
+	"Research: a bot off its path re-checks its goal every 0.5 s, and backs up to an earlier waypoint or re-paths when it is blocked" );
+
+// A skip-ahead goal was clear from where the bot chose it, but a bot shoved off its path keeps steering at it
+// from wherever it drifted to (rise's stair-top landing). Return the goal to steer at, or NULL to re-path.
+static const Path::Segment *NeoRecheckGoal( INextBot *bot, const Path *path, const Path::Segment *goal, float goalTolerance )
+{
+	ILocomotion *mover = bot->GetLocomotionInterface();
+	if ( goal->type != Path::ON_GROUND || goal->ladder || !mover->IsOnGround() || mover->IsClimbingOrJumping() )
+	{
+		return goal;
+	}
+
+	// on the goal's area or the one before it, the bot is still on the line the path planned
+	const CNavArea *myArea = bot->GetEntity()->GetLastKnownArea();
+	const Path::Segment *prior = path->PriorSegment( goal );
+	if ( !myArea || myArea == goal->area || ( prior && myArea == prior->area ) )
+	{
+		return goal;
+	}
+
+	const Vector &feet = mover->GetFeet();
+	if ( mover->IsPotentiallyTraversable( feet, goal->pos ) )
+	{
+		return goal;
+	}
+
+	// back up to the nearest earlier waypoint still walkable from here, but not back over a ladder, climb or drop
+	for ( const Path::Segment *seg = prior; seg && seg->type == Path::ON_GROUND && !seg->ladder; seg = path->PriorSegment( seg ) )
+	{
+		if ( !mover->IsPotentiallyTraversable( feet, seg->pos ) )
+		{
+			continue;
+		}
+
+		// a waypoint the bot already stands at would hand it straight back the blocked goal, so re-path instead
+		const Vector2D toSeg = ( seg->pos - feet ).AsVector2D();
+		return toSeg.IsLengthLessThan( goalTolerance ) ? NULL : seg;
+	}
+
+	return NULL;
+}
 #endif
 
 
@@ -1168,6 +1212,28 @@ void PathFollower::Update( INextBot *bot )
 #endif
 		}
 	}
+
+#ifdef NEO
+	// patch 132: on Avoid()'s cadence, an off-path bot backs its goal up, or re-paths, when it can no longer walk to it
+	if ( neo_bot_path_goal_recheck.GetBool() && !isDetouring && m_avoidTimer.IsElapsed() )
+	{
+		const Path::Segment *recheckGoal = NeoRecheckGoal( bot, this, m_goal, m_goalTolerance );
+		if ( recheckGoal != m_goal && sv_neo_forensic_log.GetBool() )
+		{
+			Msg( "NEO_FORENSIC_GOALRECHECK t=%.2f p=%d pos=%.0f,%.0f,%.0f goal=%.0f,%.0f,%.0f act=%s\n",
+				gpGlobals->curtime, bot->GetEntity()->entindex(), mover->GetFeet().x, mover->GetFeet().y, mover->GetFeet().z,
+				m_goal->pos.x, m_goal->pos.y, m_goal->pos.z, recheckGoal ? "backup" : "repath" );
+		}
+
+		if ( !recheckGoal )
+		{
+			Invalidate();
+			return;
+		}
+
+		m_goal = recheckGoal;
+	}
+#endif
 
 
 	Vector goalPos = m_goal->pos;
