@@ -369,7 +369,7 @@ bool PathFollower::RecheckGoal( INextBot *bot )
 #ifdef NEO
 // NEO-HARNESS-TEMP research arm (2026-10-04, patch 133): a bot that lands on a ledge part way down a planned drop
 // walks on off it, instead of re-pathing to the same drop every tick (ghost's vent rim, notes/atlas-1004)
-ConVar neo_bot_path_drop_land_fix( "neo_bot_path_drop_land_fix", "0", FCVAR_CHEAT,
+ConVar neo_bot_path_drop_land_fix( "neo_bot_path_drop_land_fix", "1", FCVAR_CHEAT,
 	"Research: 1 = a bot stopped part way down a drop steers on over the landing, and fell-off re-paths that leave it in place stop resetting the stuck monitor; 2 = the steer only" );
 
 // A bot part way down a drop stands within this range of the drop's column (the top and the landing share x and y)
