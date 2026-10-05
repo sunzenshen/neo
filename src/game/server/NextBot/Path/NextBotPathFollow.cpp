@@ -381,8 +381,8 @@ static const float NEO_FELLOFF_REPEAT_TIME = 2.0f;
 // with the feet moved less than this, are a loop the stuck monitor has to see
 static const float NEO_FELLOFF_REPEAT_RANGE = 8.0f;
 
-// The goal is a drop's top more than a jump above us and the landing is below us: we stopped on a ledge part way down.
-// The stock check tests the landing from the feet on a diagonal that hits the ledge's rim, so test it level instead.
+// The goal is a drop's top more than a jump above us and the landing is below us: we are falling or stopped part way down.
+// The stock check tests the landing from the feet on a diagonal that hits a ledge's rim, so test it level instead.
 bool PathFollower::IsPartWayDownDrop( INextBot *bot ) const
 {
 	const Segment *landing = NextSegment( m_goal );
@@ -393,7 +393,7 @@ bool PathFollower::IsPartWayDownDrop( INextBot *bot ) const
 
 	ILocomotion *mover = bot->GetLocomotionInterface();
 	const Vector &feet = mover->GetFeet();
-	if ( !mover->IsOnGround() || feet.z < landing->pos.z + mover->GetStepHeight() )
+	if ( feet.z < landing->pos.z + mover->GetStepHeight() )
 	{
 		return false;
 	}
