@@ -288,6 +288,14 @@ static int NeoCountHullLanes( const CNavArea *from, const CNavArea *to, const Ve
 	return nClear;
 }
 
+static bool NeoHullLaneOpen( const CNavArea *from, const CNavArea *to, const Vector &vecMins, const Vector &vecMaxs );
+
+// the juggernaut's standing hull is taller than the HumanHeight nav_generate leaves room for
+static bool NeoStandsAboveMesh( CNEOBot *me )
+{
+	return VEC_HULL_MAX_SCALED( me ).z - VEC_HULL_MIN_SCALED( me ).z > HumanHeight;
+}
+
 // patch 130: the hull this bot crosses the portal with, when the mesh does not promise room for it: its
 // ducked hull on a crouch portal above HumanCrouchHeight; with mode 2 such a bot's standing hull elsewhere
 static bool NeoUnpromisedHull( CNEOBot *me, const CNavArea *from, const CNavArea *to, Vector *pMins, Vector *pMaxs )
@@ -313,7 +321,41 @@ static bool NeoUnpromisedHull( CNEOBot *me, const CNavArea *from, const CNavArea
 
 	*pMins = VEC_HULL_MIN_SCALED( me );
 	*pMaxs = VEC_HULL_MAX_SCALED( me );
+	if ( NeoStandsAboveMesh( me ) )
+	{
+		// the juggernaut ducks where its standing hull has no lane (the locomotion does that),
+		// so its ducked hull is the one that has to fit
+		if ( NeoHullLaneOpen( from, to, *pMins, *pMaxs ) )
+		{
+			return false;
+		}
+
+		*pMins = vecDuckMins;
+		*pMaxs = vecDuckMaxs;
+		return true;
+	}
+
 	return neo_bot_path_duck_lane.GetInt() >= 2 && pMaxs->z - pMins->z <= HumanHeight;
+}
+
+bool NeoBotMustDuckThrough( CNEOBot *me, const CNavArea *from, const CNavArea *to )
+{
+	if ( !neo_bot_path_duck_lane.GetBool() || !NeoStandsAboveMesh( me ) )
+	{
+		return false;
+	}
+
+	if ( from->HasAttributes( NAV_MESH_CROUCH ) || to->HasAttributes( NAV_MESH_CROUCH ) )
+	{
+		return false;
+	}
+
+	if ( neo_bot_path_duck_lane_level.GetBool() && fabs( from->ComputeAdjacentConnectionHeightChange( to ) ) > StepHeight )
+	{
+		return false;
+	}
+
+	return !NeoHullLaneOpen( from, to, VEC_HULL_MIN_SCALED( me ), VEC_HULL_MAX_SCALED( me ) );
 }
 
 // patch 130: the lane traces see only the world and static props, so a verdict holds until the level changes
