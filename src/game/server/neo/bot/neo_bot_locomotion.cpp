@@ -38,6 +38,23 @@ static bool NeoCrouchAhead( CNEOBot *me, const Vector &feet, float flStep )
 // within this of a portal's center, a bot that has to duck through it does, on either side
 static constexpr float NEO_DUCK_THROUGH_RANGE = 48.0f;
 
+// the center of the portal from one area into an adjacent one (a segment's own portal is not set on a path's first segment)
+static Vector NeoPortalCenter( const CNavArea *from, const CNavArea *to )
+{
+	Vector center = to->GetCenter();
+	float flHalfWidth;
+	for ( int d = 0; d < NUM_DIRECTIONS; ++d )
+	{
+		if ( from->IsConnected( to, (NavDirType)d ) )
+		{
+			from->ComputePortal( to, (NavDirType)d, &center, &flHalfWidth );
+			break;
+		}
+	}
+
+	return center;
+}
+
 // the portal just crossed and the next two on the path: does this bot have to duck through one it is close to?
 static bool NeoDuckThroughNear( CNEOBot *me, const Vector &feet )
 {
@@ -53,22 +70,56 @@ static bool NeoDuckThroughNear( CNEOBot *me, const Vector &feet )
 		seg = path->GetCurrentGoal();
 	}
 
+	// a path rebuilt in a doorway can start past the portal the bot is still standing in
+	const CNavArea *pHere = me->GetLastKnownArea();
 	const Path::Segment *prior = path->PriorSegment( seg );
 	for ( int i = 0; seg && i < 3; prior = seg, seg = path->NextSegment( seg ), ++i )
 	{
-		if ( !prior || !prior->area || !seg->area || seg->ladder )
+		if ( !seg->area || seg->ladder )
 		{
 			continue;
 		}
 
-		if ( ( seg->m_portalCenter - feet ).Length2D() > NEO_DUCK_THROUGH_RANGE )
+		const CNavArea *pFrom = ( prior && prior->area ) ? prior->area : pHere;
+		if ( !pFrom || pFrom == seg->area )
 		{
 			continue;
 		}
 
-		if ( NeoBotMustDuckThrough( me, prior->area, seg->area ) )
+		if ( ( NeoPortalCenter( pFrom, seg->area ) - feet ).Length2D() > NEO_DUCK_THROUGH_RANGE )
+		{
+			continue;
+		}
+
+		if ( NeoBotMustDuckThrough( me, pFrom, seg->area ) )
 		{
 			return true;
+		}
+	}
+
+	// or the path can lead on from past the portal, while the bot heads for it from its own area
+	if ( !pHere )
+	{
+		return false;
+	}
+
+	const Vector toGoal = path->GetCurrentGoal()->pos - feet;
+	for ( int d = 0; d < NUM_DIRECTIONS; ++d )
+	{
+		const NavConnectVector *pAdjacent = pHere->GetAdjacentAreas( (NavDirType)d );
+		FOR_EACH_VEC( *pAdjacent, i )
+		{
+			const CNavArea *pTo = pAdjacent->Element( i ).area;
+			const Vector toPortal = NeoPortalCenter( pHere, pTo ) - feet;
+			if ( toPortal.Length2D() > NEO_DUCK_THROUGH_RANGE || toPortal.AsVector2D().Dot( toGoal.AsVector2D() ) <= 0.0f )
+			{
+				continue;
+			}
+
+			if ( NeoBotMustDuckThrough( me, pHere, pTo ) )
+			{
+				return true;
+			}
 		}
 	}
 

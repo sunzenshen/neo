@@ -340,7 +340,7 @@ static bool NeoUnpromisedHull( CNEOBot *me, const CNavArea *from, const CNavArea
 
 bool NeoBotMustDuckThrough( CNEOBot *me, const CNavArea *from, const CNavArea *to )
 {
-	if ( !neo_bot_path_duck_lane.GetBool() || !NeoStandsAboveMesh( me ) )
+	if ( !neo_bot_path_duck_lane.GetBool() || !NeoStandsAboveMesh( me ) || !from->IsConnected( to, NUM_DIRECTIONS ) )
 	{
 		return false;
 	}
