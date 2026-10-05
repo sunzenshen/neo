@@ -274,7 +274,7 @@ static bool NeoIsSkipTraversable( INextBot *bot, const Vector &from, const Vecto
 }
 
 // NEO-HARNESS-TEMP research arm (2026-10-04): an off-path bot re-checks that it can still walk to its goal
-ConVar neo_bot_path_goal_recheck( "neo_bot_path_goal_recheck", "0", FCVAR_CHEAT,
+ConVar neo_bot_path_goal_recheck( "neo_bot_path_goal_recheck", "1", FCVAR_CHEAT,
 	"Research: a bot off its path re-checks its goal every 0.5 s, and backs up to an earlier waypoint or re-paths when it is blocked" );
 
 // A skip-ahead goal was clear from where the bot chose it, but a bot shoved off its path keeps steering at it
