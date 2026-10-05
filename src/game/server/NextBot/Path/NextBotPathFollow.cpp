@@ -277,6 +277,15 @@ static bool NeoIsSkipTraversable( INextBot *bot, const Vector &from, const Vecto
 ConVar neo_bot_path_goal_recheck( "neo_bot_path_goal_recheck", "1", FCVAR_CHEAT,
 	"Research: a bot off its path re-checks its goal every 0.5 s, and backs up to an earlier waypoint or re-paths when it is blocked" );
 
+// A re-path that leads back into the same prop would loop. The recheck already acted on a goal within this range,
+static const float NEO_RECHECK_SAME_GOAL = 16.0f;
+// or from feet within this range (a re-path can alternate between waypoints a few units apart),
+static const float NEO_RECHECK_SAME_FEET = 32.0f;
+// it is left alone this long after each action,
+static const float NEO_RECHECK_HOLD = 3.0f;
+// and after this many actions it is left to the stuck monitor
+static const int NEO_RECHECK_MAX_ACTIONS = 2;
+
 // A skip-ahead goal was clear from where the bot chose it, but a bot shoved off its path keeps steering at it
 // from wherever it drifted to (rise's stair-top landing). Return the goal to steer at, or NULL to re-path.
 static const Path::Segment *NeoRecheckGoal( INextBot *bot, const Path *path, const Path::Segment *goal, float goalTolerance )
@@ -316,6 +325,45 @@ static const Path::Segment *NeoRecheckGoal( INextBot *bot, const Path *path, con
 
 	return NULL;
 }
+
+// Re-check the goal of an off-path bot (see NeoRecheckGoal). Return false when the path was invalidated for a re-path.
+bool PathFollower::RecheckGoal( INextBot *bot )
+{
+	const Vector &feet = bot->GetLocomotionInterface()->GetFeet();
+	const bool isRepeat = ( m_goal->pos - m_recheckGoalPos ).IsLengthLessThan( NEO_RECHECK_SAME_GOAL ) ||
+		( feet - m_recheckFeetPos ).IsLengthLessThan( NEO_RECHECK_SAME_FEET );
+	if ( isRepeat && ( m_recheckCount >= NEO_RECHECK_MAX_ACTIONS || !m_recheckHoldTimer.IsElapsed() ) )
+	{
+		return true;
+	}
+
+	const Path::Segment *recheckGoal = NeoRecheckGoal( bot, this, m_goal, m_goalTolerance );
+	if ( recheckGoal == m_goal )
+	{
+		return true;
+	}
+
+	m_recheckCount = isRepeat ? m_recheckCount + 1 : 1;
+	m_recheckGoalPos = m_goal->pos;
+	m_recheckFeetPos = feet;
+	m_recheckHoldTimer.Start( NEO_RECHECK_HOLD );
+
+	if ( sv_neo_forensic_log.GetBool() )
+	{
+		Msg( "NEO_FORENSIC_GOALRECHECK t=%.2f p=%d pos=%.0f,%.0f,%.0f goal=%.0f,%.0f,%.0f act=%s n=%d\n",
+			gpGlobals->curtime, bot->GetEntity()->entindex(), feet.x, feet.y, feet.z,
+			m_goal->pos.x, m_goal->pos.y, m_goal->pos.z, recheckGoal ? "backup" : "repath", m_recheckCount );
+	}
+
+	if ( !recheckGoal )
+	{
+		Invalidate();
+		return false;
+	}
+
+	m_goal = recheckGoal;
+	return true;
+}
 #endif
 
 #ifdef NEO
@@ -344,6 +392,11 @@ PathFollower::PathFollower( void )
 
 #ifdef NEO
 	m_wasOnGround = true;
+
+	m_recheckGoalPos = vec3_invalid;
+	m_recheckFeetPos = vec3_invalid;
+	m_recheckCount = 0;
+	m_recheckHoldTimer.Invalidate();
 #endif
 }
 
@@ -1220,23 +1273,9 @@ void PathFollower::Update( INextBot *bot )
 
 #ifdef NEO
 	// patch 132: on Avoid()'s cadence, an off-path bot backs its goal up, or re-paths, when it can no longer walk to it
-	if ( neo_bot_path_goal_recheck.GetBool() && !isDetouring && m_avoidTimer.IsElapsed() )
+	if ( neo_bot_path_goal_recheck.GetBool() && !isDetouring && m_avoidTimer.IsElapsed() && !RecheckGoal( bot ) )
 	{
-		const Path::Segment *recheckGoal = NeoRecheckGoal( bot, this, m_goal, m_goalTolerance );
-		if ( recheckGoal != m_goal && sv_neo_forensic_log.GetBool() )
-		{
-			Msg( "NEO_FORENSIC_GOALRECHECK t=%.2f p=%d pos=%.0f,%.0f,%.0f goal=%.0f,%.0f,%.0f act=%s\n",
-				gpGlobals->curtime, bot->GetEntity()->entindex(), mover->GetFeet().x, mover->GetFeet().y, mover->GetFeet().z,
-				m_goal->pos.x, m_goal->pos.y, m_goal->pos.z, recheckGoal ? "backup" : "repath" );
-		}
-
-		if ( !recheckGoal )
-		{
-			Invalidate();
-			return;
-		}
-
-		m_goal = recheckGoal;
+		return;
 	}
 #endif
 
