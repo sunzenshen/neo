@@ -115,6 +115,9 @@ static bool NeoPropDetour( INextBot *bot, CBaseEntity *prop, const Vector &goalP
 // NEO-HARNESS-TEMP research arm (2026-09-23, ntre notes/navmesh-release-roadmap): the follower's
 // skip-ahead checks trust IsPotentiallyTraversable, whose probe is a quarter hull wide, so a skip can
 // go through a holed wall, grate or railing a player cannot pass; the bot then presses into it.
+// NEO-HARNESS-TEMP: A/B switch for neo#2197 (default on, as the PR), never part of a PR
+ConVar neo_harness_propavoid( "neo_harness_propavoid", "1", FCVAR_CHEAT, "Harness: 1 = bots detour around movable props and look for breakables on their path (the PR's behavior), 0 = upstream" );
+
 ConVar neo_bot_path_skip_wide( "neo_bot_path_skip_wide", "0", FCVAR_CHEAT,
 	"Research: the path follower only skips ahead where a nearly full-width hull fits (2 = and its full current height)" );
 
@@ -339,7 +342,7 @@ void PathFollower::Invalidate( void )
 	m_hindrance = NULL;
 
 #ifdef NEO
-	m_propDetour.Reset();
+	m_pathObstacles.Reset();
 #endif
 }
 
@@ -355,7 +358,7 @@ void PathFollower::OnPathChanged( INextBot *bot, Path::ResultType result )
 	m_result = result;
 
 #ifdef NEO
-	m_propDetour.Reset();
+	m_pathObstacles.Reset();
 #endif
 }
 
@@ -972,24 +975,23 @@ void PathFollower::Update( INextBot *bot )
 #ifdef NEO
 	// walk around props in the way, which the nav mesh does not know about,
 	// heading for the path segment past them rather than turning back for a goal the detour went around
-	// NEO-HARNESS-TEMP: neo_harness_propavoid 0 = upstream (no prop detour); the PR runs the detour always
-	extern ConVar neo_harness_propavoid;
+	// NEO-HARNESS-TEMP: neo_harness_propavoid 0 = upstream (no prop detour, no breakable look); the PR runs it always
 	if ( !neo_harness_propavoid.GetBool() )
 	{
-		m_propDetour.Reset();
+		m_pathObstacles.Reset();
 	}
 	else
 	{
-		m_propDetour.Update( bot, *this );
+		m_pathObstacles.Update( bot, *this );
 	}
 
-	const Path::Segment *detourPathGoal = m_propDetour.GetPathGoal();
+	const Path::Segment *detourPathGoal = m_pathObstacles.GetPathGoal();
 	if ( detourPathGoal )
 	{
 		m_goal = detourPathGoal;
 	}
 
-	const bool isDetouring = m_propDetour.IsDetouring();
+	const bool isDetouring = m_pathObstacles.IsDetouring();
 #endif
 
 	// use the direction towards the goal as 'forward' direction
@@ -1173,7 +1175,7 @@ void PathFollower::Update( INextBot *bot )
 #ifdef NEO
 	if ( isDetouring )
 	{
-		goalPos = m_propDetour.GetMoveGoal();
+		goalPos = m_pathObstacles.GetMoveGoal();
 	}
 
 	// NEO-HARNESS-TEMP research arm (patch 51): steer round physics props across the path ahead
