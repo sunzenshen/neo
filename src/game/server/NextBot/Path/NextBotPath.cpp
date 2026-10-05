@@ -34,7 +34,7 @@ ConVar neo_bot_drop_search_lateral( "neo_bot_drop_search_lateral", "0", FCVAR_CH
 // drop at the from-area's edge - into whatever lies between (apparatus's spawn-hall exits: 60-80 u pits, the hall-edge slot
 // falls to the kill volume; 16-41 % of those crossings died). Treat such a link as the gap jump the pass below makes of level
 // ones: the bot runs at the edge and jumps for the landing.
-ConVar neo_bot_path_gap_drop_jump( "neo_bot_path_gap_drop_jump", "0", FCVAR_CHEAT,
+ConVar neo_bot_path_gap_drop_jump( "neo_bot_path_gap_drop_jump", "1", FCVAR_CHEAT,
 	"Research: a link down to an area more than 1.9 generation steps away is a gap jump, not a drop off the edge" );
 ConVar neo_bot_trivial_fallback_log( "neo_bot_trivial_fallback_log", "0", FCVAR_CHEAT,
 	"Research: log NEO_FORENSIC_TRIVIAL each time Path::Compute falls back to a straight line because the goal is unreachable" );
