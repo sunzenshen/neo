@@ -55,12 +55,12 @@ ConVar neo_bot_path_duck_clearance("neo_bot_path_duck_clearance", "0", FCVAR_CHE
 
 // NEO-HARNESS-TEMP research arm (2026-10-03, patch 130): patch 68 narrowed. A portal closes only when no lane
 // across it holds the hull, tested a step above the floor as the bot moves (notes/phase3/support-crouch.md)
-ConVar neo_bot_path_duck_lane("neo_bot_path_duck_lane", "0", FCVAR_CHEAT,
+ConVar neo_bot_path_duck_lane("neo_bot_path_duck_lane", "1", FCVAR_CHEAT,
 	"Research: close portals no lane of this bot's hull fits through. 1 = crouch-area portals, for a ducked hull "
 	"taller than the mesh's crouch height; 2 = also such a bot's standing hull into other areas");
 ConVar neo_bot_path_duck_lane_min("neo_bot_path_duck_lane_min", "1", FCVAR_CHEAT,
 	"Research: clear lanes (4 u apart) a portal needs to stay open under neo_bot_path_duck_lane", true, 1.0f, false, 0.0f);
-ConVar neo_bot_path_duck_lane_level("neo_bot_path_duck_lane_level", "0", FCVAR_CHEAT,
+ConVar neo_bot_path_duck_lane_level("neo_bot_path_duck_lane_level", "1", FCVAR_CHEAT,
 	"Research: neo_bot_path_duck_lane tests level portals only (rise within a step); climbs and drops stay open");
 ConVar neo_bot_path_duck_lane_log("neo_bot_path_duck_lane_log", "0", FCVAR_CHEAT,
 	"Harness: log NEO_DUCKLANE for each portal neo_bot_path_duck_lane tests");

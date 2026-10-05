@@ -153,7 +153,7 @@ ConVar neo_bot_path_void_guard_gap( "neo_bot_path_void_guard_gap", "0", FCVAR_CH
 // the take-off is more than a step up and IsAtGoal never passes it, so the bot walks back into the gap (ap3: apparatus
 // 3404, all 6 traced walk-backs; the path was 0.00-0.14 s old at the jump - a combat-sound / seek re-plan mid-air).
 // The jump is already made: take its landing as the goal.
-ConVar neo_bot_path_gap_resume( "neo_bot_path_gap_resume", "0", FCVAR_CHEAT,
+ConVar neo_bot_path_gap_resume( "neo_bot_path_gap_resume", "1", FCVAR_CHEAT,
 	"Research: a gap-jump goal whose landing area the bot is already on, or whose gap the bot is jumping, moves on to the landing" );
 
 static const float NEO_VOID_GUARD_DROP = 200.0f;		// no floor this far under the probe = a drop the path must plan
