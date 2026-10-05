@@ -99,6 +99,13 @@ private:
 	int m_recheckCount;							// how many times in a row it acted on that goal,
 	CountdownTimer m_recheckHoldTimer;				// and when it may act on that goal again
 
+	bool IsPartWayDownDrop( INextBot *bot ) const;	// stopped on a ledge part way down a drop, the landing level ahead
+	bool IsFellOffLoop( INextBot *bot );				// fell-off re-paths keep leaving us where we were
+
+	Vector m_fellOffFeet;							// where the last run of fell-off re-paths started,
+	float m_fellOffTime;							// when the latest one was,
+	int m_fellOffCount;							// and how many there were
+
 	CNEOBotPathObstacles m_pathObstacles;			// looks ahead for props to steer around and breakables in the way
 #endif
 
