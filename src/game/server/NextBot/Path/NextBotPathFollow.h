@@ -91,6 +91,14 @@ private:
 	bool HasFallenBelowPath( INextBot *bot ) const;	// return true if we stand off the path, more than a step below it
 	const CNavArea *LadderCapAhead( INextBot *bot ) const;	// return the ladder top shallower than a hull the climb ahead is onto, or NULL
 	bool m_wasOnGround;
+
+	bool RecheckGoal( INextBot *bot );				// an off-path bot whose goal is blocked backs it up or re-paths
+
+	Vector m_recheckGoalPos;						// the goal the goal recheck last acted on,
+	Vector m_recheckFeetPos;						// where the bot stood then,
+	int m_recheckCount;							// how many times in a row it acted on that goal,
+	CountdownTimer m_recheckHoldTimer;				// and when it may act on that goal again
+
 	CNEOBotPathObstacles m_pathObstacles;			// looks ahead for props to steer around and breakables in the way
 	const Path::Segment *m_capClimbGoal;			// the climb onto a ladder's wall cap m_capLaunches counts
 	int m_capLaunches;
