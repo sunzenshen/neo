@@ -9,6 +9,10 @@ class CNavArea;
 class CNavLadder;
 class CFuncElevator;
 
+// a bot standing taller than the mesh promises (the juggernaut) has no lane for its standing hull across this portal
+// and has to duck through it (neo_bot_path_duck_lane)
+bool NeoBotMustDuckThrough( CNEOBot *me, const CNavArea *from, const CNavArea *to );
+
 #include "neo_bot_path_reservation.h"
 #include "tier1/utlstack.h"
 

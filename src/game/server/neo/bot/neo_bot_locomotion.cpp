@@ -2,6 +2,7 @@
 
 #include "neo_bot.h"
 #include "neo_bot_locomotion.h"
+#include "neo_bot_path_cost.h"
 #include "particle_parse.h"
 
 extern ConVar falldamage;
@@ -34,6 +35,46 @@ static bool NeoCrouchAhead( CNEOBot *me, const Vector &feet, float flStep )
 	return pAhead && pAhead->HasAttributes( NAV_MESH_CROUCH );
 }
 
+// within this of a portal's center, a bot that has to duck through it does, on either side
+static constexpr float NEO_DUCK_THROUGH_RANGE = 48.0f;
+
+// the portal just crossed and the next two on the path: does this bot have to duck through one it is close to?
+static bool NeoDuckThroughNear( CNEOBot *me, const Vector &feet )
+{
+	const PathFollower *path = me->GetCurrentPath();
+	if ( !path || !path->IsValid() || !path->GetCurrentGoal() )
+	{
+		return false;
+	}
+
+	const Path::Segment *seg = path->PriorSegment( path->GetCurrentGoal() );
+	if ( !seg )
+	{
+		seg = path->GetCurrentGoal();
+	}
+
+	const Path::Segment *prior = path->PriorSegment( seg );
+	for ( int i = 0; seg && i < 3; prior = seg, seg = path->NextSegment( seg ), ++i )
+	{
+		if ( !prior || !prior->area || !seg->area || seg->ladder )
+		{
+			continue;
+		}
+
+		if ( ( seg->m_portalCenter - feet ).Length2D() > NEO_DUCK_THROUGH_RANGE )
+		{
+			continue;
+		}
+
+		if ( NeoBotMustDuckThrough( me, prior->area, seg->area ) )
+		{
+			return true;
+		}
+	}
+
+	return false;
+}
+
 //-----------------------------------------------------------------------------------------
 void CNEOBotLocomotion::Update( void )
 {
@@ -50,6 +91,10 @@ void CNEOBotLocomotion::Update( void )
 	{
 		CNavArea* currentArea = me->GetLastKnownArea();
 		if (currentArea && (currentArea->GetAttributes() & NAV_MESH_CROUCH))
+		{
+			me->PressCrouchButton( 0.3f );
+		}
+		else if ( NeoDuckThroughNear( me, GetFeet() ) )
 		{
 			me->PressCrouchButton( 0.3f );
 		}
