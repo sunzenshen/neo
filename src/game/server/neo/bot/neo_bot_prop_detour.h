@@ -3,11 +3,25 @@
 #include "NextBot/Path/NextBotPath.h"
 
 class INextBot;
-class PathFollower;
 
 //----------------------------------------------------------------------------------------------------------------
-// Steers a bot around props the nav mesh cannot know about, which physics or an animation moves,
-// by searching a grid laid over the mesh on the path ahead for a way past the ones it sees
+// What a look ahead hands a detour to plan: where past the props in the way it takes up the path again,
+// the path goals there and before the props, the floor box from the bot past them, and whether only light props were in the way
+struct PropDetourRequest_t
+{
+	Vector rejoin;
+	const Path::Segment *rejoinGoal;
+	const Path::Segment *resumeGoal;
+	Vector2D regionLo;
+	Vector2D regionHi;
+	float floorLo;
+	float floorHi;
+	bool isPathPushable;
+};
+
+//----------------------------------------------------------------------------------------------------------------
+// A way around props in the bot's way, found by searching a grid laid over the mesh,
+// and kept while the props and the bot move until the bot is past them
 class CNEOBotPropDetour
 {
 public:
@@ -15,7 +29,13 @@ public:
 
 	void Reset();
 
-	void Update( INextBot *bot, const PathFollower &path );
+	// Search for a way around, and return how long to wait before looking again,
+	// or 0 to look again at the look's own interval
+	float Plan( INextBot *bot, const PropDetourRequest_t &request, float lookInterval );
+
+	// Follow the detour, and search it again when the look is due:
+	// return true if that search has to wait for a free tick
+	bool Update( INextBot *bot, bool isSearchDue );
 
 	bool IsDetouring() const { return m_waypoints.Count() > 0; }
 	const Vector &GetMoveGoal() const { return m_waypoints[ 0 ]; }		// where to move next while detouring
@@ -25,10 +45,10 @@ public:
 	const Path::Segment *GetPathGoal() const { return m_pathGoal; }
 
 private:
-	void Plan( INextBot *bot, const PathFollower &path );
 	bool Replan( INextBot *bot );
+	void NoteSearch( const Vector &feet );
+	bool IsLastSearchValid( INextBot *bot ) const;
 
-	CountdownTimer m_replanTimer;
 	CUtlVector< Vector > m_waypoints;
 	const Path::Segment *m_pathGoal;
 
@@ -41,4 +61,12 @@ private:
 	Vector2D m_regionHi;
 	float m_floorLo;
 	float m_floorHi;
+	bool m_isWide;		// found by the wide search, so its replans share the one wide search a tick
+	bool m_isPathPushable;		// every prop in the way on the path was light, so a route through light props is no detour
+
+	// what the last search saw, so the detour is searched again only when that changes or the search grows old:
+	// where the bot set out for its next waypoint, and how many props in the region rested (OBSTACLE_PROPS_MOVING if any was awake)
+	Vector m_legStart;
+	int m_restingPropCount;
+	CountdownTimer m_searchAgeTimer;
 };
