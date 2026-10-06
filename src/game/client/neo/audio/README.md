@@ -75,4 +75,10 @@ checkout).
   ducking, `snd_surround` and room reverb do not apply to the HRTF copy.
 - Occlusion / propagation is not wired up: `ISpatializer::SetSceneGeometry()` is reserved for
   feeding the map's collision mesh (`vcollide` of the world model) into an `IPLStaticMesh`.
+- The first play of each file decodes it synchronously on the game thread (a small hitch per
+  new sound per map); precaching at level start or decoding on a worker thread is the fix.
+- One mutex guards the voice table for both the game thread and the audio callback, so a frame
+  can wait on a full block render and vice versa. Fine at 32 voices for a PoC; the clean fix
+  is POD double-buffering of per-voice parameters and deferring backend voice create/release
+  to the audio thread.
 - MP3 player music is out of scope by design.
