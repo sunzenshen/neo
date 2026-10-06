@@ -899,6 +899,8 @@ if(NEO_STEAMAUDIO)
         TARGET client
         NAME "HRTF"
         FILES
+        neo/audio/neo_hrtf_system.cpp
+        neo/audio/neo_hrtf_system.h
         neo/audio/neo_spatializer.h
         ${NEO_SPATIALIZER_BACKEND_SOURCES}
     )
