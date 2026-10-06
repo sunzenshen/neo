@@ -45,9 +45,13 @@ scene geometry.
 
 1. Build normally. CMake fetches the Steam Audio 4.8.1 SDK once and copies its library next to
    `client` (`NEO_STEAMAUDIO=OFF` builds without HRTF; `NEO_STEAMAUDIO_SDK_PATH` uses a local SDK).
-2. In game, with headphones: `cl_neo_hrtf 1`; A/B against the engine's own panning with
-   `cl_neo_hrtf 0`. `cl_neo_hrtf_debug 1` overlays the status and a line per voice. Player pings
-   and bots firing are easy sources.
+2. In game, with headphones, on a server with `sv_cheats 1`: `cl_neo_hrtf 1`; A/B against the
+   engine's own panning with `cl_neo_hrtf 0`. `cl_neo_hrtf_debug 1` overlays the status and a
+   line per voice. Player pings and bots firing are easy sources.
+
+`cl_neo_hrtf` is a cheat cvar, is not saved to config, and has no menu entry while the feature is
+in development. With it at 0 (the default) the system does one cvar read per frame and never
+touches engine sounds, the output device or Steam Audio, so normal sound is exactly master's.
 
 ## Updating Steam Audio
 
