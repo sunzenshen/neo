@@ -1,15 +1,14 @@
 // NEO HRTF: Steam Audio backend for NeoSpatial::ISpatializer.
 //
 // phonon is loaded at runtime rather than linked so that a missing or incompatible library
-// only disables this backend, and so the client does not depend on the dynamic loader finding
-// the mod's bin directory. Only the functions listed in NEO_PHONON_FUNCTIONS are resolved.
+// only disables HRTF, and so the client does not depend on the dynamic loader finding the mod's
+// bin directory. Only the functions listed in NEO_PHONON_FUNCTIONS are resolved.
 #include "neo_spatializer.h"
 
 #include <phonon.h>
 
 #include <algorithm>
 #include <cmath>
-#include <cstdarg>
 #include <cstdio>
 
 #ifdef _WIN32
@@ -49,68 +48,19 @@ struct PhononApi
 
 #ifdef _WIN32
 typedef HMODULE LibraryHandle;
-
-LibraryHandle OpenLibrary(const char *path)
-{
-	// Resolve phonon.dll's own dependencies from its directory rather than the game executable's.
-	return LoadLibraryExA(path, nullptr, LOAD_WITH_ALTERED_SEARCH_PATH);
-}
-
-void *FindSymbol(LibraryHandle library, const char *name)
-{
-	return reinterpret_cast<void *>(GetProcAddress(library, name));
-}
-
-void CloseLibrary(LibraryHandle library)
-{
-	FreeLibrary(library);
-}
-
-void FormatLastLoaderError(char *buffer, int bufferLen)
-{
-	snprintf(buffer, static_cast<size_t>(bufferLen), "Win32 error %lu", GetLastError());
-}
+// LOAD_WITH_ALTERED_SEARCH_PATH resolves phonon.dll's own dependencies from its directory.
+LibraryHandle OpenLibrary(const char *path) { return LoadLibraryExA(path, nullptr, LOAD_WITH_ALTERED_SEARCH_PATH); }
+void *FindSymbol(LibraryHandle library, const char *name) { return reinterpret_cast<void *>(GetProcAddress(library, name)); }
+void CloseLibrary(LibraryHandle library) { FreeLibrary(library); }
+void FormatLoaderError(char *out, int len) { snprintf(out, len, "Win32 error %lu", GetLastError()); }
 #else
 typedef void *LibraryHandle;
-
-LibraryHandle OpenLibrary(const char *path)
-{
-	// RTLD_LOCAL keeps phonon's bundled symbols from interposing on the engine's.
-	return dlopen(path, RTLD_NOW | RTLD_LOCAL);
-}
-
-void *FindSymbol(LibraryHandle library, const char *name)
-{
-	return dlsym(library, name);
-}
-
-void CloseLibrary(LibraryHandle library)
-{
-	dlclose(library);
-}
-
-void FormatLastLoaderError(char *buffer, int bufferLen)
-{
-	const char *error = dlerror();
-	snprintf(buffer, static_cast<size_t>(bufferLen), "%s", error ? error : "unknown dlerror");
-}
+// RTLD_LOCAL keeps phonon's bundled symbols from interposing on the engine's.
+LibraryHandle OpenLibrary(const char *path) { return dlopen(path, RTLD_NOW | RTLD_LOCAL); }
+void *FindSymbol(LibraryHandle library, const char *name) { return dlsym(library, name); }
+void CloseLibrary(LibraryHandle library) { dlclose(library); }
+void FormatLoaderError(char *out, int len) { const char *error = dlerror(); snprintf(out, len, "%s", error ? error : "unknown dlerror"); }
 #endif
-
-#if defined(__GNUC__)
-__attribute__((format(printf, 3, 4)))
-#endif
-void WriteError(char *errorOut, int errorLen, const char *format, ...)
-{
-	if (!errorOut || errorLen <= 0)
-	{
-		return;
-	}
-
-	va_list args;
-	va_start(args, format);
-	vsnprintf(errorOut, static_cast<size_t>(errorLen), format, args);
-	va_end(args);
-}
 
 constexpr int MAX_VOICES = 64;
 constexpr int LOADER_ERROR_LEN = 256;
@@ -151,19 +101,26 @@ public:
 
 	~CSteamAudioSpatializer() override
 	{
-		Shutdown();
+		for (Voice &voice : m_voices)
+		{
+			if (voice.effect)
+			{
+				m_api.iplBinauralEffectRelease(&voice.effect);
+			}
+		}
+		if (m_hrtf)
+		{
+			m_api.iplHRTFRelease(&m_hrtf);
+		}
+		if (m_context)
+		{
+			m_api.iplContextRelease(&m_context);
+		}
 		CloseLibrary(m_library);
 	}
 
-	const char *GetName() const override
+	bool Init(int sampleRate, int frameSize, char *errorOut, int errorLen)
 	{
-		return "steamaudio";
-	}
-
-	bool Init(int sampleRate, int frameSize, char *errorOut, int errorLen) override
-	{
-		Shutdown();
-
 		IPLContextSettings contextSettings = {};
 		contextSettings.version = STEAMAUDIO_VERSION;
 		// The default cap is SSE2; AVX512 is avoided because it can throttle the CPU clock.
@@ -171,9 +128,8 @@ public:
 		IPLerror status = m_api.iplContextCreate(&contextSettings, &m_context);
 		if (status != IPL_STATUS_SUCCESS)
 		{
-			WriteError(errorOut, errorLen, "iplContextCreate failed (status %d, built against Steam Audio %d.%d.%d)",
-					   static_cast<int>(status), STEAMAUDIO_VERSION_MAJOR, STEAMAUDIO_VERSION_MINOR, STEAMAUDIO_VERSION_PATCH);
-			Shutdown();
+			snprintf(errorOut, errorLen, "iplContextCreate failed (status %d, built against Steam Audio %d.%d.%d)",
+					 static_cast<int>(status), STEAMAUDIO_VERSION_MAJOR, STEAMAUDIO_VERSION_MINOR, STEAMAUDIO_VERSION_PATCH);
 			return false;
 		}
 
@@ -187,34 +143,10 @@ public:
 		status = m_api.iplHRTFCreate(m_context, &m_audioSettings, &hrtfSettings, &m_hrtf);
 		if (status != IPL_STATUS_SUCCESS)
 		{
-			WriteError(errorOut, errorLen, "iplHRTFCreate failed (status %d)", static_cast<int>(status));
-			Shutdown();
+			snprintf(errorOut, errorLen, "iplHRTFCreate failed (status %d)", static_cast<int>(status));
 			return false;
 		}
-
 		return true;
-	}
-
-	void Shutdown() override
-	{
-		for (Voice &voice : m_voices)
-		{
-			if (voice.effect)
-			{
-				m_api.iplBinauralEffectRelease(&voice.effect);
-			}
-			voice.inUse = false;
-		}
-
-		if (m_hrtf)
-		{
-			m_api.iplHRTFRelease(&m_hrtf);
-		}
-
-		if (m_context)
-		{
-			m_api.iplContextRelease(&m_context);
-		}
 	}
 
 	void SetListener(const Listener &listener) override
@@ -224,11 +156,6 @@ public:
 
 	VoiceHandle CreateVoice() override
 	{
-		if (!m_hrtf)
-		{
-			return INVALID_VOICE;
-		}
-
 		for (int i = 0; i < MAX_VOICES; ++i)
 		{
 			Voice &voice = m_voices[i];
@@ -257,25 +184,22 @@ public:
 			voice.inUse = true;
 			return static_cast<VoiceHandle>(i + 1);
 		}
-
 		return INVALID_VOICE;
 	}
 
 	void ReleaseVoice(VoiceHandle handle) override
 	{
-		Voice *const voice = FindVoice(handle);
-		if (voice)
+		if (Voice *const voice = FindVoice(handle))
 		{
 			voice->inUse = false;
 		}
 	}
 
-	void Process(VoiceHandle handle, const Vec3 &origin, const float *monoIn,
-				 float *outLeft, float *outRight, int frames) override
+	void Process(VoiceHandle handle, const Vec3 &origin, const float *monoIn, float *outLeft, float *outRight) override
 	{
+		const int frames = m_audioSettings.frameSize;
 		const Voice *const voice = FindVoice(handle);
-		// Steam Audio's effects only accept the frame size they were created with.
-		if (!voice || frames != m_audioSettings.frameSize)
+		if (!voice)
 		{
 			std::fill_n(outLeft, frames, 0.0f);
 			std::fill_n(outRight, frames, 0.0f);
@@ -309,7 +233,6 @@ private:
 		{
 			return nullptr;
 		}
-
 		Voice &voice = m_voices[handle - 1];
 		return voice.inUse ? &voice : nullptr;
 	}
@@ -326,14 +249,15 @@ private:
 
 } // namespace
 
-ISpatializer *CreateSteamAudioSpatializer(const char *phononLibraryPath, char *errorOut, int errorLen)
+ISpatializer *CreateSteamAudioSpatializer(const char *phononLibraryPath, int sampleRate, int frameSize,
+										  char *errorOut, int errorLen)
 {
 	const LibraryHandle library = OpenLibrary(phononLibraryPath);
 	if (!library)
 	{
 		char loaderError[LOADER_ERROR_LEN];
-		FormatLastLoaderError(loaderError, LOADER_ERROR_LEN);
-		WriteError(errorOut, errorLen, "Failed to load %s: %s", phononLibraryPath, loaderError);
+		FormatLoaderError(loaderError, LOADER_ERROR_LEN);
+		snprintf(errorOut, errorLen, "failed to load %s: %s", phononLibraryPath, loaderError);
 		return nullptr;
 	}
 
@@ -342,14 +266,21 @@ ISpatializer *CreateSteamAudioSpatializer(const char *phononLibraryPath, char *e
 	api.name = reinterpret_cast<decltype(api.name)>(FindSymbol(library, #name)); \
 	if (!api.name) \
 	{ \
-		WriteError(errorOut, errorLen, "%s does not export " #name, phononLibraryPath); \
+		snprintf(errorOut, errorLen, "%s does not export " #name, phononLibraryPath); \
 		CloseLibrary(library); \
 		return nullptr; \
 	}
 	NEO_PHONON_FUNCTIONS(NEO_PHONON_RESOLVE)
 #undef NEO_PHONON_RESOLVE
 
-	return new CSteamAudioSpatializer(library, api);
+	// From here the spatializer owns the library and releases whatever Init created.
+	CSteamAudioSpatializer *const spatializer = new CSteamAudioSpatializer(library, api);
+	if (!spatializer->Init(sampleRate, frameSize, errorOut, errorLen))
+	{
+		delete spatializer;
+		return nullptr;
+	}
+	return spatializer;
 }
 
 } // namespace NeoSpatial

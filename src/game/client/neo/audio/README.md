@@ -5,80 +5,68 @@ world sounds — without touching the closed-source Source engine mixer.
 
 ## Why it is built this way
 
-The engine (`engine.dll` / `engine.so`) owns the mixer and plays most sounds on its own, including
-every sound the server starts, so `client.dll` never sees an audio buffer. What the client *can*
-do through public interfaces is:
+The engine owns the mixer and plays most sounds itself, including every sound the server starts,
+so `client.dll` never sees an audio buffer. Through public interfaces the client can:
 
-- see every active engine channel each frame: `IEngineSound::GetActiveSounds()` returns guid,
-  filename handle, source entity, origin, volume, pitch and flags for all channels, including
-  server-started sounds;
-- silence any one of them: `IEngineSound::SetVolumeByGuid()`;
-- read the sound files itself: `IFileSystem` sees the same `sound/` tree (VPKs and the mounted
-  original NEOTOKYO content) the engine plays from;
-- output audio itself: `miniaudio` is already vendored for the MP3 player.
+- see every active engine channel each frame (`IEngineSound::GetActiveSounds()`: guid, file,
+  source entity, origin, volume, pitch, flags), including server-started sounds;
+- silence any one of them (`IEngineSound::SetVolumeByGuid()`);
+- read the same `sound/` files through `IFileSystem`, and output audio through the vendored
+  `miniaudio`.
 
-So the proof of concept re-renders positional sounds in parallel: poll the engine's channel
-list, mute the engine's copy, decode the same file, and play it through a second output device
-with HRTF applied. Non-positional sounds (UI, music, sentences, the local player's own weapon)
-are left to the engine.
+So positional sounds are re-rendered in parallel: poll the channel list, mute the engine's copy,
+decode the same file and play it through a second output device with HRTF applied.
+Non-positional sounds (UI, music, sentences, the local player's own weapon) stay with the engine.
 
 ```
-engine mixer  ──GetActiveSounds()──►  CNeoHrtfSystem (game thread, once per frame)
-      ▲                                   │  new guid: resolve file, decode+cache, SetVolumeByGuid(0)
-      │ SetVolumeByGuid(guid, 0)          │  every frame: entity/origin → metres, gain, pitch, listener
-      └───────────────────────────────────┤
-                                          ▼  (mutex-guarded voice table)
-                               miniaudio ma_device callback (audio thread)
-                                          │  per 512-frame block, per voice:
-                                          ▼
-                     NeoSpatial::ISpatializer  (neo_spatializer.h — the only contract)
-                        ├── neo_spatializer_steamaudio.cpp   Steam Audio binaural effect
-                        └── neo_spatializer_panner.cpp       constant-power pan (reference / fallback)
+engine mixer ──GetActiveSounds()──► CNeoHrtfSystem (game thread, once per frame)
+     ▲                                  │ new guid: resolve file, decode + cache, mute engine copy
+     └──── SetVolumeByGuid(guid, 0) ────┤ every frame: origin → metres, gain, pitch, listener
+                                        ▼ (one mutex-guarded voice table)
+                         miniaudio device callback (audio thread), per 512-frame block per voice
+                                        ▼
+                  NeoSpatial::ISpatializer (neo_spatializer.h) ── neo_spatializer_steamaudio.cpp
 ```
-
-## Separation of concerns
 
 | Layer | Files | Knows about |
 | --- | --- | --- |
-| Game integration | `neo_hrtf_system.{h,cpp}` | Source SDK (engine sound list, entities, filesystem, view, cvars), miniaudio decode/output |
-| Contract | `neo_spatializer.h` | nothing but plain C++ (metres, Source axes, mono-in/stereo-out float blocks) |
-| Steam Audio backend | `neo_spatializer_steamaudio.cpp` | `phonon.h` only; loads `libphonon.so` / `phonon.dll` at runtime |
-| Reference backend | `neo_spatializer_panner.cpp` | nothing |
-| Dependency | `src/thirdparty/steamaudio/` (headers), `src/cmake/steamaudio.cmake` (runtime library download/copy) | Steam Audio release artefacts |
+| Game integration | `neo_hrtf_system.{h,cpp}` | Source SDK, miniaudio decode/output |
+| Contract | `neo_spatializer.h` | plain C++ only (metres, Source axes, float blocks) |
+| Backend | `neo_spatializer_steamaudio.cpp` | `phonon.h`; loads `libphonon.so` / `phonon.dll` at runtime |
+| Dependency | `src/cmake/steamaudio.cmake` | fetches the pinned SDK zip: headers + runtime library |
 
-The backends have no Source SDK dependency, so they are compiled outside the unity build and
-without the client PCH, and the same two files are built into an offline demo
-(`ntre/harness/hrtf/`) that renders test wavs without the game. Steam Audio is never linked:
-a missing or incompatible `phonon` library produces a warning and the panner takes over.
-Upgrading Steam Audio is a URL/hash bump plus a header recopy (see
-`src/thirdparty/steamaudio/README.md` and `NEO-INTEGRATION.md` in the sibling `steam-audio`
-checkout).
+The backend has no Source SDK dependency, so it is built outside the unity build and PCH, and the
+same file builds into an offline demo (`ntre/harness/hrtf/`). Steam Audio is never linked: if the
+library is missing or fails to initialise, HRTF stays off with one warning (also shown by
+`cl_neo_hrtf_debug 1`) and engine audio is untouched. Occlusion would extend the contract with
+scene geometry.
 
 ## Trying it
 
-1. Build normally. CMake downloads the Steam Audio 4.8.1 release once and copies the runtime
-   library next to `client` in `game/neo/bin/<plat>/` (`NEO_STEAMAUDIO=OFF` builds without it;
-   `NEO_STEAMAUDIO_SDK_PATH` points at a local SDK/built tree instead of downloading).
-2. In game, with headphones: `cl_neo_hrtf 1`. `cl_neo_hrtf_status` shows which backend loaded.
-3. A/B: `cl_neo_hrtf_backend panner` vs `steamaudio` (re-run `cl_neo_hrtf 1` to re-init),
-   `cl_neo_hrtf_mute_engine 0` to hear the engine's own copy as well, `cl_neo_hrtf_debug 1`
-   for a per-voice readout. Player pings (`)gameplay/ping.wav` at a world position) and bots
-   firing are easy sources.
+1. Build normally. CMake fetches the Steam Audio 4.8.1 SDK once and copies its library next to
+   `client` (`NEO_STEAMAUDIO=OFF` builds without HRTF; `NEO_STEAMAUDIO_SDK_PATH` uses a local SDK).
+2. In game, with headphones: `cl_neo_hrtf 1`; A/B against the engine's own panning with
+   `cl_neo_hrtf 0`. `cl_neo_hrtf_debug 1` overlays the status and a line per voice. Player pings
+   and bots firing are easy sources.
+
+## Updating Steam Audio
+
+The `steam-audio` repo is kept as an untouched sibling mirror of `ValveSoftware/steam-audio`
+(fast-forward it to take upstream). neo consumes only the release artefacts: bump the URL and
+SHA256 in `src/cmake/steamaudio.cmake` and rebuild. A renamed phonon function shows up as a named
+missing symbol in the load error, not as a compile break in game code. To debug inside Steam
+Audio, build it from that checkout (`core/doc/build-instructions.rst`: `get_dependencies.py`,
+then `cmake --build ... --target install`) and configure neo with
+`-DNEO_STEAMAUDIO_SDK_PATH=<tree with include/ and lib/<plat>/>`.
 
 ## Known limitations of the proof of concept
 
-- The engine's copy plays for up to one client frame before it is muted (the poll runs once per
-  frame), so the attack of a sound is briefly doubled. Hooking emission earlier would need
-  engine code; a `C_BaseEntity::EmitSound` hook would only catch client-emitted sounds.
-- Distance attenuation re-implements the engine's linear sound-level model from the sound
-  script's `soundlevel`; sounds played by raw filename fall back to `SNDLVL_NORM`. Engine DSP,
-  ducking, `snd_surround` and room reverb do not apply to the HRTF copy.
-- Occlusion / propagation is not wired up: `ISpatializer::SetSceneGeometry()` is reserved for
-  feeding the map's collision mesh (`vcollide` of the world model) into an `IPLStaticMesh`.
-- The first play of each file decodes it synchronously on the game thread (a small hitch per
-  new sound per map); precaching at level start or decoding on a worker thread is the fix.
-- One mutex guards the voice table for both the game thread and the audio callback, so a frame
-  can wait on a full block render and vice versa. Fine at 32 voices for a PoC; the clean fix
-  is POD double-buffering of per-voice parameters and deferring backend voice create/release
-  to the audio thread.
+- The engine's copy plays for up to one frame before it is muted, briefly doubling the attack.
+  Muting at emission would need engine code.
+- Distance attenuation re-implements the engine's model from the sound script's `soundlevel`
+  (raw filenames use `SNDLVL_NORM`); engine DSP, ducking and room reverb do not apply.
+- No occlusion or propagation.
+- The first play of each file decodes on the game thread (a small hitch per new sound per map).
+- One mutex guards the voice table for both threads, so a frame can wait on a block render and
+  vice versa; POD double-buffering of voice parameters is the clean fix.
 - MP3 player music is out of scope by design.

@@ -1,8 +1,10 @@
-# NEO HRTF: Steam Audio runtime library for the client's HRTF spatializer.
+# NEO HRTF: Steam Audio SDK for the client's HRTF spatializer.
 #
-# The client only vendors the public headers (thirdparty/steamaudio) and loads the library at
-# runtime, so all this does is obtain the prebuilt SDK and copy its platform library next to the
-# game libraries. See thirdparty/steamaudio/README.md for upgrading.
+# Only the public headers are compiled against; the client loads the library at runtime (never
+# links it), so all this does is obtain the prebuilt SDK, expose its include/ directory and copy
+# its platform library next to the game libraries. The release zip is pinned by URL and SHA256:
+# upgrading Steam Audio is bumping both. NEO_STEAMAUDIO_SDK_PATH points at a local SDK root
+# (containing include/ and lib/, e.g. a build of ValveSoftware/steam-audio) instead.
 
 if(NEO_STEAMAUDIO_SDK_PATH)
     set(STEAMAUDIO_SDK_DIR "${NEO_STEAMAUDIO_SDK_PATH}")
@@ -21,6 +23,8 @@ else()
 
     set(STEAMAUDIO_SDK_DIR "${steamaudio_SOURCE_DIR}")
 endif()
+
+set(STEAMAUDIO_INCLUDE_DIR "${STEAMAUDIO_SDK_DIR}/include")
 
 # TrueAudioNext.dll and GPUUtilities.dll ship alongside phonon.dll but are only used for
 # GPU convolution, which the binaural effect does not need.

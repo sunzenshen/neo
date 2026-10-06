@@ -1,22 +1,15 @@
-// NEO HRTF: backend-neutral spatializer contract.
-//
-// This header is the whole boundary between NT;RE and any spatial-audio library.
-// It deliberately has no Source SDK dependencies (no Vector, no tier0), so a backend
-// implementation can be built and tested outside the game, and a library upgrade
-// (e.g. a new Steam Audio release) never touches game code.
+// NEO HRTF: backend-neutral spatializer contract, the whole boundary between NT;RE and a
+// spatial-audio library. It has no Source SDK dependencies, so a backend builds and tests outside
+// the game and a library upgrade never touches game code.
 //
 // Conventions
-//  - Coordinates are in the Source engine's world frame (right-handed, +Z up,
-//    x/y horizontal) but scaled to METRES. The game layer converts units; the
-//    backend converts axes to whatever its library expects.
-//  - Audio is mono-in, stereo-out, 32-bit float, non-interleaved, one block of
-//    `frameSize` frames per Process() call at the sample rate given to Init().
-//  - Threading: Init/Shutdown/CreateVoice/ReleaseVoice are called from the game
-//    thread. SetListener/Process are called from the audio (mixer) thread. The game
-//    layer guarantees these never overlap for one backend instance.
-//  - Process() OVERWRITES outLeft/outRight with the spatialised signal at unity
-//    gain. Distance attenuation and volume are the game layer's job, so the
-//    distance model can be tuned (or swapped) without touching a backend.
+//  - Positions are in Source's world frame (+Z up) scaled to METRES; the backend converts axes.
+//  - Audio is mono-in, stereo-out, 32-bit float, non-interleaved, in blocks of the frame size
+//    the backend was created with.
+//  - Creation, destruction, CreateVoice and ReleaseVoice run on the game thread; SetListener and
+//    Process on the audio thread. The caller guarantees they never overlap.
+//  - Process() OVERWRITES the outputs at unity gain: distance attenuation and volume are the
+//    caller's, so the distance model can change without touching a backend.
 #pragma once
 
 #include <cstdint>
@@ -45,46 +38,21 @@ class ISpatializer
 public:
 	virtual ~ISpatializer() {}
 
-	// Short identifier for cvars / debug output ("steamaudio", "panner").
-	virtual const char *GetName() const = 0;
-
-	// Returns false and fills errorOut (NUL-terminated, up to errorLen) on failure.
-	virtual bool Init(int sampleRate, int frameSize, char *errorOut, int errorLen) = 0;
-	virtual void Shutdown() = 0;
-
 	virtual void SetListener(const Listener &listener) = 0;
 
-	// A voice holds per-source filter state (e.g. HRTF crossfade history).
+	// A voice holds per-source filter state (e.g. HRTF interpolation history).
 	virtual VoiceHandle CreateVoice() = 0;
 	virtual void ReleaseVoice(VoiceHandle voice) = 0;
 
-	// Spatialise one block. `origin` is the source position in the same frame as the
-	// listener. `frames` equals the frameSize passed to Init().
+	// Spatialise one block. `origin` is the source position in the listener's frame of reference.
 	virtual void Process(VoiceHandle voice, const Vec3 &origin, const float *monoIn,
-						 float *outLeft, float *outRight, int frames) = 0;
-
-	// Optional: world geometry for occlusion/propagation. Triangle indices are
-	// 0-based into `vertices` (xyz triples, metres). Backends without geometry
-	// support ignore it. Called from the game thread while no voices exist.
-	virtual void SetSceneGeometry(const float *vertices, int numVertices,
-								  const uint32_t *triangles, int numTriangles)
-	{
-		(void)vertices; (void)numVertices; (void)triangles; (void)numTriangles;
-	}
+						 float *outLeft, float *outRight) = 0;
 };
 
-// Factories. Each backend lives in its own translation unit; only that unit includes
-// the third-party library's headers.
-//
-// Steam Audio: `phononLibraryPath` is the absolute path of phonon.dll / libphonon.so.
-// The library is loaded at runtime (never linked), so a missing or broken library
-// returns nullptr and the game keeps running with another backend.
-ISpatializer *CreateSteamAudioSpatializer(const char *phononLibraryPath, char *errorOut, int errorLen);
-
-// Reference backend: constant-power stereo panning, no HRTF. Useful for A/B
-// listening and for exercising the pipeline where phonon is unavailable.
-ISpatializer *CreatePannerSpatializer();
-
-void DestroySpatializer(ISpatializer *spatializer);
+// Loads phonon.dll / libphonon.so from `phononLibraryPath` at runtime (it is never linked) and
+// initialises it. Returns nullptr and fills errorOut on failure, so a missing or incompatible
+// library only disables HRTF. Destroy the result with delete.
+ISpatializer *CreateSteamAudioSpatializer(const char *phononLibraryPath, int sampleRate, int frameSize,
+										  char *errorOut, int errorLen);
 
 } // namespace NeoSpatial

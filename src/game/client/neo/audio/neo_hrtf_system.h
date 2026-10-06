@@ -2,7 +2,7 @@
 // NeoSpatial::ISpatializer backend. The engine mixer is closed source, so instead of
 // hooking it this system polls the engine's channel list once per frame, mutes the
 // engine's copy of each positional sound and plays its own spatialised copy on a
-// separate miniaudio output device. See neo_hrtf_system.cpp for the per-frame flow.
+// separate miniaudio output device.
 #pragma once
 
 #include "igamesystem.h"
@@ -24,20 +24,15 @@ public:
 	static constexpr int kSampleRate = 48000;
 	static constexpr int kFrameSize = 512;
 	static constexpr int kMaxVoices = 32;
+	static constexpr int kMaxErrorLen = 256;
 
-	CNeoHrtfSystem();
+	CNeoHrtfSystem() : CAutoGameSystemPerFrame("CNeoHrtfSystem") {}
 
 	void Shutdown() override;
 	void LevelInitPostEntity() override;
 	void LevelShutdownPreEntity() override;
 	void LevelShutdownPostEntity() override;
 	void Update(float frametime) override;
-
-	// Applied on the next Update, from the game thread, so cvar callbacks never touch
-	// the device or the spatializer directly.
-	void RequestRestart() { m_bRestartPending = true; }
-
-	void PrintStatus() const;
 
 	// Audio thread entry point (miniaudio data callback).
 	void Render(float *pOutInterleaved, int frameCount);
@@ -66,8 +61,7 @@ private:
 		// Game thread only.
 		bool m_bInUse = false;
 		int m_guid = 0;
-		float m_sourceVolume = 0.0f; // engine channel volume before we muted it
-		bool m_bEngineMuted = false;
+		float m_sourceVolume = 0.0f; // engine channel volume before we muted it, restored on release
 		bool m_bSeenThisPoll = false;
 
 		// Set by the game thread under m_mutex while the voice is created or released.
@@ -87,22 +81,18 @@ private:
 		int m_voiceIndex; // slot it was given, -1 if the backend refused a voice
 	};
 
-	bool StartDevice();
+	void StartDevice();
 	void StopDevice();
 	void ReleaseAllVoices();
-	NeoSpatial::ISpatializer *CreateConfiguredSpatializer() const;
+	void PollEngineSounds();
 
-	bool IsSpatialCandidate(const SndInfo_t &info, int localPlayerIndex) const;
 	const CachedSound *FindOrLoadSound(const SndInfo_t &info);
 	void LoadSound(CachedSound &sound);
 	float LookupDistMult(const char *pszNormalisedName);
-	void BuildSoundLevelMap();
 
 	VoiceParams ComputeParams(const SndInfo_t &info, float sourceVolume, const CachedSound &sound,
 							  float outputScale) const;
-	static void UpdateEngineMute(Voice &voice, const SndInfo_t &info);
 	int FindVoice(int guid) const;
-	bool IsIgnored(int guid) const;
 	void PrintDebug() const;
 
 	void RenderBlock();
@@ -111,15 +101,12 @@ private:
 	// Game thread state.
 	ma_device *m_pDevice = nullptr;
 	NeoSpatial::ISpatializer *m_pSpatializer = nullptr;
-	bool m_bRestartPending = false;
-	bool m_bStartFailed = false;
+	char m_szStartError[kMaxErrorLen] = ""; // why the last start failed; non-empty blocks retries until re-enabled
 	CUtlVector<SndInfo_t> m_activeSounds;
 	CUtlVector<int> m_ignoredGuids; // sounds deliberately left to the engine, rechecked by guid only
 	CUtlVector<int> m_ignoredGuidsNext;
 	CUtlDict<CachedSound *, int> m_cache;
 	CUtlDict<soundlevel_t, int> m_soundLevels; // normalised wave name → loudest scripted level
-	bool m_bSoundLevelsBuilt = false;
-	CUtlVector<uint8> m_fileBuffer;
 	VoiceParams m_stagedParams[kMaxVoices];
 	PendingVoice m_pending[kMaxVoices];
 	Vector m_listenerOrigin;
