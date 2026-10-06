@@ -108,6 +108,15 @@ void HrtfNormaliseSoundName(const char *pszName, char *pszOut, int outSize)
 	}
 }
 
+// Streams are not cached; omni sounds are non-directional by design; doppler, directional
+// and distance-variant sounds are encoded stereo pairs rather than mono sources.
+bool HrtfIsEngineOnlyName(const char *pszRawName)
+{
+	return TestSoundChar(pszRawName, CHAR_STREAM) || TestSoundChar(pszRawName, CHAR_OMNI)
+		|| TestSoundChar(pszRawName, CHAR_DOPPLER) || TestSoundChar(pszRawName, CHAR_DIRECTIONAL)
+		|| TestSoundChar(pszRawName, CHAR_DISTVARIANT);
+}
+
 bool HrtfIsDecodable(const char *pszName)
 {
 	const char *pszExt = V_GetFileExtension(pszName);
@@ -135,8 +144,7 @@ void HrtfDataCallback(ma_device *pDevice, void *pOutput, const void *pInput, ma_
 static void OnNeoHrtfConfigChanged(IConVar *pVar, const char *pOldValue, float flOldValue);
 
 ConVar cl_neo_hrtf("cl_neo_hrtf", "0", FCVAR_CLIENTDLL | FCVAR_ARCHIVE,
-	"Re-render positional sounds with HRTF (proof of concept). Turning it off stops the HRTF output; "
-	"engine copies muted while it was on stay muted until they end.", true, 0.0f, true, 1.0f, OnNeoHrtfConfigChanged);
+	"Re-render positional sounds with HRTF (proof of concept)", true, 0.0f, true, 1.0f, OnNeoHrtfConfigChanged);
 ConVar cl_neo_hrtf_backend("cl_neo_hrtf_backend", "steamaudio", FCVAR_CLIENTDLL | FCVAR_ARCHIVE,
 	"HRTF spatializer backend: steamaudio or panner (falls back to panner if Steam Audio fails to load)",
 	OnNeoHrtfConfigChanged);
@@ -174,10 +182,29 @@ void CNeoHrtfSystem::Shutdown()
 	m_bSoundLevelsBuilt = false;
 }
 
+void CNeoHrtfSystem::LevelInitPostEntity()
+{
+	// Maps can add level_sounds scripts, so rebuild the level map against this map's scripts.
+	m_soundLevels.Purge();
+	m_bSoundLevelsBuilt = false;
+}
+
 void CNeoHrtfSystem::LevelShutdownPreEntity()
 {
 	ReleaseAllVoices();
 	m_ignoredGuids.RemoveAll();
+}
+
+void CNeoHrtfSystem::LevelShutdownPostEntity()
+{
+	// Cached sounds bake in this map's sound levels, so they do not outlive it.
+#ifdef DBGFLAG_ASSERT
+	for (const Voice &voice : m_voices)
+	{
+		Assert(!voice.m_bInUse);
+	}
+#endif
+	m_cache.PurgeAndDeleteElements();
 }
 
 void CNeoHrtfSystem::Update(float frametime)
@@ -402,6 +429,15 @@ void CNeoHrtfSystem::StopDevice()
 
 void CNeoHrtfSystem::ReleaseAllVoices()
 {
+	// Hand still-playing sounds back to the engine; a no-op for guids that already ended.
+	for (const Voice &voice : m_voices)
+	{
+		if (voice.m_bInUse && voice.m_bEngineMuted)
+		{
+			enginesound->SetVolumeByGuid(voice.m_guid, voice.m_sourceVolume);
+		}
+	}
+
 	AUTO_LOCK(m_mutex);
 	for (Voice &voice : m_voices)
 	{
@@ -468,7 +504,7 @@ bool CNeoHrtfSystem::IsSpatialCandidate(const SndInfo_t &info, int localPlayerIn
 const CNeoHrtfSystem::CachedSound *CNeoHrtfSystem::FindOrLoadSound(const SndInfo_t &info)
 {
 	char rawName[MAX_PATH];
-	if (!filesystem->String(info.m_filenameHandle, rawName, sizeof(rawName)) || TestSoundChar(rawName, CHAR_STREAM))
+	if (!filesystem->String(info.m_filenameHandle, rawName, sizeof(rawName)) || HrtfIsEngineOnlyName(rawName))
 	{
 		return nullptr;
 	}
@@ -483,7 +519,7 @@ const CNeoHrtfSystem::CachedSound *CNeoHrtfSystem::FindOrLoadSound(const SndInfo
 	int index = m_cache.Find(name);
 	if (index == m_cache.InvalidIndex())
 	{
-		// Failures are cached too (empty samples), so a bad file is only read once per session.
+		// Failures are cached too (empty samples), so a bad file is only read once per level.
 		CachedSound *pSound = new CachedSound;
 		pSound->m_name = name;
 		LoadSound(*pSound);
@@ -505,8 +541,12 @@ void CNeoHrtfSystem::LoadSound(CachedSound &sound)
 		return;
 	}
 	const int fileSize = static_cast<int>(filesystem->Size(hFile));
-	m_fileBuffer.SetCount(fileSize);
-	const int bytesRead = filesystem->Read(m_fileBuffer.Base(), fileSize, hFile);
+	int bytesRead = 0;
+	if (fileSize > 0)
+	{
+		m_fileBuffer.SetCount(fileSize);
+		bytesRead = filesystem->Read(m_fileBuffer.Base(), fileSize, hFile);
+	}
 	filesystem->Close(hFile);
 	if (fileSize <= 0 || bytesRead != fileSize)
 	{
@@ -542,6 +582,7 @@ void CNeoHrtfSystem::LoadSound(CachedSound &sound)
 		const int loopStart = HrtfParseWavLoopStart(m_fileBuffer.Base(), fileSize);
 		sound.m_loopStart = (loopStart < sound.m_samples.Count()) ? loopStart : -1;
 	}
+	m_fileBuffer.Purge();
 	sound.m_distMult = LookupDistMult(sound.m_name.Get());
 }
 
@@ -599,18 +640,10 @@ void CNeoHrtfSystem::BuildSoundLevelMap()
 CNeoHrtfSystem::VoiceParams CNeoHrtfSystem::ComputeParams(const SndInfo_t &info, float sourceVolume,
 														  const CachedSound &sound, float outputScale) const
 {
+	// The engine refreshes this every frame for channels that follow their entity
+	// (GetSoundSpatialization), so it already tracks moving players.
 	Assert(info.m_pOrigin);
-	Vector position = *info.m_pOrigin;
-	// m_bUpdatePositions is the engine's own "follows its entity" flag; without it the
-	// origin is explicit (e.g. an impact point) and must not snap to the emitting entity.
-	if (info.m_bUpdatePositions && info.m_nSoundSource > 0)
-	{
-		C_BaseEntity *pEntity = ClientEntityList().GetEnt(info.m_nSoundSource);
-		if (pEntity && !pEntity->IsDormant())
-		{
-			position = pEntity->GetAbsOrigin();
-		}
-	}
+	const Vector &position = *info.m_pOrigin;
 
 	// The engine's inverse-distance model (see kHrtfEngineRefDb), so audible ranges match
 	// the engine's own copy. Below snd_gain_min the engine stops mixing the channel.
@@ -733,13 +766,15 @@ void CNeoHrtfSystem::RenderBlock()
 			}
 			voice.m_bFinished = !ReadVoiceSamples(voice);
 
+			// Process even inaudible voices: skipping would freeze the backend's filter
+			// history and click when the voice becomes audible again.
+			m_pSpatializer->Process(voice.m_hSpatial, voice.m_params.m_origin, m_scratchMono,
+				m_scratchLeft, m_scratchRight, kFrameSize);
 			const float gain = voice.m_params.m_gain;
 			if (gain <= 0.0f)
 			{
 				continue;
 			}
-			m_pSpatializer->Process(voice.m_hSpatial, voice.m_params.m_origin, m_scratchMono,
-				m_scratchLeft, m_scratchRight, kFrameSize);
 			for (int f = 0; f < kFrameSize; ++f)
 			{
 				m_carry[f * kHrtfOutputChannels] += gain * m_scratchLeft[f];
@@ -778,7 +813,11 @@ bool CNeoHrtfSystem::ReadVoiceSamples(Voice &voice)
 
 		// Linear interpolation is enough for engine pitch shifts, which stay within an octave or so.
 		const int index = static_cast<int>(cursor);
-		const int nextIndex = (index + 1 < count) ? index + 1 : Max(loopStart, index);
+		int nextIndex = index + 1;
+		if (nextIndex >= count)
+		{
+			nextIndex = (loopStart >= 0) ? loopStart : index;
+		}
 		const float frac = static_cast<float>(cursor - index);
 		m_scratchMono[f] = pSamples[index] + (pSamples[nextIndex] - pSamples[index]) * frac;
 		cursor += rate;

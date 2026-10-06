@@ -893,8 +893,6 @@ if(NEO_STEAMAUDIO)
         neo/audio/neo_spatializer_panner.cpp
     )
 
-    target_compile_definitions(client PRIVATE NEO_STEAMAUDIO)
-
     target_sources_grouped(
         TARGET client
         NAME "HRTF"

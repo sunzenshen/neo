@@ -28,7 +28,9 @@ public:
 	CNeoHrtfSystem();
 
 	void Shutdown() override;
+	void LevelInitPostEntity() override;
 	void LevelShutdownPreEntity() override;
+	void LevelShutdownPostEntity() override;
 	void Update(float frametime) override;
 
 	// Applied on the next Update, from the game thread, so cvar callbacks never touch
