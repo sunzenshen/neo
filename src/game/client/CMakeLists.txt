@@ -885,6 +885,38 @@ target_sources_grouped(
     neo/neo_mp3player.h
 )
 
+if(NEO_STEAMAUDIO)
+    # NEO HRTF: The spatializer backends are plain C++ with no Source SDK headers, so they stay
+    # out of the cbase.h PCH and unity groups, and only the Steam Audio backend sees phonon.h.
+    set(NEO_SPATIALIZER_BACKEND_SOURCES
+        neo/audio/neo_spatializer_steamaudio.cpp
+        neo/audio/neo_spatializer_panner.cpp
+    )
+
+    target_compile_definitions(client PRIVATE NEO_STEAMAUDIO)
+
+    target_sources_grouped(
+        TARGET client
+        NAME "HRTF"
+        FILES
+        neo/audio/neo_spatializer.h
+        ${NEO_SPATIALIZER_BACKEND_SOURCES}
+    )
+
+    set_source_files_properties(
+        ${NEO_SPATIALIZER_BACKEND_SOURCES}
+        PROPERTIES
+            SKIP_UNITY_BUILD_INCLUSION ON
+            SKIP_PRECOMPILE_HEADERS ON
+    )
+
+    set_source_files_properties(
+        neo/audio/neo_spatializer_steamaudio.cpp
+        PROPERTIES
+            INCLUDE_DIRECTORIES ${CMAKE_SOURCE_DIR}/thirdparty/steamaudio/include
+    )
+endif()
+
 target_sources_grouped(
     TARGET client
     NAME "Tool Framework"
