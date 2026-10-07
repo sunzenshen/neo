@@ -4784,6 +4784,61 @@ bool CNEORules::FPlayerCanRespawn(CBasePlayer* pPlayer)
 	return false;
 }
 
+// NEO-HARNESS-TEMP: spawn every bot of a team at one point (spread on a small ring), so a ladder,
+// stairway or other spot can be put on every bot's route from the first second of the round
+ConVar sv_neo_harness_spawn_jinrai("sv_neo_harness_spawn_jinrai", "", FCVAR_CHEAT,
+	"NEO harness debug: \"x y z [yaw]\" spawns every Jinrai player near there. Empty disables.");
+ConVar sv_neo_harness_spawn_nsf("sv_neo_harness_spawn_nsf", "", FCVAR_CHEAT,
+	"NEO harness debug: \"x y z [yaw]\" spawns every NSF player near there. Empty disables.");
+ConVar sv_neo_harness_spawn_ring("sv_neo_harness_spawn_ring", "40", FCVAR_CHEAT,
+	"NEO harness debug: radius of the ring the overridden spawns are spread on.", true, 0.0f, true, 256.0f);
+
+// NEO-HARNESS-TEMP: six slots on the ring, so a team of six never shares a spot
+static constexpr int HARNESS_SPAWN_RING_SLOTS = 6;
+
+static void ApplyHarnessSpawnOverride(CBasePlayer *pPlayer)
+{
+	const int iTeam = pPlayer->GetTeamNumber();
+	const ConVar *pVar = (iTeam == TEAM_JINRAI) ? &sv_neo_harness_spawn_jinrai
+		: (iTeam == TEAM_NSF) ? &sv_neo_harness_spawn_nsf : nullptr;
+	if (!pVar || !pVar->GetString()[0])
+	{
+		return;
+	}
+
+	float x = 0.0f, y = 0.0f, z = 0.0f, yaw = 0.0f;
+	const int iParsed = sscanf(pVar->GetString(), "%f %f %f %f", &x, &y, &z, &yaw);
+	if (iParsed < 3)
+	{
+		Warning("%s: expected \"x y z [yaw]\", ignored\n", pVar->GetName());
+		return;
+	}
+
+	// a per-team slot counter; the hull trace keeps a ring point that would be inside a wall short of it
+	static int s_iSlot[MAX_TEAMS] = {};
+	const int iSlot = s_iSlot[iTeam]++ % HARNESS_SPAWN_RING_SLOTS;
+	const float flAngle = DEG2RAD(iSlot * (360.0f / HARNESS_SPAWN_RING_SLOTS));
+	const float flRadius = sv_neo_harness_spawn_ring.GetFloat();
+	const Vector vecCenter(x, y, z + 1.0f);
+	const Vector vecRing = vecCenter + Vector(cosf(flAngle) * flRadius, sinf(flAngle) * flRadius, 0.0f);
+
+	trace_t tr;
+	UTIL_TraceHull(vecCenter, vecRing, VEC_HULL_MIN, VEC_HULL_MAX, MASK_PLAYERSOLID, pPlayer, COLLISION_GROUP_PLAYER_MOVEMENT, &tr);
+	const Vector vecSpawn = tr.startsolid ? vecCenter : tr.endpos;
+
+	pPlayer->SetLocalOrigin(vecSpawn);
+	pPlayer->SetAbsVelocity(vec3_origin);
+	if (iParsed == 4)
+	{
+		const QAngle angSpawn(0, yaw, 0);
+		pPlayer->SetLocalAngles(angSpawn);
+		pPlayer->SnapEyeAngles(angSpawn);
+	}
+
+	Msg("NEO_HARNESS_SPAWN: p=%d team=%d slot=%d pos=%.0f,%.0f,%.0f\n",
+		pPlayer->entindex(), iTeam, iSlot, vecSpawn.x, vecSpawn.y, vecSpawn.z);
+}
+
 CBaseEntity *CNEORules::GetPlayerSpawnSpot(CBasePlayer *pPlayer)
 {
 	// NEO NOTE (nullsystem): If available + DM, instead of by entity, player spawn
@@ -4801,7 +4856,9 @@ CBaseEntity *CNEORules::GetPlayerSpawnSpot(CBasePlayer *pPlayer)
 		return nullptr;
 	}
 
-	return BaseClass::GetPlayerSpawnSpot(pPlayer);
+	CBaseEntity *pSpot = BaseClass::GetPlayerSpawnSpot(pPlayer);
+	ApplyHarnessSpawnOverride(pPlayer);	// NEO-HARNESS-TEMP
+	return pSpot;
 }
 
 #endif
