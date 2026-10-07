@@ -127,4 +127,11 @@ private:
 	Entry m_entries[ MAX_ENTRIES ];
 };
 
+// NEO-HARNESS-TEMP research arm (2026-10-07): an approach that times out before the bot gets onto the ladder
+// counts as a failed climb (neo_bot_ladder_unreachable_skip), so a bot that cannot reach the ladder from where it stands
+// (crouched under a ladder whose foot hangs above its head) stops being sent back to it
+class CNEOBot;
+void NeoNoteLadderUnreachable( CNEOBot *me, const CNavLadder *ladder, bool bGoingUp );
+float NeoLadderUnreachableSkipTime();
+
 #endif // NEO_BOT_LADDER_MEMORY_H
