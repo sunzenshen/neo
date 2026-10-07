@@ -35,6 +35,7 @@ private:
 	const CNavLadder *m_ladder;
 	bool m_bGoingUp;
 	bool m_bOverTop;	// going down from behind a barrier at the ladder's top (UpdateOverTop)
+	bool m_bFlushTop;	// NEO-HARNESS-TEMP research arm (neo_bot_ladder_flush_top): over the top with no barrier, the floor level with it
 	Vector m_ladderCenter;
 	CountdownTimer m_timeoutTimer;
 	IntervalTimer m_pushTimer;	// patch 63: pushing into the ladder's foot since

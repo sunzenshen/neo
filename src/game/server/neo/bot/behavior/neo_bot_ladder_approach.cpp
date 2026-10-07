@@ -207,7 +207,7 @@ extern bool NEOHarnessLadderDescentOff( void );
 
 //---------------------------------------------------------------------------------------------
 CNEOBotLadderApproach::CNEOBotLadderApproach( const CNavLadder *ladder, bool goingUp )
-	: m_ladder( ladder ), m_bGoingUp( goingUp ), m_bOverTop( false ), m_vecLastProgressPos( vec3_origin ), m_flLastProgressTime( 0.0f )
+	: m_ladder( ladder ), m_bGoingUp( goingUp ), m_bOverTop( false ), m_bFlushTop( false ), m_vecLastProgressPos( vec3_origin ), m_flLastProgressTime( 0.0f )
 {
 	m_ladderCenter = ladder ? ( ladder->m_top + ladder->m_bottom ) * 0.5f : vec3_origin;
 }
@@ -236,6 +236,7 @@ ActionResult<CNEOBot> CNEOBotLadderApproach::OnStart( CNEOBot *me, Action<CNEOBo
 		// NEO-HARNESS-TEMP research arm: with neo_bot_ladder_flush_top, a floor up to a step above the top counts too
 		const float flBarrierRise = neo_bot_ladder_flush_top.GetBool() ? -mover->GetStepHeight() : mover->GetStepHeight();
 		m_bOverTop = bBehind && floorZ < m_ladder->m_top.z - flBarrierRise;
+		m_bFlushTop = m_bOverTop && floorZ >= m_ladder->m_top.z - mover->GetStepHeight();
 		if ( m_bOverTop )
 		{
 			m_timeoutTimer.Start( OVER_TOP_TIMEOUT );
@@ -608,6 +609,17 @@ ActionResult<CNEOBot> CNEOBotLadderApproach::UpdateOverTop( CNEOBot *me, const V
 	const Vector2D toFeet = ( feet - m_ladder->m_top ).AsVector2D();
 	const float side = toFeet.x * intoFace.y - toFeet.y * intoFace.x;
 	const float out = -DotProduct2D( toFeet, intoFace.AsVector2D() );
+
+	// NEO-HARNESS-TEMP research arm (neo_bot_ladder_flush_top v3): a flush top can still have something between the floor
+	// and the face (rise ladder 4), so a bot held behind the face goes back to the ordinary approach
+	if ( m_bFlushTop && out < 0.0f && gpGlobals->curtime - m_flLastProgressTime > NEO_LADDER_STALL_TIME )
+	{
+		NeoLogLadderApproach( me, m_ladder, m_bGoingUp, "flush top blocked" );
+		m_bOverTop = false;
+		mover->StopCatchingLadder();
+		m_flLastProgressTime = gpGlobals->curtime;
+		return Continue();
+	}
 	const float halfHull = me->GetBodyInterface()->GetHullWidth() * 0.5f;
 	const float rise = m_ladder->m_top.z - feet.z;
 	const bool bOnTop = rise <= mover->GetStepHeight();
