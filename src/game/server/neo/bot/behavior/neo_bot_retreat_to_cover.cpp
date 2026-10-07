@@ -185,6 +185,56 @@ public:
 };
 
 
+// NEO-HARNESS-TEMP research arm (2026-10-07): several bots retreating from one threat pick the same small cover area
+// and meet in the way there (sentinel_jgr crate aisle, cover area 3089). Skip a cover area a teammate stands in,
+// or one a teammate announced as its own retreat goal within the last few seconds.
+ConVar neo_bot_retreat_cover_claim( "neo_bot_retreat_cover_claim", "0", FCVAR_CHEAT,
+	"Research: a retreat skips cover areas a teammate occupies or is retreating to" );
+
+// A teammate's announced cover goal counts for this long
+static constexpr float NEO_COVER_CLAIM_TIME = 4.0f;
+
+struct NeoCoverClaim
+{
+	int iAreaID;
+	int iTeam;
+	float flExpire;
+};
+static NeoCoverClaim s_coverClaims[ MAX_PLAYERS + 1 ];
+
+static bool NeoCoverAreaTaken( CNEOBot *me, const CNavArea *area )
+{
+	for ( int i = 1; i <= gpGlobals->maxClients; ++i )
+	{
+		if ( i == me->entindex() )
+		{
+			continue;
+		}
+
+		const NeoCoverClaim &claim = s_coverClaims[ i ];
+		if ( claim.iAreaID == (int)area->GetID() && claim.iTeam == me->GetTeamNumber() && claim.flExpire > gpGlobals->curtime )
+		{
+			CBasePlayer *pClaimant = UTIL_PlayerByIndex( i );
+			if ( pClaimant && pClaimant->IsAlive() )
+			{
+				return true;
+			}
+		}
+	}
+
+	CUtlVector< CNEO_Player * > teammates;
+	CollectPlayers( &teammates, me->GetTeamNumber(), COLLECT_ONLY_LIVING_PLAYERS );
+	for ( CNEO_Player *pMate : teammates )
+	{
+		if ( pMate != me && pMate->GetLastKnownArea() == area )
+		{
+			return true;
+		}
+	}
+
+	return false;
+}
+
 //---------------------------------------------------------------------------------------------
 CNavArea *CNEOBotRetreatToCover::FindCoverArea( CNEOBot *me )
 {
@@ -196,6 +246,28 @@ CNavArea *CNEOBotRetreatToCover::FindCoverArea( CNEOBot *me )
 	if ( search.m_coverAreaVector.Count() == 0 )
 	{
 		return NULL;
+	}
+
+	if ( neo_bot_retreat_cover_claim.GetBool() )
+	{
+		// the closest 10 cover areas no teammate holds or is heading to; all taken, choose among them all as before
+		CUtlVector< CNavArea * > free;
+		for ( int i = 0; i < search.m_coverAreaVector.Count() && free.Count() < 10; ++i )
+		{
+			if ( !NeoCoverAreaTaken( me, search.m_coverAreaVector[ i ] ) )
+			{
+				free.AddToTail( search.m_coverAreaVector[ i ] );
+			}
+		}
+
+		CNavArea *pChoice = free.Count() > 0 ? free[ RandomInt( 0, free.Count() - 1 ) ]
+			: search.m_coverAreaVector[ RandomInt( 0, MIN( 10, search.m_coverAreaVector.Count() ) - 1 ) ];
+
+		NeoCoverClaim &claim = s_coverClaims[ me->entindex() ];
+		claim.iAreaID = pChoice->GetID();
+		claim.iTeam = me->GetTeamNumber();
+		claim.flExpire = gpGlobals->curtime + NEO_COVER_CLAIM_TIME;
+		return pChoice;
 	}
 
 	// first in vector should be closest via travel distance
