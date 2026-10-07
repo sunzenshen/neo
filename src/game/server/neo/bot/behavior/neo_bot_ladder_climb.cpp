@@ -30,12 +30,12 @@ static void NeoLogLadderBeh( CNEOBot *me, const char *beh, const CNavLadder *lad
 #define NEO_LADDER_DONE( reason ) ( NeoLogLadderBeh( me, "climb", m_ladder, m_bGoingUp, reason ), Done( reason ) )
 
 // NEO-HARNESS-TEMP research arm (2026-10-07, patch 134): the bot remembers a failed climb,
-// and on the second failure in a row drops its path so the next one routes around the ladder
+// and on the second failure in a row at one height drops its path so the next one routes around the ladder
 extern ConVar neo_bot_ladder_fail_skip;
 static void NeoNoteClimbFailed( CNEOBot *me, const CNavLadder *ladder, bool bGoingUp )
 {
 	const float flSkipTime = neo_bot_ladder_fail_skip.GetFloat();
-	if ( flSkipTime <= 0.0f || !me->GetLadderMemory()->OnClimbFailed( ladder, bGoingUp, flSkipTime ) )
+	if ( flSkipTime <= 0.0f || !me->GetLadderMemory()->OnClimbFailed( ladder, bGoingUp, me->GetLocomotionInterface()->GetFeet().z, flSkipTime ) )
 	{
 		return;
 	}
