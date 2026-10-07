@@ -43,8 +43,8 @@ static void NeoLogLadderEvent( CNEOBot *me, const char *beh, const CNavLadder *l
 }
 
 //---------------------------------------------------------------------------------------------
-// NEO-HARNESS-TEMP research arm (2026-09-23, patch 52)
-ConVar neo_bot_ladder_exit_closest( "neo_bot_ladder_exit_closest", "0", FCVAR_CHEAT,
+// NEO-HARNESS-TEMP research arm (2026-09-23, patch 52), on by default since 2026-10-07 (ridgeline ladder 1: top falls)
+ConVar neo_bot_ladder_exit_closest( "neo_bot_ladder_exit_closest", "1", FCVAR_CHEAT,
 	"Research: dismount towards the exit area's point nearest the ladder end instead of its centre" );
 
 // NEO-HARNESS-TEMP research arm (2026-09-24, patch 71): tell the locomotion's ladder state machine that this ladder is
