@@ -221,6 +221,12 @@ ConVar neo_bot_ladder_teleport_grab( "neo_bot_ladder_teleport_grab", "0", FCVAR_
 	"Research: the ladder climb's teleport fallback places the bot inside the engine's ladder grab distance" );
 static constexpr float NEO_LADDER_GRAB_DIST = 2.0f;	// CGameMovement::LadderDistance()
 
+// NEO-HARNESS-TEMP research arm (2026-10-07, on by default): on a turned ladder brush a half width off the line leaves the hull's corner in it
+// (ridgeline ladder 1: climbs stuck at the foot), so clear the corner, then slide in until the hull touches the face
+ConVar neo_bot_ladder_teleport_reach( "neo_bot_ladder_teleport_reach", "1", FCVAR_CHEAT,
+	"Research: the ladder climb's teleport fallback clears the hull's corners off a turned ladder face and then touches the face" );
+static constexpr float NEO_LADDER_TELEPORT_SEEK = 16.0f;	// how far towards the face the teleported hull is slid to find it
+
 // NEO-HARNESS-TEMP research arm (2026-09-24, patch 78): the locomotion drops its claim the moment the engine reports the bot
 // off the ladder, even for a tick; when the climb carries on and the engine re-attaches it, the locomotion sees a ladder it
 // never asked for, forces walking every update and after half a second adopts the ladder by its nearer end - mid-climb
@@ -318,6 +324,24 @@ ActionResult<CNEOBot> CNEOBotLadderClimb::OnStart( CNEOBot *me, Action<CNEOBot> 
 			float offsetDist = me->CollisionProp()->OBBSize().x / 2.0f + flFaceGap;
 			idealPos += m_ladder->GetNormal() * offsetDist;
 			idealPos.z = m_flLastZ;
+
+			// NEO-HARNESS-TEMP research arm (neo_bot_ladder_teleport_reach)
+			if ( neo_bot_ladder_teleport_reach.GetBool() )
+			{
+				const Vector &normal = m_ladder->GetNormal();
+				const float flHalf = me->CollisionProp()->OBBSize().x / 2.0f;
+				const float flReach = flHalf * ( fabsf( normal.x ) + fabsf( normal.y ) );
+				Vector clearPos = m_ladder->GetPosAtHeight( m_flLastZ ) + normal * ( flReach + flFaceGap );
+				clearPos.z = m_flLastZ;
+
+				trace_t trFace;
+				UTIL_TraceHull( clearPos, clearPos - normal * NEO_LADDER_TELEPORT_SEEK, me->WorldAlignMins(), me->WorldAlignMaxs(),
+					MASK_PLAYERSOLID, me, COLLISION_GROUP_PLAYER_MOVEMENT, &trFace );
+				if ( !trFace.startsolid )
+				{
+					idealPos = trFace.DidHit() ? trFace.endpos + normal * ( NEO_LADDER_GRAB_DIST * 0.5f ) : clearPos;
+				}
+			}
 
 			// Face perpendicularly straight on to the ladder (-normal)
 			Vector idealLookDir = -m_ladder->GetNormal();
