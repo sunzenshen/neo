@@ -68,6 +68,10 @@ static const float LADDER_CATCH_DESCENT_TIME = 0.2f;
 static const float LADDER_CATCH_OVERLAP = 4.0f;
 // The view must point at least this much into the face (cos 45 degrees) for forward to reach it.
 static const float LADDER_CATCH_FACING = 0.707f;
+// NEO-HARNESS-TEMP research arm (2026-10-07): a ladder brush often stands above its nav ladder's top (ridgeline ladder 1: 13 u),
+// so a bot dropping off the brush's own top is past the face before its feet pass the nav top
+ConVar neo_bot_ladder_catch_above_top( "neo_bot_ladder_catch_above_top", "1", FCVAR_CHEAT,
+	"Research: the descent catch presses into the face from a step above the nav ladder's top" );
 #endif // NEO
 
 // NEO-HARNESS-TEMP test switches on the squashed #2176 (upstream + PR A/B only, never in the PR): 1 = all of it off,
@@ -337,7 +341,8 @@ void PlayerLocomotion::Upkeep( void )
 	// In the air below the top, in front of the face with the hull clear of the ladder's own top, and not
 	// beside the ladder
 	const Vector &feet = GetFeet();
-	if ( IsOnGround() || feet.z >= ladder->m_top.z )
+	const float flCatchAbove = neo_bot_ladder_catch_above_top.GetBool() ? GetStepHeight() : 0.0f;
+	if ( IsOnGround() || feet.z >= ladder->m_top.z + flCatchAbove )
 	{
 		return;
 	}
