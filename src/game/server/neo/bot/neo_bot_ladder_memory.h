@@ -4,9 +4,9 @@
 #include "nav_ladder.h"
 
 // NEO-HARNESS-TEMP research arm (2026-10-07, patch 134): neo_bot_ladder_fail_skip.
-// A bot remembers the ladder climbs it failed itself, so one that fails the same climb twice
+// A bot remembers the ladder climbs it failed itself, so one that fails the same climb twice at the same height
 // routes around that ladder for a while instead of mounting it again (apparatus ladder 13 up:
-// 41 mounts, 39 of them stuck under the landing slab).
+// 41 mounts, 39 of them stuck under the landing slab at one height).
 class CNEOBotLadderMemory
 {
 public:
@@ -22,12 +22,13 @@ public:
 			m_entries[i].ladderID = INVALID_ID;
 			m_entries[i].nFails = 0;
 			m_entries[i].flLastFail = 0.0f;
+			m_entries[i].flLastFailZ = 0.0f;
 			m_entries[i].flSkipUntil = 0.0f;
 		}
 	}
 
 	// Returns true when this failure starts a skip
-	bool OnClimbFailed( const CNavLadder *ladder, bool bGoingUp, float flSkipTime )
+	bool OnClimbFailed( const CNavLadder *ladder, bool bGoingUp, float flFeetZ, float flSkipTime )
 	{
 		const float now = gpGlobals->curtime;
 		Entry *entry = Find( ladder, bGoingUp );
@@ -40,14 +41,17 @@ public:
 			entry->flSkipUntil = 0.0f;
 		}
 
-		// a failure long ago, or before a map change reset the clock, no longer counts
-		if ( entry->nFails > 0 && ( now - entry->flLastFail > FAIL_WINDOW || entry->flLastFail > now ) )
+		// a failure long ago, before a map change reset the clock, or at another height
+		// (a teammate in the way rather than the ladder) starts a new count
+		if ( entry->nFails > 0 && ( now - entry->flLastFail > FAIL_WINDOW || entry->flLastFail > now
+			|| fabsf( flFeetZ - entry->flLastFailZ ) > SAME_SPOT_HEIGHT ) )
 		{
 			entry->nFails = 0;
 		}
 
 		++entry->nFails;
 		entry->flLastFail = now;
+		entry->flLastFailZ = flFeetZ;
 		if ( entry->nFails < FAILS_TO_SKIP )
 		{
 			return false;
@@ -72,6 +76,8 @@ private:
 	static constexpr int FAILS_TO_SKIP = 2;
 	// at most this many seconds apart, start a skip
 	static constexpr float FAIL_WINDOW = 30.0f;
+	// and at most this far apart in height
+	static constexpr float SAME_SPOT_HEIGHT = 8.0f;
 
 	struct Entry
 	{
@@ -79,6 +85,7 @@ private:
 		bool bGoingUp;
 		int nFails;
 		float flLastFail;
+		float flLastFailZ;
 		float flSkipUntil;
 	};
 
