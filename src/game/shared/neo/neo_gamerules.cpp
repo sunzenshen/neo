@@ -37,6 +37,7 @@
 #include "neo_dm_spawn.h"
 #include "neo_game_config.h"
 #include "nav_mesh.h"
+#include "nav_pathfind.h" // NEO-HARNESS-TEMP: hull-clear spawn search
 #include "neo_npc_dummy.h"
 #include "materialsystem/imaterialsystem.h"
 #include "neo_gamerules_restore.h"
@@ -4793,8 +4794,125 @@ ConVar sv_neo_harness_spawn_nsf("sv_neo_harness_spawn_nsf", "", FCVAR_CHEAT,
 ConVar sv_neo_harness_spawn_ring("sv_neo_harness_spawn_ring", "40", FCVAR_CHEAT,
 	"NEO harness debug: radius of the ring the overridden spawns are spread on.", true, 0.0f, true, 256.0f);
 
+// NEO-HARNESS-TEMP: a requested spot inside solid or under a low ceiling freezes the whole team,
+// so this opt-in search moves it to the nearest nav area where a standing hull fits
+ConVar sv_neo_harness_spawn_clear_dist("sv_neo_harness_spawn_clear_dist", "0", FCVAR_CHEAT,
+	"NEO harness debug: >0 = hull-check the overridden spawn and, if blocked, use the nearest clear nav area within this travel distance. 0 disables.",
+	true, 0.0f, true, 4096.0f);
+
 // NEO-HARNESS-TEMP: six slots on the ring, so a team of six never shares a spot
 static constexpr int HARNESS_SPAWN_RING_SLOTS = 6;
+// the hull is dropped onto the floor from a step above it, then from just above it for a low ceiling,
+static const float HARNESS_SPAWN_DROP_STARTS[] = { StepHeight, 2.0f };
+// and must land within a step below the floor guess on ground a player can stand on
+static const float HARNESS_SPAWN_DROP_DEPTH = StepHeight;
+static constexpr float HARNESS_SPAWN_MIN_FLOOR_NZ = 0.7f;
+
+// NEO-HARNESS-TEMP: drop a standing hull onto the floor near vecFloor; true and the landing point if it fits
+static bool HarnessStandingSpot(const Vector &vecFloor, CBasePlayer *pPlayer, Vector *pOut)
+{
+	CTraceFilterNoNPCsOrPlayer filter(pPlayer, COLLISION_GROUP_PLAYER_MOVEMENT);
+	for (const float flStart : HARNESS_SPAWN_DROP_STARTS)
+	{
+		trace_t tr;
+		const Vector vecStart = vecFloor + Vector(0.0f, 0.0f, flStart);
+		const Vector vecEnd = vecFloor - Vector(0.0f, 0.0f, HARNESS_SPAWN_DROP_DEPTH);
+		UTIL_TraceHull(vecStart, vecEnd, VEC_HULL_MIN, VEC_HULL_MAX, MASK_PLAYERSOLID, &filter, &tr);
+		if (tr.startsolid || tr.fraction >= 1.0f || tr.plane.normal.z < HARNESS_SPAWN_MIN_FLOOR_NZ)
+		{
+			continue;
+		}
+
+		*pOut = tr.endpos;
+		return true;
+	}
+
+	return false;
+}
+
+// NEO-HARNESS-TEMP: every area within the travel limit of the start area, with its travel distance
+class CHarnessSpawnCollect : public ISearchSurroundingAreasFunctor
+{
+public:
+	CUtlVector<CNavArea *> m_areas;
+	CUtlVector<float> m_dists;
+
+	bool operator()(CNavArea *area, CNavArea *priorArea, float travelDistanceSoFar) override
+	{
+		m_areas.AddToTail(area);
+		m_dists.AddToTail(travelDistanceSoFar);
+		return true;
+	}
+};
+
+// NEO-HARNESS-TEMP: the requested spot if a standing hull fits there outside a crouch area,
+// else the center of the nearest such nav area by travel distance; false keeps the request as it was
+static bool FindHarnessClearSpawn(const Vector &vecReq, CBasePlayer *pPlayer, Vector *pOut)
+{
+	const float flMaxDist = sv_neo_harness_spawn_clear_dist.GetFloat();
+	CNavArea *pStart = TheNavMesh->GetNavArea(vecReq, 120.0f);
+	if (!pStart)
+	{
+		pStart = TheNavMesh->GetNearestNavArea(vecReq, false, 256.0f, false, false);
+	}
+
+	const bool bReqCrouch = pStart && (pStart->GetAttributes() & NAV_MESH_CROUCH);
+	if (!bReqCrouch && HarnessStandingSpot(vecReq - Vector(0.0f, 0.0f, StepHeight), pPlayer, pOut))
+	{
+		Msg("NEO_HARNESS_SPAWN_CLEAR: team=%d req=%.0f,%.0f,%.0f result=asked area=%d pos=%.0f,%.0f,%.0f dist=0 tried=1\n",
+			pPlayer->GetTeamNumber(), vecReq.x, vecReq.y, vecReq.z, pStart ? pStart->GetID() : -1, pOut->x, pOut->y, pOut->z);
+		return true;
+	}
+
+	if (!pStart)
+	{
+		Warning("NEO_HARNESS_SPAWN_CLEAR: team=%d req=%.0f,%.0f,%.0f result=none (no nav area)\n",
+			pPlayer->GetTeamNumber(), vecReq.x, vecReq.y, vecReq.z);
+		return false;
+	}
+
+	CHarnessSpawnCollect collect;
+	SearchSurroundingAreas(pStart, collect, flMaxDist);
+
+	// nearest first; the search order alone is breadth-first, not by distance
+	int iTried = 1;
+	for (;;)
+	{
+		int iBest = -1;
+		FOR_EACH_VEC(collect.m_areas, i)
+		{
+			if (collect.m_areas[i] && (iBest < 0 || collect.m_dists[i] < collect.m_dists[iBest]))
+			{
+				iBest = i;
+			}
+		}
+
+		if (iBest < 0)
+		{
+			break;
+		}
+
+		CNavArea *pArea = collect.m_areas[iBest];
+		collect.m_areas[iBest] = nullptr;
+		if (pArea->GetAttributes() & NAV_MESH_CROUCH)
+		{
+			continue;
+		}
+
+		++iTried;
+		if (HarnessStandingSpot(pArea->GetCenter(), pPlayer, pOut))
+		{
+			Msg("NEO_HARNESS_SPAWN_CLEAR: team=%d req=%.0f,%.0f,%.0f result=moved area=%d pos=%.0f,%.0f,%.0f dist=%.0f tried=%d\n",
+				pPlayer->GetTeamNumber(), vecReq.x, vecReq.y, vecReq.z, pArea->GetID(), pOut->x, pOut->y, pOut->z,
+				collect.m_dists[iBest], iTried);
+			return true;
+		}
+	}
+
+	Warning("NEO_HARNESS_SPAWN_CLEAR: team=%d req=%.0f,%.0f,%.0f result=none within %.0f tried=%d\n",
+		pPlayer->GetTeamNumber(), vecReq.x, vecReq.y, vecReq.z, flMaxDist, iTried);
+	return false;
+}
 
 static void ApplyHarnessSpawnOverride(CBasePlayer *pPlayer)
 {
@@ -4819,7 +4937,13 @@ static void ApplyHarnessSpawnOverride(CBasePlayer *pPlayer)
 	const int iSlot = s_iSlot[iTeam]++ % HARNESS_SPAWN_RING_SLOTS;
 	const float flAngle = DEG2RAD(iSlot * (360.0f / HARNESS_SPAWN_RING_SLOTS));
 	const float flRadius = sv_neo_harness_spawn_ring.GetFloat();
-	const Vector vecCenter(x, y, z + 1.0f);
+	Vector vecCenter(x, y, z + 1.0f);
+	Vector vecClear;
+	if (sv_neo_harness_spawn_clear_dist.GetFloat() > 0.0f && FindHarnessClearSpawn(Vector(x, y, z), pPlayer, &vecClear))
+	{
+		vecCenter = vecClear + Vector(0.0f, 0.0f, 1.0f);
+	}
+
 	const Vector vecRing = vecCenter + Vector(cosf(flAngle) * flRadius, sinf(flAngle) * flRadius, 0.0f);
 
 	trace_t tr;
