@@ -36,7 +36,7 @@ ConVar neo_bot_ignore_real_players("neo_bot_ignore_real_players", "0", FCVAR_CHE
 ConVar neo_bot_shotgunner_range("neo_bot_shotgunner_range", "320", FCVAR_NONE);
 ConVar neo_bot_recon_ratio("neo_bot_recon_ratio", "0.2", FCVAR_NONE);
 ConVar neo_bot_support_ratio("neo_bot_support_ratio", "0.2", FCVAR_NONE);
-ConVar neo_bot_wedge_escape("neo_bot_wedge_escape", "0", FCVAR_CHEAT,
+ConVar neo_bot_wedge_escape("neo_bot_wedge_escape", "2", FCVAR_CHEAT,
 	"Research: seconds a bot may hang motionless with no ground under it before it hops back toward its last nav area (0 = off)", true, 0.0f, false, 0.0f);
 
 extern ConVar bot_class;
