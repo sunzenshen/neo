@@ -233,6 +233,9 @@ static constexpr float NEO_LADDER_GRAB_DIST = 2.0f;	// CGameMovement::LadderDist
 // (ridgeline ladder 1: climbs stuck at the foot), so clear the corner, then slide in until the hull touches the face
 ConVar neo_bot_ladder_teleport_reach( "neo_bot_ladder_teleport_reach", "1", FCVAR_CHEAT,
 	"Research: the ladder climb's teleport fallback clears the hull's corners off a turned ladder face and then touches the face" );
+// NEO-HARNESS-TEMP research arm (2026-10-07, ntre notes/ridgeline-todo8-2026-10-07.md): ridgeline ladder 1 foot bounces
+ConVar neo_bot_ladder_teleport_view( "neo_bot_ladder_teleport_view", "0", FCVAR_CHEAT,
+	"Research: the ladder climb's teleport fallback also turns the view square to the ladder face" );
 static constexpr float NEO_LADDER_TELEPORT_SEEK = 16.0f;	// how far towards the face the teleported hull is slid to find it
 
 // NEO-HARNESS-TEMP research arm (2026-09-24, patch 78): the locomotion drops its claim the moment the engine reports the bot
@@ -359,6 +362,12 @@ ActionResult<CNEOBot> CNEOBotLadderClimb::OnStart( CNEOBot *me, Action<CNEOBot> 
 			// Teleport the bot
 			me->SetAbsOrigin( idealPos );
 			me->SetAbsAngles( idealAngles );
+			// NEO-HARNESS-TEMP research arm (2026-10-07, neo_bot_ladder_teleport_view): SetAbsAngles leaves the view,
+			// and a forward press with the view off the face's normal slides the bot off the side of a narrow ladder
+			if ( neo_bot_ladder_teleport_view.GetBool() )
+			{
+				me->SnapEyeAngles( idealAngles );
+			}
 
 			// Update mover feet to new teleported position for stuck checking
 			m_flLastZ = idealPos.z;
