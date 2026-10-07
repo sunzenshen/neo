@@ -5,9 +5,54 @@
 #include "neo_gamerules.h"
 
 extern ConVar neo_bot_fire_weapon_allowed;
+extern ConVar sv_neo_forensic_log;
 
 ConVar neo_bot_fire_at_breakable_weapon_min_time( "neo_bot_fire_at_breakable_weapon_min_time", "0.2", FCVAR_CHEAT,
 	"Minimum time to fire at breakables", true, 0.0f, true, 60.0f );
+
+// Research arm (2026-10-07, marketa window): 1 = a ghost carrier clears a breakable in its path with a threat in sight
+ConVar neo_bot_carrier_clear_breakable( "neo_bot_carrier_clear_breakable", "0", FCVAR_CHEAT,
+	"Research: 1 = a ghost carrier clears a breakable in its path even while it sees a threat, 0 = it waits for no threat in sight" );
+
+// NEO-HARNESS-TEMP forensic instrumentation (2026-10-07): NEO_FORENSIC_BRK - a breakable in the path held back by a threat,
+// and each clearing attempt's start and end. Never part of a PR.
+static float s_flNeoBrkGateLogged[ MAX_PLAYERS + 1 ];
+static void NeoLogBreakable( CNEOBot *me, const char *pszEvent, CBaseEntity *breakable, float flRateLimit )
+{
+	const int idx = me->entindex();
+	if ( !sv_neo_forensic_log.GetBool() || idx <= 0 || idx > MAX_PLAYERS )
+	{
+		return;
+	}
+
+	if ( flRateLimit > 0.0f && gpGlobals->curtime - s_flNeoBrkGateLogged[idx] < flRateLimit && s_flNeoBrkGateLogged[idx] <= gpGlobals->curtime )
+	{
+		return;
+	}
+	s_flNeoBrkGateLogged[idx] = gpGlobals->curtime;
+
+	CBaseCombatWeapon *weapon = me->GetActiveWeapon();
+	const CKnownEntity *threat = me->GetVisionInterface()->GetPrimaryKnownThreat();
+	const Vector &pos = me->GetAbsOrigin();
+	Msg( "NEO_FORENSIC_BRK t=%.2f p=%d event=%s pos=%.0f,%.0f,%.0f carrier=%d wep=%s brk=%d hp=%d threatvis=%d\n", gpGlobals->curtime, idx,
+		pszEvent, pos.x, pos.y, pos.z, me->IsCarryingGhost() ? 1 : 0, weapon ? weapon->GetClassname() : "-",
+		breakable ? breakable->entindex() : -1, breakable ? breakable->GetHealth() : 0,
+		( threat && threat->IsVisibleRecently() ) ? 1 : 0 );
+}
+
+//--------------------------------------------------------------------------------------------------------
+// A threat in sight holds a bot back from a breakable, since it fights the threat first,
+// but a ghost carrier does not fight it, so waiting for it to go keeps the carrier at the breakable
+static bool IsHeldBackByThreat( CNEOBot *me )
+{
+	const CKnownEntity *threat = me->GetVisionInterface()->GetPrimaryKnownThreat();
+	if ( !threat || !threat->GetEntity() || !threat->IsVisibleRecently() )
+	{
+		return false;
+	}
+
+	return !( neo_bot_carrier_clear_breakable.GetBool() && me->IsCarryingGhost() );
+}
 
 //--------------------------------------------------------------------------------------------------------
 CBaseEntity *CNEOBotPathClearBreakable::GetBreakableInPath( CNEOBot *me )
@@ -27,13 +72,6 @@ CBaseEntity *CNEOBotPathClearBreakable::GetBreakableInPath( CNEOBot *me )
 		return nullptr;
 	}
 
-	// Only enter this behavior if there is no visible threat
-	const CKnownEntity *threat = me->GetVisionInterface()->GetPrimaryKnownThreat();
-	if ( threat && threat->GetEntity() && threat->IsVisibleRecently() )
-	{
-		return nullptr;
-	}
-
 	const PathFollower *path = me->GetCurrentPath();
 	if ( !path || !path->IsValid() )
 	{
@@ -42,12 +80,19 @@ CBaseEntity *CNEOBotPathClearBreakable::GetBreakableInPath( CNEOBot *me )
 
 	// the path follower's look ahead for props also finds breakables in the way
 	CBaseEntity *breakable = path->GetBreakableInWay();
-	if ( breakable && breakable->IsAlive() && breakable->GetHealth() > 0 )
+	if ( !breakable || !breakable->IsAlive() || breakable->GetHealth() <= 0 )
 	{
-		return breakable;
+		return nullptr;
 	}
 
-	return nullptr;
+	// Only enter this behavior if there is no visible threat
+	if ( IsHeldBackByThreat( me ) )
+	{
+		NeoLogBreakable( me, "held_by_threat", breakable, 1.0f );
+		return nullptr;
+	}
+
+	return breakable;
 }
 
 
@@ -72,6 +117,8 @@ ActionResult< CNEOBot > CNEOBotPathClearBreakable::OnStart( CNEOBot *me, Action<
 	{
 		return Done( "No breakable target" );
 	}
+
+	NeoLogBreakable( me, "start", m_hBreakable.Get(), 0.0f );
 
 	// Prioritize weapons for clearing breakables:
 	// 1. Knife (Slot 2)
@@ -127,8 +174,7 @@ ActionResult< CNEOBot > CNEOBotPathClearBreakable::Update( CNEOBot *me, float in
 	}
 
 	// If a visible threat appeared, bail out and let the normal combat system handle it
-	const CKnownEntity *threat = me->GetVisionInterface()->GetPrimaryKnownThreat();
-	if ( threat && threat->GetEntity() && threat->IsVisibleRecently() )
+	if ( IsHeldBackByThreat( me ) )
 	{
 		return Done( "Threat appeared" );
 	}
@@ -251,6 +297,8 @@ ActionResult< CNEOBot > CNEOBotPathClearBreakable::Update( CNEOBot *me, float in
 //--------------------------------------------------------------------------------------------------------
 void CNEOBotPathClearBreakable::OnEnd( CNEOBot *me, Action< CNEOBot > *nextAction )
 {
+	NeoLogBreakable( me, "end", m_hBreakable.Get(), 0.0f );
+
 	// If we switched weapon, try to switch back to primary
 	if ( m_bDidSwitchWeapon )
 	{
