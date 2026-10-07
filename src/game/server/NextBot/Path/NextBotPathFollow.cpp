@@ -121,10 +121,6 @@ ConVar neo_harness_propavoid( "neo_harness_propavoid", "1", FCVAR_CHEAT, "Harnes
 ConVar neo_bot_path_skip_wide( "neo_bot_path_skip_wide", "0", FCVAR_CHEAT,
 	"Research: the path follower only skips ahead where a nearly full-width hull fits (2 = and its full current height)" );
 
-// NEO-HARNESS-TEMP research arm (2026-09-26, patch 112): skip_wide's hull probe also stops at movable physics props
-ConVar neo_bot_path_skip_wide_movable( "neo_bot_path_skip_wide_movable", "0", FCVAR_CHEAT,
-	"Research: the wide skip-ahead probe ignores movable physics props (the stock probe still has to pass)" );
-
 // patch 62: a path point entering a NAV_MESH_PRECISE area is a waypoint the bot must reach before heading further,
 // so a mesh author can stop skip-ahead cutting a corner (a stair's handrail end, a pillar) by marking the area past it
 // NEO-HARNESS-TEMP research arm (2026-09-24, patch 70): see the "goal too high" check in PathFollower::Update
@@ -274,15 +270,7 @@ static bool NeoIsSkipTraversable( INextBot *bot, const Vector &from, const Vecto
 	mover->TraceHull( from, to, hullMin, hullMax, body->GetSolidMask(), &filter, &result );
 
 	// a hull already in contact tells nothing either way: keep the probe's answer
-	if ( result.startsolid || result.fraction >= 1.0f )
-	{
-		return true;
-	}
-
-	// patch 112: furniture and crates a bot can push are not the fixed holed walls the wide probe is for; keep the
-	// stock probe's answer (mk1: marketa's tables and chairs held skip-ahead back, 4.3 -> 0.9 stuck a match without it)
-	IPhysicsObject *pPhys = ( neo_bot_path_skip_wide_movable.GetBool() && result.m_pEnt ) ? result.m_pEnt->VPhysicsGetObject() : NULL;
-	return pPhys && pPhys->IsMoveable() && result.m_pEnt->GetMoveType() == MOVETYPE_VPHYSICS;
+	return result.startsolid || result.fraction >= 1.0f;
 }
 
 // NEO-HARNESS-TEMP research arm (2026-10-04): an off-path bot re-checks that it can still walk to its goal
