@@ -47,6 +47,14 @@ static void NeoLogLadderEvent( CNEOBot *me, const char *beh, const CNavLadder *l
 ConVar neo_bot_ladder_exit_closest( "neo_bot_ladder_exit_closest", "1", FCVAR_CHEAT,
 	"Research: dismount towards the exit area's point nearest the ladder end instead of its centre" );
 
+// NEO-HARNESS-TEMP research arm (neo_bot_ladder_exit_closest v2): an exit area narrower than half a hull is a wall cap
+// the climb crosses, not a landing to stand on (dawn and dusk ladder 1: 7 u deep), so it keeps the center and the old finish
+static bool NeoIsThinExit( const CNavArea *area, CNEOBot *me )
+{
+	const float flHalfHull = me->GetBodyInterface()->GetHullWidth() * 0.5f;
+	return area && MIN( area->GetSizeX(), area->GetSizeY() ) < flHalfHull;
+}
+
 // NEO-HARNESS-TEMP research arm (2026-09-24, patch 71): tell the locomotion's ladder state machine that this ladder is
 // wanted, and which way. Without it PlayerLocomotion sees a bot on a ladder it never asked for: TraverseLadder() forces
 // the move type back to walking for up to half a second (LADDER_ADOPT_TIME) and then adopts the ladder by its NEARER end
@@ -526,6 +534,11 @@ void CNEOBotLadderClimb::ResolveExitArea( CNEOBot *me )
 					m_exitAreaCenter = m_pExitArea->GetCenter();
 				}
 
+				if ( NeoIsThinExit( m_pExitArea, me ) )
+				{
+					return;
+				}
+
 				const Vector &ladderEnd = m_bGoingUp ? m_ladder->m_top : m_ladder->m_bottom;
 				Vector closest;
 				m_pExitArea->GetClosestPointOnArea( ladderEnd, &closest );
@@ -946,7 +959,7 @@ ActionResult<CNEOBot> CNEOBotLadderClimb::Update( CNEOBot *me, float /*interval*
 		// NEO-HARNESS-TEMP research arm (patch 52): the last known area switches to the exit area while
 		// the bot is still in the air beside it (ghost ladder 1: 29 u off the catwalk's edge, over a
 		// drop); only finish once it stands on the exit area itself
-		const bool bOnExit = !neo_bot_ladder_exit_closest.GetBool()
+		const bool bOnExit = !neo_bot_ladder_exit_closest.GetBool() || NeoIsThinExit( m_pExitArea, me )
 			|| ( mover->IsOnGround() && m_pExitArea && m_pExitArea->IsOverlapping( myPos, 0.0f ) );
 		if ( m_pExitArea && me->GetLastKnownArea() == m_pExitArea && bOnExit )
 		{
