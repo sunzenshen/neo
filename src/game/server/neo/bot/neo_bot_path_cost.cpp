@@ -48,6 +48,43 @@ ConVar neo_bot_ladder_fail_skip("neo_bot_ladder_fail_skip", "0", FCVAR_CHEAT,
 	"Research: seconds a bot avoids a ladder whose climb it failed twice (0 = off)", true, 0.0f, false, 0.0f);
 // a skipped ladder costs as if it were this long, so a ladder that is the only way stays usable
 static constexpr float NEO_BOT_PATH_SKIPPED_LADDER_COST = 50000.0f;
+
+// NEO-HARNESS-TEMP research arm (2026-10-07): seconds a bot routes around a ladder after its approach to it timed out
+// twice at one height, without the bot getting on (saitama ladder 2's foot, crouched under the hatch); 0 = off
+ConVar neo_bot_ladder_unreachable_skip("neo_bot_ladder_unreachable_skip", "0", FCVAR_CHEAT,
+	"Research: seconds a bot avoids a ladder it twice failed to get onto (0 = off)", true, 0.0f, false, 0.0f);
+
+float NeoLadderUnreachableSkipTime()
+{
+	return neo_bot_ladder_unreachable_skip.GetFloat();
+}
+
+void NeoNoteLadderUnreachable( CNEOBot *me, const CNavLadder *ladder, bool bGoingUp )
+{
+	const float flSkipTime = neo_bot_ladder_unreachable_skip.GetFloat();
+	if ( flSkipTime <= 0.0f || !ladder || me->GetMoveType() == MOVETYPE_LADDER )
+	{
+		return;
+	}
+
+	const Vector &feet = me->GetLocomotionInterface()->GetFeet();
+	if ( !me->GetLadderMemory()->OnClimbFailed( ladder, bGoingUp, feet.z, flSkipTime ) )
+	{
+		return;
+	}
+
+	if ( sv_neo_forensic_log.GetBool() )
+	{
+		Msg( "NEO_FORENSIC_LADDERBEH t=%.2f p=%d beh=skip dir=%s ladder=%d pos=%.0f,%.0f,%.0f reason=unreachable twice, routing around the ladder\n",
+			gpGlobals->curtime, me->entindex(), bGoingUp ? "up" : "down", ladder->GetID(), feet.x, feet.y, feet.z );
+	}
+
+	const PathFollower *path = me->GetCurrentPath();
+	if ( path )
+	{
+		const_cast< PathFollower * >( path )->Invalidate();
+	}
+}
 ConVar neo_bot_path_ladder_crossing_cost("neo_bot_path_ladder_crossing_cost", "0", FCVAR_CHEAT,
 	"Research: distance-equivalent cost added to every ladder crossing, for the risk of any climb (0 = off)", true, 0.0f, false, 0.0f);
 
@@ -533,7 +570,8 @@ float CNEOBotPathCost::operator()(CNavArea* baseArea, CNavArea* fromArea, const 
 
 		// patch 134: a climb this bot failed twice lately
 		const bool bGoingUp = ( area != ladder->m_bottomArea );
-		if ( neo_bot_ladder_fail_skip.GetFloat() > 0.0f && m_me->GetLadderMemory()->IsSkipped( ladder, bGoingUp ) )
+		if ( ( neo_bot_ladder_fail_skip.GetFloat() > 0.0f || neo_bot_ladder_unreachable_skip.GetFloat() > 0.0f )
+			&& m_me->GetLadderMemory()->IsSkipped( ladder, bGoingUp ) )
 		{
 			dist += NEO_BOT_PATH_SKIPPED_LADDER_COST;
 		}

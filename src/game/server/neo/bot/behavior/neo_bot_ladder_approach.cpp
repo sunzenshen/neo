@@ -274,6 +274,7 @@ ActionResult<CNEOBot> CNEOBotLadderApproach::Update( CNEOBot *me, float )
 	if ( m_timeoutTimer.IsElapsed() )
 	{
 		NeoLogLadderApproach( me, m_ladder, m_bGoingUp, "Ladder approach timeout" );
+		NeoNoteLadderUnreachable( me, m_ladder, m_bGoingUp );
 		return Done( "Ladder approach timeout" );
 	}
 

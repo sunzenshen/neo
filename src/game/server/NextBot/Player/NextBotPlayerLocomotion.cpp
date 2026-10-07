@@ -464,18 +464,31 @@ ConVar neo_bot_ladder_approach_timeout( "neo_bot_ladder_approach_timeout", "0", 
 ConVar neo_bot_ladder_descend_handsoff( "neo_bot_ladder_descend_handsoff", "0", FCVAR_CHEAT,
 	"Research: while the ladder behaviour holds a claimed ladder, the locomotion's descent only tracks state (no aim, no approach)" );
 
+// with the unreachable skip on and no timeout set, an approach still gives up after this long
+static constexpr float NEO_LADDER_UNREACHABLE_APPROACH_TIME = 3.0f;
+
+static float NeoLadderApproachLimit()
+{
+	if ( neo_bot_ladder_approach_timeout.GetFloat() > 0.0f )
+	{
+		return neo_bot_ladder_approach_timeout.GetFloat();
+	}
+
+	return NeoLadderUnreachableSkipTime() > 0.0f ? NEO_LADDER_UNREACHABLE_APPROACH_TIME : 0.0f;
+}
+
 static bool NeoLadderApproachTimedOut( const CountdownTimer &timer )
 {
-	return neo_bot_ladder_approach_timeout.GetFloat() > 0.0f && timer.HasStarted() && timer.IsElapsed();
+	return NeoLadderApproachLimit() > 0.0f && timer.HasStarted() && timer.IsElapsed();
 }
 
 // ClimbLadder / DescendLadder set the approach state outside TraverseLadder, so NEO_FORENSIC_LADDER never showed who
 // started an approach (why=call; movetype 2 = still walking, 9 = already on the ladder)
 static void NeoStartLadderApproach( CountdownTimer &timer, INextBot *bot, int stateBefore, const CNavLadder *ladder, bool bUp )
 {
-	if ( neo_bot_ladder_approach_timeout.GetFloat() > 0.0f )
+	if ( NeoLadderApproachLimit() > 0.0f )
 	{
-		timer.Start( neo_bot_ladder_approach_timeout.GetFloat() );
+		timer.Start( NeoLadderApproachLimit() );
 	}
 
 	if ( !sv_neo_forensic_log.GetBool() || !ladder )
@@ -505,6 +518,7 @@ PlayerLocomotion::LadderState PlayerLocomotion::ApproachAscendingLadder( void )
 	// patch 95
 	if ( NeoLadderApproachTimedOut( m_ladderTimer ) && GetBot()->GetEntity()->GetMoveType() != MOVETYPE_LADDER )
 	{
+		NeoNoteLadderUnreachable( (CNEOBot *)GetBot()->GetEntity(), m_ladderInfo, true );
 		m_ladderInfo = NULL;
 		return NO_LADDER;
 	}
@@ -571,6 +585,7 @@ PlayerLocomotion::LadderState PlayerLocomotion::ApproachDescendingLadder( void )
 	// patch 95
 	if ( NeoLadderApproachTimedOut( m_ladderTimer ) && GetBot()->GetEntity()->GetMoveType() != MOVETYPE_LADDER )
 	{
+		NeoNoteLadderUnreachable( (CNEOBot *)GetBot()->GetEntity(), m_ladderInfo, false );
 		m_ladderInfo = NULL;
 		return NO_LADDER;
 	}
