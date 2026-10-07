@@ -42,6 +42,12 @@ ConVar neo_bot_path_cliff_multiplier("neo_bot_path_cliff_multiplier", "1.0", FCV
 // on); charge the climb itself when either end of the ladder is AVOID
 ConVar neo_bot_path_avoid_ladder_ends("neo_bot_path_avoid_ladder_ends", "0", FCVAR_CHEAT,
 	"Research: a ladder crossing that starts or ends in a NAV_MESH_AVOID area pays the AVOID multiplier");
+// NEO-HARNESS-TEMP research arm (2026-10-07, patch 134): seconds a bot routes around a ladder after failing to climb it
+// twice in a row (neo_bot_ladder_memory.h); 0 = off
+ConVar neo_bot_ladder_fail_skip("neo_bot_ladder_fail_skip", "0", FCVAR_CHEAT,
+	"Research: seconds a bot avoids a ladder whose climb it failed twice (0 = off)", true, 0.0f, false, 0.0f);
+// a skipped ladder costs as if it were this long, so a ladder that is the only way stays usable
+static constexpr float NEO_BOT_PATH_SKIPPED_LADDER_COST = 50000.0f;
 ConVar neo_bot_path_ladder_crossing_cost("neo_bot_path_ladder_crossing_cost", "0", FCVAR_CHEAT,
 	"Research: distance-equivalent cost added to every ladder crossing, for the risk of any climb (0 = off)", true, 0.0f, false, 0.0f);
 
@@ -524,6 +530,13 @@ float CNEOBotPathCost::operator()(CNavArea* baseArea, CNavArea* fromArea, const 
 
 		// patch 85: a climb can fail however short the ladder is
 		dist += neo_bot_path_ladder_crossing_cost.GetFloat();
+
+		// patch 134: a climb this bot failed twice lately
+		const bool bGoingUp = ( area != ladder->m_bottomArea );
+		if ( neo_bot_ladder_fail_skip.GetFloat() > 0.0f && m_me->GetLadderMemory()->IsSkipped( ladder, bGoingUp ) )
+		{
+			dist += NEO_BOT_PATH_SKIPPED_LADDER_COST;
+		}
 	}
 	else if (length > 0.0)
 	{

@@ -28,6 +28,25 @@ static void NeoLogLadderBeh( CNEOBot *me, const char *beh, const CNavLadder *lad
 		(int)me->GetMoveType(), me->GetGroundEntity() ? 1 : 0, reason );
 }
 #define NEO_LADDER_DONE( reason ) ( NeoLogLadderBeh( me, "climb", m_ladder, m_bGoingUp, reason ), Done( reason ) )
+
+// NEO-HARNESS-TEMP research arm (2026-10-07, patch 134): the bot remembers a failed climb,
+// and on the second failure in a row drops its path so the next one routes around the ladder
+extern ConVar neo_bot_ladder_fail_skip;
+static void NeoNoteClimbFailed( CNEOBot *me, const CNavLadder *ladder, bool bGoingUp )
+{
+	const float flSkipTime = neo_bot_ladder_fail_skip.GetFloat();
+	if ( flSkipTime <= 0.0f || !me->GetLadderMemory()->OnClimbFailed( ladder, bGoingUp, flSkipTime ) )
+	{
+		return;
+	}
+
+	NeoLogLadderBeh( me, "skip", ladder, bGoingUp, "failed twice, routing around the ladder" );
+	const PathFollower *path = me->GetCurrentPath();
+	if ( path )
+	{
+		const_cast< PathFollower * >( path )->Invalidate();
+	}
+}
 static void NeoLogLadderEvent( CNEOBot *me, const char *beh, const CNavLadder *ladder, bool goingUp, PRINTF_FORMAT_STRING const char *fmt, ... )
 {
 	if ( !sv_neo_forensic_log.GetBool() )
@@ -601,6 +620,7 @@ ActionResult<CNEOBot> CNEOBotLadderClimb::Update( CNEOBot *me, float /*interval*
 
 	if ( m_timeoutTimer.IsElapsed() )
 	{
+		NeoNoteClimbFailed( me, m_ladder, m_bGoingUp );
 		return NEO_LADDER_DONE( "Ladder climb timeout" );
 	}
 
@@ -767,6 +787,7 @@ ActionResult<CNEOBot> CNEOBotLadderClimb::Update( CNEOBot *me, float /*interval*
 					}
 					me->PressJumpButton();
 					me->PressBackwardButton(0.1f);
+					NeoNoteClimbFailed( me, m_ladder, m_bGoingUp );
 					return NEO_LADDER_DONE( "Got stuck on something climbing the ladder, jumping off to reset." );
 				}
 			}

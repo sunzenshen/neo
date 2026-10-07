@@ -7,6 +7,7 @@
 #include "neo_bot_locomotion.h"
 #include "neo_bot_suppressive_fire.h"
 #include "neo_bot_path_cost.h"
+#include "neo_bot_ladder_memory.h"
 #include "neo_player.h"
 #include "neo_bot_squad.h"
 #include "map_entities/neo_bot_generator.h"
@@ -472,9 +473,12 @@ public:
 	bool m_bRespawnCopyCorpse = false;
 
 	CNEOBotSuppressiveFire *GetSuppressiveFire( void ) { return &m_suppressiveFire; }
+	CNEOBotLadderMemory *GetLadderMemory( void ) { return &m_ladderMemory; }	// NEO-HARNESS-TEMP patch 134
+	const CNEOBotLadderMemory *GetLadderMemory( void ) const { return &m_ladderMemory; }
 
 private:
 	CNEOBotSuppressiveFire m_suppressiveFire;
+	CNEOBotLadderMemory m_ladderMemory;
 
 	CNEOBotLocomotion *m_locomotor;
 	CNEOBotBody *m_body;
