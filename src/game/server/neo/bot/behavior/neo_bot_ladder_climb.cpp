@@ -129,7 +129,8 @@ static void NeoClaimLadder( CNEOBot *me, const CNavLadder *ladder, bool goingUp,
 // by ~1 u, so a bot centred on the nav ladder heads into its underside at the same height every time while one 2 u off
 // centre climbs past (lc2: 169 of 198 mid-climb stall endings there). Before giving up, shimmy sideways - right, then
 // back left past the start, then right again - and only jump off if none of that restores the climb.
-ConVar neo_bot_ladder_stall_nudge( "neo_bot_ladder_stall_nudge", "0", FCVAR_CHEAT,
+// Default on again since 2026-10-07 (saitama ladder 2 under the elevator hatch: rim snags 21 -> 0).
+ConVar neo_bot_ladder_stall_nudge( "neo_bot_ladder_stall_nudge", "1", FCVAR_CHEAT,
 	"Research: a ladder climb that stalls part-way shimmies sideways before jumping off" );
 
 // NEO-HARNESS-TEMP research arm (2026-09-24, patch 74): a threat seen while climbing makes the bot jump backwards off the
