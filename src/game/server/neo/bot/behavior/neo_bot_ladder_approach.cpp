@@ -140,6 +140,10 @@ static constexpr float NEO_LADDER_AIRBORNE_MOUNT_WINDOW = 1.2f;
 // the window was for.
 ConVar neo_bot_ladder_airborne_until_stall( "neo_bot_ladder_airborne_until_stall", "0", FCVAR_CHEAT,
 	"Research: a descent may mount on the top landing only after the approach has made no progress for a while (not after 1.2 s)" );
+// NEO-HARNESS-TEMP research arm (2026-10-07, on by default): walking forward off a ladder top level with its floor,
+// the bot falls past the face with nothing to grab (ridgeline ladder 1), so back off it as over a barrier
+ConVar neo_bot_ladder_flush_top( "neo_bot_ladder_flush_top", "1", FCVAR_CHEAT,
+	"Research: a descent from behind a ladder whose top is level with the floor backs off the top as over a barrier" );
 static constexpr float NEO_LADDER_STALL_TIME = 0.6f;		// no progress this long = the walk off the landing is blocked
 static constexpr float NEO_LADDER_PROGRESS_STEP = 4.0f;	// a move this far (xy) counts as progress
 
@@ -229,7 +233,9 @@ ActionResult<CNEOBot> CNEOBotLadderApproach::OnStart( CNEOBot *me, Action<CNEOBo
 		const float floorZ = area ? MIN( feet.z, area->GetZ( feet.x, feet.y ) ) : feet.z;
 		const bool bBehind = DotProduct2D( ( feet - m_ladder->m_top ).AsVector2D(), m_ladder->GetNormal().AsVector2D() ) < 0.0f;
 
-		m_bOverTop = bBehind && floorZ < m_ladder->m_top.z - mover->GetStepHeight();
+		// NEO-HARNESS-TEMP research arm: with neo_bot_ladder_flush_top, a floor up to a step above the top counts too
+		const float flBarrierRise = neo_bot_ladder_flush_top.GetBool() ? -mover->GetStepHeight() : mover->GetStepHeight();
+		m_bOverTop = bBehind && floorZ < m_ladder->m_top.z - flBarrierRise;
 		if ( m_bOverTop )
 		{
 			m_timeoutTimer.Start( OVER_TOP_TIMEOUT );
@@ -651,6 +657,14 @@ ActionResult<CNEOBot> CNEOBotLadderApproach::UpdateOverTop( CNEOBot *me, const V
 	else
 	{
 		me->PressBackwardButton();
+
+		// NEO-HARNESS-TEMP research arm (neo_bot_ladder_flush_top v2): backing out over a flush top can wedge
+		// the bot on a ladder prop's top in front of the face (ridgeline ladder 1), so hop back off it
+		if ( neo_bot_ladder_flush_top.GetBool() && !mover->IsClimbingOrJumping()
+			&& gpGlobals->curtime - m_flLastProgressTime > NEO_LADDER_STALL_TIME )
+		{
+			mover->Jump();
+		}
 	}
 
 	return Continue();
