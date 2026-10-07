@@ -36,6 +36,8 @@ ConVar neo_bot_ignore_real_players("neo_bot_ignore_real_players", "0", FCVAR_CHE
 ConVar neo_bot_shotgunner_range("neo_bot_shotgunner_range", "320", FCVAR_NONE);
 ConVar neo_bot_recon_ratio("neo_bot_recon_ratio", "0.2", FCVAR_NONE);
 ConVar neo_bot_support_ratio("neo_bot_support_ratio", "0.2", FCVAR_NONE);
+ConVar neo_bot_wedge_escape("neo_bot_wedge_escape", "0", FCVAR_CHEAT,
+	"Research: seconds a bot may hang motionless with no ground under it before it hops back toward its last nav area (0 = off)", true, 0.0f, false, 0.0f);
 
 extern ConVar bot_class;
 extern ConVar neo_bot_fire_weapon_min_time;
@@ -757,6 +759,8 @@ void CNEOBot::PhysicsSimulate(void)
 {
 	BaseClass::PhysicsSimulate();
 
+	FreeIfWedged();
+
 	if (m_bWantsRespawn)
 	{
 		m_bWantsRespawn = false;
@@ -779,6 +783,60 @@ void CNEOBot::PhysicsSimulate(void)
 			// squad has collapsed - disband it
 			LeaveSquad();
 		}
+	}
+}
+
+
+//-----------------------------------------------------------------------------------------------------
+// A hull can come to rest between two steep surfaces, such as round props past a ledge, with no ground under it:
+// it cannot jump without ground and its move keys only push it into both surfaces,
+// so after a while motionless there, hop up and back toward the last nav area it stood on
+void CNEOBot::FreeIfWedged( void )
+{
+	const float flWedgeTime = neo_bot_wedge_escape.GetFloat();
+	const float flStillSpeed = 10.0f;
+	const bool bFrozen = ( GetFlags() & FL_FROZEN ) || NEORules()->IsRoundPreRoundFreeze();
+	const bool bHanging = IsAlive() && !bFrozen && GetMoveType() == MOVETYPE_WALK
+		&& GetGroundEntity() == NULL && GetAbsVelocity().Length() < flStillSpeed;
+	if ( flWedgeTime <= 0.0f || !bHanging )
+	{
+		m_wedgedTimer.Invalidate();
+		return;
+	}
+
+	if ( !m_wedgedTimer.HasStarted() )
+	{
+		m_wedgedTimer.Start();
+		return;
+	}
+
+	const CNavArea *pArea = GetLastKnownArea();
+	if ( m_wedgedTimer.GetElapsedTime() < flWedgeTime || !pArea )
+	{
+		return;
+	}
+
+	// a jump's worth of lift, and a walk's worth of push toward the area
+	const float flHopUpSpeed = 280.0f;
+	const float flHopOutSpeed = 200.0f;
+	Vector vecToArea = pArea->GetCenter() - GetAbsOrigin();
+	Vector vecClosest;
+	pArea->GetClosestPointOnArea( GetAbsOrigin(), &vecClosest );
+	if ( ( vecClosest - GetAbsOrigin() ).AsVector2D().Length() > 1.0f )
+	{
+		vecToArea = vecClosest - GetAbsOrigin();
+	}
+	vecToArea.z = 0.0f;
+	vecToArea.NormalizeInPlace();
+
+	SetAbsVelocity( vecToArea * flHopOutSpeed + Vector( 0.0f, 0.0f, flHopUpSpeed ) );
+	m_wedgedTimer.Start();
+
+	extern ConVar sv_neo_forensic_log;
+	if ( sv_neo_forensic_log.GetBool() )	// NEO-HARNESS-TEMP forensic line
+	{
+		Msg( "NEO_FORENSIC_WEDGE t=%.2f p=%d pos=%.0f,%.0f,%.0f area=%d dir=%.2f,%.2f\n", gpGlobals->curtime,
+			entindex(), GetAbsOrigin().x, GetAbsOrigin().y, GetAbsOrigin().z, pArea->GetID(), vecToArea.x, vecToArea.y );
 	}
 }
 
