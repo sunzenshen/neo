@@ -550,6 +550,9 @@ private:
 	CountdownTimer m_repathAroundFriendlyTimer;
 	PathFollower m_repathAroundFriendlyFollower;
 
+	void FreeIfWedged( void );
+	IntervalTimer m_wedgedTimer;	// how long the bot has hung motionless with no ground under it
+
 	int m_nPlainJumpTick = -1;
 
 	float m_flPhyscannonPickupTime = 0.0f;
