@@ -1817,6 +1817,24 @@ bool PathFollower::FindClimbLedge( INextBot *bot, Vector startTracePos, Vector l
 #endif // _DEBUG
 
 
+#ifdef NEO
+//--------------------------------------------------------------------------------------------------------------
+// A climb onto a ladder's top area that is shallower than a hull, such as the wall cap a ladder rises over.
+// The ledge search in Climbing() looks for the ledge's floor a full look-ahead past its wall, so it misses one this thin
+bool PathFollower::IsLadderCapClimb( INextBot *bot ) const
+{
+	const Segment *afterClimb = NextSegment( m_goal );
+	if ( !afterClimb || !afterClimb->area || afterClimb->area->GetLadders( CNavLadder::LADDER_DOWN )->Count() == 0 )
+	{
+		return false;
+	}
+
+	const Vector toLedge = afterClimb->area->GetCenter() - bot->GetLocomotionInterface()->GetFeet();
+	const float flDepth = ( fabs( toLedge.x ) > fabs( toLedge.y ) ) ? afterClimb->area->GetSizeX() : afterClimb->area->GetSizeY();
+	return flDepth < bot->GetBodyInterface()->GetHullWidth();
+}
+#endif
+
 //--------------------------------------------------------------------------------------------------------------
 /**
  * Climb up ledges
@@ -1887,8 +1905,9 @@ bool PathFollower::Climbing( INextBot *bot, const Path::Segment *goal, const Vec
 	// NEO-HARNESS-TEMP research arm (patch 58): the ledge search below gives up silently in places the
 	// mesh says are a climb (tarmac's basin rim: bots stood at the launch point for whole rounds); trust
 	// the link there, as the authoritative-mesh branch above does
-	if ( neo_bot_climb_trust_nav.GetInt() > 0 && m_goal->type == CLIMB_UP &&
-		 ( neo_bot_climb_trust_nav.GetInt() == 1 || mover->IsStuck() ) &&
+	if ( m_goal->type == CLIMB_UP &&
+		 ( neo_bot_climb_trust_nav.GetInt() == 1 || ( neo_bot_climb_trust_nav.GetInt() == 2 && mover->IsStuck() )
+		   || IsLadderCapClimb( bot ) ) &&
 		 ( m_goal->pos - mover->GetFeet() ).AsVector2D().IsLengthLessThan( body->GetHullWidth() ) )
 	{
 		const Segment *afterClimb = NextSegment( m_goal );

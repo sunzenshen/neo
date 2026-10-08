@@ -90,6 +90,7 @@ private:
 
 #ifdef NEO
 	bool HasFallenBelowPath( INextBot *bot ) const;	// return true if we stand off the path, more than a step below it
+	bool IsLadderCapClimb( INextBot *bot ) const;	// return true if the climb ahead is onto a ladder top shallower than a hull
 	bool m_wasOnGround;
 
 	bool RecheckGoal( INextBot *bot );				// an off-path bot whose goal is blocked backs it up or re-paths
