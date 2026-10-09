@@ -5653,12 +5653,284 @@ CNavArea::VisibilityType CNavArea::ComputeVisibility( const CNavArea *area, bool
 
 
 //--------------------------------------------------------------------------------------------------------
+// Visibility delta encoders.
+// Stock compares the two lists with nested scans, O(La x Lb) a pair, which dominates nav_analyze on big maps;
+// the linear encoder gives the same entries in the same order with an O(1) lookup per entry.
+
+// nav_vis_delta_mode picks the encoder, so one binary can run either or both (experimental, proposals/0036 e2)
+ConVar nav_vis_delta_mode( "nav_vis_delta_mode", "0", FCVAR_CHEAT, "Visibility delta encoder: 0 = linear, 1 = stock nested scans, 2 = both, compared (warns on any difference)" );
+
+enum VisDeltaMode
+{
+	VIS_DELTA_LINEAR = 0,
+	VIS_DELTA_STOCK,
+	VIS_DELTA_VERIFY,
+};
+
+// attribute values below this each get a bit in a stamp's mask,
+// a larger value is looked up by a linear scan
+static constexpr int VIS_DELTA_ATTRIBUTE_BITS = 32;
+
+// One slot per nav area id, saying which areas the two lists being compared hold.
+// A slot counts only when its generation is the current one, so no slot is cleared between pairs.
+struct VisDeltaStamp
+{
+	VisDeltaStamp() : otherGeneration( 0 ), otherArea( NULL ), otherAttributeMask( 0 ), myGeneration( 0 ), myArea( NULL ) { }
+
+	unsigned int otherGeneration;
+	const CNavArea *otherArea;			// NULL with a current generation: two areas share this id
+	unsigned int otherAttributeMask;	// bit n set: the other list holds this area with attributes n
+	unsigned int myGeneration;
+	const CNavArea *myArea;				// NULL with a current generation: two areas share this id
+};
+
+static CUtlVector< VisDeltaStamp > s_visDeltaStamps;
+static unsigned int s_visDeltaGeneration = 0;
+static int s_visDeltaVerified = 0;
+static int s_visDeltaMismatched = 0;
+
+static VisDeltaStamp &VisDeltaStampFor( const CNavArea *area )
+{
+	const int id = (int)area->GetID();
+	if ( id >= s_visDeltaStamps.Count() )
+	{
+		s_visDeltaStamps.AddMultipleToTail( id + 1 - s_visDeltaStamps.Count() );
+	}
+
+	return s_visDeltaStamps[ id ];
+}
+
+static void BeginVisDeltaGeneration( void )
+{
+	++s_visDeltaGeneration;
+	if ( s_visDeltaGeneration != 0 )
+	{
+		return;
+	}
+
+	// the counter wrapped, so clear every slot once to keep an old stamp from looking current
+	FOR_EACH_VEC( s_visDeltaStamps, it )
+	{
+		s_visDeltaStamps[ it ] = VisDeltaStamp();
+	}
+	s_visDeltaGeneration = 1;
+}
+
+// true if the list holds an entry for this area with these attributes
+template < typename BindInfoArray >
+static bool VisListHasEntry( const BindInfoArray &list, const CNavArea *area, unsigned char attributes )
+{
+	for( int j=0; j<list.Count(); ++j )
+	{
+		if ( list[j].area == area && list[j].attributes == attributes )
+		{
+			return true;
+		}
+	}
+
+	return false;
+}
+
+// true if the list holds an entry for this area, whatever its attributes
+template < typename BindInfoArray >
+static bool VisListHasArea( const BindInfoArray &list, const CNavArea *area )
+{
+	for( int i=0; i<list.Count(); ++i )
+	{
+		if ( list[i].area == area )
+		{
+			return true;
+		}
+	}
+
+	return false;
+}
+
+// The stock encoder, kept on this branch for nav_vis_delta_mode 1 / 2 and the self test
+template < typename BindInfoArray >
+static void ComputeVisDeltaStock( const BindInfoArray &mine, const BindInfoArray &other, BindInfoArray &delta )
+{
+	delta.RemoveAll();
+
+	// add any visible areas in my list that are not in 'others' list into the delta
+	for( int i=0; i<mine.Count(); ++i )
+	{
+		if ( mine[i].area && !VisListHasEntry( other, mine[i].area, mine[i].attributes ) )
+		{
+			// my vis area not in adjacent area's vis list or has different visibility attributes - add to delta
+			delta.AddToTail( mine[i] );
+		}
+	}
+
+	// add explicit NOT_VISIBLE references to areas in 'others' list that are NOT in mine
+	for( int j=0; j<other.Count(); ++j )
+	{
+		if ( other[j].area && !VisListHasArea( mine, other[j].area ) )
+		{
+			CNavArea::AreaBindInfo info;
+			info.area = other[j].area;
+			info.attributes = CNavArea::NOT_VISIBLE;
+
+			delta.AddToTail( info );
+		}
+	}
+}
+
+// Same output as ComputeVisDeltaStock: first stamp both lists by area id, then run the same two loops in the same order,
+// each answering "does the other list hold this entry" from the stamps instead of a scan
+template < typename BindInfoArray >
+static void ComputeVisDeltaLinear( const BindInfoArray &mine, const BindInfoArray &other, BindInfoArray &delta )
+{
+	delta.RemoveAll();
+
+	BeginVisDeltaGeneration();
+	const unsigned int generation = s_visDeltaGeneration;
+
+	// stamp every (area, attributes) the other list holds; a duplicate area adds its attributes to the mask
+	for( int j=0; j<other.Count(); ++j )
+	{
+		const CNavArea *area = other[j].area;
+		if ( !area )
+		{
+			continue;
+		}
+
+		VisDeltaStamp &stamp = VisDeltaStampFor( area );
+		if ( stamp.otherGeneration != generation )
+		{
+			stamp.otherGeneration = generation;
+			stamp.otherArea = area;
+			stamp.otherAttributeMask = 0;
+		}
+		else if ( stamp.otherArea != area )
+		{
+			stamp.otherArea = NULL;
+		}
+
+		if ( other[j].attributes < VIS_DELTA_ATTRIBUTE_BITS )
+		{
+			stamp.otherAttributeMask |= 1u << other[j].attributes;
+		}
+	}
+
+	// and every area my list holds
+	for( int i=0; i<mine.Count(); ++i )
+	{
+		const CNavArea *area = mine[i].area;
+		if ( !area )
+		{
+			continue;
+		}
+
+		VisDeltaStamp &stamp = VisDeltaStampFor( area );
+		if ( stamp.myGeneration != generation )
+		{
+			stamp.myGeneration = generation;
+			stamp.myArea = area;
+		}
+		else if ( stamp.myArea != area )
+		{
+			stamp.myArea = NULL;
+		}
+	}
+
+	// my entries that the other list lacks with equal attributes, as stock adds them
+	for( int i=0; i<mine.Count(); ++i )
+	{
+		const CNavArea *area = mine[i].area;
+		if ( !area )
+		{
+			continue;
+		}
+
+		const unsigned char attributes = mine[i].attributes;
+		const VisDeltaStamp &stamp = VisDeltaStampFor( area );
+
+		bool isInOther;
+		if ( stamp.otherGeneration != generation )
+		{
+			isInOther = false;
+		}
+		else if ( stamp.otherArea != area || attributes >= VIS_DELTA_ATTRIBUTE_BITS )
+		{
+			// two areas share the id, or the attributes have no mask bit: the stamp cannot answer
+			isInOther = VisListHasEntry( other, area, attributes );
+		}
+		else
+		{
+			isInOther = ( stamp.otherAttributeMask & ( 1u << attributes ) ) != 0;
+		}
+
+		if ( !isInOther )
+		{
+			delta.AddToTail( mine[i] );
+		}
+	}
+
+	// areas only the other list holds, as explicit NOT_VISIBLE entries
+	for( int j=0; j<other.Count(); ++j )
+	{
+		CNavArea *area = other[j].area;
+		if ( !area )
+		{
+			continue;
+		}
+
+		const VisDeltaStamp &stamp = VisDeltaStampFor( area );
+
+		bool isInMine;
+		if ( stamp.myGeneration != generation )
+		{
+			isInMine = false;
+		}
+		else if ( stamp.myArea != area )
+		{
+			isInMine = VisListHasArea( mine, area );
+		}
+		else
+		{
+			isInMine = true;
+		}
+
+		if ( !isInMine )
+		{
+			CNavArea::AreaBindInfo info;
+			info.area = area;
+			info.attributes = CNavArea::NOT_VISIBLE;
+
+			delta.AddToTail( info );
+		}
+	}
+}
+
+template < typename BindInfoArray >
+static bool IsSameVisDelta( const BindInfoArray &a, const BindInfoArray &b )
+{
+	if ( a.Count() != b.Count() )
+	{
+		return false;
+	}
+
+	for( int i=0; i<a.Count(); ++i )
+	{
+		if ( a[i].area != b[i].area || a[i].attributes != b[i].attributes )
+		{
+			return false;
+		}
+	}
+
+	return true;
+}
+
+
+//--------------------------------------------------------------------------------------------------------
 /**
  * Return a list of the delta between our visibility list and the given adjacent area
  */
 const CNavArea::CAreaBindInfoArray &CNavArea::ComputeVisibilityDelta( const CNavArea *other ) const
 {
 	static CAreaBindInfoArray delta;
+	static CAreaBindInfoArray stockDelta;
 
 	delta.RemoveAll();
 	
@@ -5671,58 +5943,128 @@ const CNavArea::CAreaBindInfoArray &CNavArea::ComputeVisibilityDelta( const CNav
 		return delta;
 	}
 
-	// add any visible areas in my list that are not in 'others' list into the delta
-	int i, j;
-	for( i=0; i<m_potentiallyVisibleAreas.Count(); ++i )
+	switch ( nav_vis_delta_mode.GetInt() )
 	{
-		if ( m_potentiallyVisibleAreas[i].area )
+	case VIS_DELTA_STOCK:
+		ComputeVisDeltaStock( m_potentiallyVisibleAreas, other->m_potentiallyVisibleAreas, delta );
+		break;
+
+	case VIS_DELTA_VERIFY:
+		ComputeVisDeltaLinear( m_potentiallyVisibleAreas, other->m_potentiallyVisibleAreas, delta );
+		ComputeVisDeltaStock( m_potentiallyVisibleAreas, other->m_potentiallyVisibleAreas, stockDelta );
+
+		++s_visDeltaVerified;
+		if ( !IsSameVisDelta( delta, stockDelta ) )
 		{
-			// is my visible area also in adjacent area's vis list
-			for( j=0; j<other->m_potentiallyVisibleAreas.Count(); ++j )
-			{
-				if ( m_potentiallyVisibleAreas[i].area == other->m_potentiallyVisibleAreas[j].area &&
-					 m_potentiallyVisibleAreas[i].attributes == other->m_potentiallyVisibleAreas[j].attributes )
-				{
-					// mutually identically visible
-					break;
-				}
-			}
+			++s_visDeltaMismatched;
+			Warning( "nav_vis_delta mismatch: area %u to %u, linear %d entries, stock %d entries\n", GetID(), other->GetID(), delta.Count(), stockDelta.Count() );
 
-			if ( j == other->m_potentiallyVisibleAreas.Count() )
-			{
-				// my vis area not in adjacent area's vis list or has different visibility attributes - add to delta
-				delta.AddToTail( m_potentiallyVisibleAreas[i] );
-			}
+			// keep the stock result so the saved mesh stays stock
+			delta = stockDelta;
 		}
-	}
+		break;
 
-	// add explicit NOT_VISIBLE references to areas in 'others' list that are NOT in mine
-	for( j=0; j<other->m_potentiallyVisibleAreas.Count(); ++j )
-	{
-		if ( other->m_potentiallyVisibleAreas[j].area )
-		{
-			for( i=0; i<m_potentiallyVisibleAreas.Count(); ++i )
-			{
-				if ( m_potentiallyVisibleAreas[i].area == other->m_potentiallyVisibleAreas[j].area )
-				{
-					// area in both lists - already handled in delta above
-					break;
-				}
-			}
-
-			if ( i == m_potentiallyVisibleAreas.Count() )
-			{
-				// 'other' has area in their list that we don't - mark it explicitly NOT_VISIBLE
-				AreaBindInfo info;
-				info.area = other->m_potentiallyVisibleAreas[j].area;
-				info.attributes = NOT_VISIBLE;
-
-				delta.AddToTail( info );
-			}
-		}
+	default:
+		ComputeVisDeltaLinear( m_potentiallyVisibleAreas, other->m_potentiallyVisibleAreas, delta );
+		break;
 	}
 
 	return delta;
+}
+
+
+// the self test draws its lists from this many real areas, so ids repeat often,
+static constexpr int VIS_DELTA_TEST_AREAS = 8;
+// builds this many random list pairs,
+static constexpr int VIS_DELTA_TEST_CASES = 20000;
+// each up to this long
+static constexpr int VIS_DELTA_TEST_MAX_LENGTH = 24;
+
+static unsigned int VisDeltaTestRandom( unsigned int &seed )
+{
+	// a fixed LCG, so every run tests the same lists
+	seed = seed * 1664525u + 1013904223u;
+	return seed >> 16;
+}
+
+CON_COMMAND_F( nav_vis_delta_selftest, "Compare the linear and stock visibility delta encoders on constructed lists (needs a loaded nav mesh), and print the nav_vis_delta_mode 2 tally", FCVAR_CHEAT )
+{
+	if ( TheNavAreas.Count() < VIS_DELTA_TEST_AREAS )
+	{
+		Warning( "nav_vis_delta_selftest: needs a nav mesh with at least %d areas\n", VIS_DELTA_TEST_AREAS );
+		return;
+	}
+
+	// attribute values to draw from: the three VisibilityType values, both bits, and one without a mask bit
+	static const unsigned char testAttributes[] = { CNavArea::NOT_VISIBLE, CNavArea::POTENTIALLY_VISIBLE, CNavArea::COMPLETELY_VISIBLE, 3, 200 };
+
+	CUtlVector< CNavArea::AreaBindInfo > mine, other, linear, stock;
+	CNavArea::AreaBindInfo info;
+	int mismatches = 0;
+	int duplicateCases = 0;
+
+	// fixed case: area 0 twice in each list with different attributes, area 3 twice only in the other list, a NULL entry
+	CNavArea *a0 = TheNavAreas[0], *a1 = TheNavAreas[1], *a2 = TheNavAreas[2], *a3 = TheNavAreas[3];
+	info.area = a0; info.attributes = 1; mine.AddToTail( info );
+	info.area = a1; info.attributes = 2; mine.AddToTail( info );
+	info.area = a0; info.attributes = 2; mine.AddToTail( info );
+	info.area = a2; info.attributes = 1; mine.AddToTail( info );
+	info.area = a0; info.attributes = 2; other.AddToTail( info );
+	info.area = a1; info.attributes = 1; other.AddToTail( info );
+	info.area = a3; info.attributes = 1; other.AddToTail( info );
+	info.area = a3; info.attributes = 2; other.AddToTail( info );
+	info.area = NULL; info.attributes = 0; other.AddToTail( info );
+	info.area = a0; info.attributes = 0; other.AddToTail( info );
+
+	ComputeVisDeltaLinear( mine, other, linear );
+	ComputeVisDeltaStock( mine, other, stock );
+	if ( !IsSameVisDelta( linear, stock ) )
+	{
+		++mismatches;
+		Warning( "nav_vis_delta_selftest: the fixed case differs (linear %d entries, stock %d)\n", linear.Count(), stock.Count() );
+	}
+
+	unsigned int seed = 1;
+	for( int t=0; t<VIS_DELTA_TEST_CASES; ++t )
+	{
+		mine.RemoveAll();
+		other.RemoveAll();
+
+		const int mineLength = VisDeltaTestRandom( seed ) % ( VIS_DELTA_TEST_MAX_LENGTH + 1 );
+		const int otherLength = VisDeltaTestRandom( seed ) % ( VIS_DELTA_TEST_MAX_LENGTH + 1 );
+		for( int n=0; n<mineLength + otherLength; ++n )
+		{
+			// one in ten entries is NULL, as an unbound entry would be
+			const int pick = VisDeltaTestRandom( seed ) % ( VIS_DELTA_TEST_AREAS + 1 );
+			info.area = ( pick < VIS_DELTA_TEST_AREAS ) ? TheNavAreas[ pick ] : NULL;
+			info.attributes = testAttributes[ VisDeltaTestRandom( seed ) % ARRAYSIZE( testAttributes ) ];
+
+			if ( n < mineLength )
+			{
+				mine.AddToTail( info );
+			}
+			else
+			{
+				other.AddToTail( info );
+			}
+		}
+
+		// a list longer than the pool of areas must repeat an area
+		if ( mineLength > VIS_DELTA_TEST_AREAS || otherLength > VIS_DELTA_TEST_AREAS )
+		{
+			++duplicateCases;
+		}
+
+		ComputeVisDeltaLinear( mine, other, linear );
+		ComputeVisDeltaStock( mine, other, stock );
+		if ( !IsSameVisDelta( linear, stock ) )
+		{
+			++mismatches;
+		}
+	}
+
+	Msg( "nav_vis_delta_selftest: %d cases (%d with repeated areas), %d mismatches; nav_vis_delta_mode 2 tally: %d compared, %d mismatched\n",
+		VIS_DELTA_TEST_CASES + 1, duplicateCases, mismatches, s_visDeltaVerified, s_visDeltaMismatched );
 }
 
 
