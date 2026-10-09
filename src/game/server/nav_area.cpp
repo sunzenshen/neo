@@ -42,6 +42,9 @@
 // memdbgon must be the last include file in a .cpp file!!!
 #include "tier0/memdbgon.h"
 
+// NAV_PROFILE (nav-analyze-fast): profiling instrumentation
+int64 volatile g_navProfileVis[ NAV_PROF_VIS_COUNT ];
+
 extern void HintMessageToAllPlayers( const char *message );
 
 unsigned int CNavArea::m_nextID = 1;
@@ -5393,6 +5396,7 @@ bool CNavArea::IsInPVS( void ) const
 CNavArea::VisibilityType CNavArea::ComputeVisibility( const CNavArea *area, bool isPVSValid, bool bCheckPVS, bool *pOutsidePVS ) const
 {
 	float distanceSq = area->GetCenter().DistToSqr( GetCenter() );
+	ThreadInterlockedIncrement64( &g_navProfileVis[ NAV_PROF_VIS_CALLS ] );
 
 	if ( nav_max_view_distance.GetFloat() > 0.00001f )
 	{
@@ -5400,6 +5404,7 @@ CNavArea::VisibilityType CNavArea::ComputeVisibility( const CNavArea *area, bool
 		if ( distanceSq > Sqr( nav_max_view_distance.GetFloat() ) )
 		{
 			// too far to be visible
+			ThreadInterlockedIncrement64( &g_navProfileVis[ NAV_PROF_VIS_DIST_REJECT ] );
 			return NOT_VISIBLE;
 		}
 	}
@@ -5423,6 +5428,7 @@ CNavArea::VisibilityType CNavArea::ComputeVisibility( const CNavArea *area, bool
 		{
 			if ( pOutsidePVS )
 				*pOutsidePVS = true;
+			ThreadInterlockedIncrement64( &g_navProfileVis[ NAV_PROF_VIS_PVS_REJECT ] );
 			return NOT_VISIBLE;
 		}
 
@@ -5457,9 +5463,11 @@ CNavArea::VisibilityType CNavArea::ComputeVisibility( const CNavArea *area, bool
 	CTraceFilterNoNPCsOrPlayer traceFilter( NULL, COLLISION_GROUP_NONE );
 
 	UTIL_TraceHull( vThisCenter, vTarget, vTraceMins, vTraceMaxs, MASK_NAV_VISION, &traceFilter, &tr );
+	ThreadInterlockedIncrement64( &g_navProfileVis[ NAV_PROF_VIS_HULL_TRACES ] );
 
 	if ( tr.fraction == 1.0 ||  ( tr.endpos.x > vOtherMins.x && tr.endpos.x < vOtherMaxs.x && tr.endpos.y > vOtherMins.y && tr.endpos.y < vOtherMaxs.y ) )
 	{
+		ThreadInterlockedIncrement64( &g_navProfileVis[ NAV_PROF_VIS_HULL_ACCEPT ] );
 		return COMPLETELY_VISIBLE; // Counter-intuitive: the way this function was written, "COMPLETELY_VISIBLE" actually means "I am completely visible to the other"
 	}
 
@@ -5621,6 +5629,7 @@ void CNavArea::ComputeVisToArea( CNavArea *&pOtherArea )
 	CNavArea *area = assert_cast< CNavArea * >( pOtherArea );
 	VisibilityType visThisToOther = ( area == g_pCurVisArea ) ? COMPLETELY_VISIBLE : NOT_VISIBLE;
 	VisibilityType visOtherToThis = NOT_VISIBLE;
+	ThreadInterlockedIncrement64( &g_navProfileVis[ NAV_PROF_VIS_PAIRS ] );
 
 	if ( area != g_pCurVisArea )
 	{
@@ -5679,6 +5688,7 @@ void CNavArea::ComputeVisibilityToMesh( void )
 	}
 	collector.m_area.EnsureCapacity( 1000 );
 	TheNavMesh->ForAllAreasInRadius( collector, GetCenter(), radius );
+	ThreadInterlockedExchangeAdd64( &g_navProfileVis[ NAV_PROF_VIS_CANDIDATES ], collector.m_area.Count() );
 
 	NavVisPair_t visPair;
 	UtlHashHandle_t hHash;
@@ -5691,6 +5701,7 @@ void CNavArea::ComputeVisibilityToMesh( void )
 		hHash = g_pNavVisPairHash->Find( visPair );
 		if ( hHash != g_pNavVisPairHash->InvalidHandle() )
 		{
+			ThreadInterlockedIncrement64( &g_navProfileVis[ NAV_PROF_VIS_PAIR_SKIPPED ] );
 			collector.m_area.FastRemove( i );
 		}
 	}
@@ -5761,6 +5772,7 @@ bool CNavArea::IsPartiallyVisible( const Vector &eye, const CBaseEntity *ignore 
 
 	// check center
 	UTIL_TraceLine( eye, GetCenter() + Vector( 0, 0, offset ), MASK_NAV_VISION, &traceFilter, &result );
+	ThreadInterlockedIncrement64( &g_navProfileVis[ NAV_PROF_VIS_LINE_TRACES ] );
 	if (result.fraction >= 1.0f)
 	{
 		return true;
@@ -5783,6 +5795,7 @@ bool CNavArea::IsPartiallyVisible( const Vector &eye, const CBaseEntity *ignore 
 		}
 
 		UTIL_TraceLine( eye, corner + Vector( 0, 0, offset ), MASK_NAV_VISION, &traceFilter, &result );
+		ThreadInterlockedIncrement64( &g_navProfileVis[ NAV_PROF_VIS_LINE_TRACES ] );
 		if (result.fraction >= 1.0f)
 		{
 			return true;
