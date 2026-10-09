@@ -6034,7 +6034,7 @@ CON_COMMAND_F( nav_vis_delta_selftest, "Compare the linear and stock visibility 
 		const int otherLength = VisDeltaTestRandom( seed ) % ( VIS_DELTA_TEST_MAX_LENGTH + 1 );
 		for( int n=0; n<mineLength + otherLength; ++n )
 		{
-			// one in ten entries is NULL, as an unbound entry would be
+			// one entry in nine is NULL, as an unbound entry would be
 			const int pick = VisDeltaTestRandom( seed ) % ( VIS_DELTA_TEST_AREAS + 1 );
 			info.area = ( pick < VIS_DELTA_TEST_AREAS ) ? TheNavAreas[ pick ] : NULL;
 			info.attributes = testAttributes[ VisDeltaTestRandom( seed ) % ARRAYSIZE( testAttributes ) ];
