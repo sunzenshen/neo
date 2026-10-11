@@ -47,6 +47,18 @@ CNEOBotPathCost::CNEOBotPathCost(CNEOBot* me, RouteType routeType)
 	m_bIgnoreReservations = !neo_bot_path_reservation_enable.GetBool();
 	m_bIgnoreHazards = (me->m_hCommandingPlayer.Get() != nullptr);
 	m_bIgnoreVisibilityExposure = !neo_bot_path_visibility_exposure_enable.GetBool();
+
+	// A plan made in freeze time is the one walked when the round goes live,
+	// so it should not wander off across the open ground the bot can already see from spawn
+	m_freezeStartArea = nullptr;
+	if ( (me->GetNeoFlags() & NEO_FL_FREEZETIME) && (routeType != FASTEST_ROUTE) )
+	{
+		m_freezeStartArea = me->GetLastKnownArea();
+		if ( !m_freezeStartArea )
+		{
+			m_freezeStartArea = TheNavMesh->GetNearestNavArea( me->GetAbsOrigin() );
+		}
+	}
 }
 
 //-------------------------------------------------------------------------------------------------
@@ -123,10 +135,15 @@ float CNEOBotPathCost::operator()(CNavArea* baseArea, CNavArea* fromArea, const 
 		}
 	}
 
+	// Inside the region visible from the frozen bot's spawn, go direct:
+	// no route dispersal and no exposure penalty
+	const bool bDirectFromSpawn = m_freezeStartArea
+		&& ( area == m_freezeStartArea || m_freezeStartArea->IsPotentiallyVisible( area ) );
+
 	// add a random penalty unique to this character so they choose different routes to the same place
 	float preference = 1.0f;
 
-	if (m_routeType == DEFAULT_ROUTE)
+	if (m_routeType == DEFAULT_ROUTE && !bDirectFromSpawn)
 	{
 		// this term causes the same bot to choose different routes over time,
 		// but keep the same route for a period in case of repaths
@@ -152,7 +169,7 @@ float CNEOBotPathCost::operator()(CNavArea* baseArea, CNavArea* fromArea, const 
 
 	// ------------------------------------------------------------------------------------------------
 	// New path reservation related cost adjustments
-	if ( !m_bIgnoreReservations && (m_routeType != FASTEST_ROUTE) )
+	if ( !m_bIgnoreReservations && (m_routeType != FASTEST_ROUTE) && !bDirectFromSpawn )
 	{
 		cost += CNEOBotPathReservations()->GetAreaAvoidPenalty(area->GetID());
 
@@ -177,7 +194,7 @@ float CNEOBotPathCost::operator()(CNavArea* baseArea, CNavArea* fromArea, const 
 		}
 	}
 
-	if ( !m_bIgnoreVisibilityExposure && (m_routeType != FASTEST_ROUTE) )
+	if ( !m_bIgnoreVisibilityExposure && (m_routeType != FASTEST_ROUTE) && !bDirectFromSpawn )
 	{
 		// Weapon range penalties
 		auto* myWeapon = assert_cast<CNEOBaseCombatWeapon*>(m_me->GetActiveWeapon());

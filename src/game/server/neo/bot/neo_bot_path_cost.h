@@ -33,4 +33,7 @@ private:
 	float m_stepHeight;
 	float m_maxJumpHeight;
 	float m_maxDropHeight;
+
+	// set while the bot plans frozen at round start: the spawn area whose visible region it crosses directly
+	const CNavArea* m_freezeStartArea;
 };
