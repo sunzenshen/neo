@@ -142,9 +142,8 @@ float CNEOBotPathCost::operator()(CNavArea* baseArea, CNavArea* fromArea, const 
 	}
 
 	// Inside the region visible from the frozen bot's spawn, go direct:
-	// no route dispersal and no exposure penalty
-	const bool bDirectFromSpawn = m_freezeStartArea
-		&& ( area == m_freezeStartArea || m_freezeStartArea->IsPotentiallyVisible( area ) );
+	// no random preference, no reservation penalty and no exposure penalty
+	const bool bDirectFromSpawn = m_freezeStartArea && m_freezeStartArea->IsPotentiallyVisible( area );
 
 	// add a random penalty unique to this character so they choose different routes to the same place
 	float preference = 1.0f;
