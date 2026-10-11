@@ -47,6 +47,7 @@ CNEOBotPathCost::CNEOBotPathCost(CNEOBot* me, RouteType routeType)
 	m_bIgnoreReservations = !neo_bot_path_reservation_enable.GetBool();
 	m_bIgnoreHazards = (me->m_hCommandingPlayer.Get() != nullptr);
 	m_bIgnoreVisibilityExposure = !neo_bot_path_visibility_exposure_enable.GetBool();
+	m_bRefuseLadders = false;
 
 	// A plan made in freeze time is the one walked when the round goes live,
 	// so it should not wander off across the open ground the bot can already see from spawn
@@ -95,6 +96,11 @@ float CNEOBotPathCost::operator()(CNavArea* baseArea, CNavArea* fromArea, const 
 
 	if (ladder)
 	{
+		if (m_bRefuseLadders)
+		{
+			return -1.0f;
+		}
+
 		dist = ladder->m_length;
 
 		// ladders leave bots exposed, but can be a shortcut

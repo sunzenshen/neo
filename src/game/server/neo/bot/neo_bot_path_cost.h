@@ -25,6 +25,7 @@ public:
 
 	bool m_bIgnoreReservations;
 	bool m_bIgnoreVisibilityExposure;
+	bool m_bRefuseLadders;
 
 private:
 	bool m_bIgnoreHazards;

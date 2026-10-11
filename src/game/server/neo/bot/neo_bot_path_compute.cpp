@@ -40,6 +40,35 @@ static bool IsPathUsable(const PathFollower& path, bool reachedGoal, bool includ
 	return path.IsValid() && (reachedGoal || includeGoalIfPathFails);
 }
 
+static bool HasLadder(const Path& path)
+{
+	for (const Path::Segment* seg = path.FirstSegment(); seg; seg = path.NextSegment(seg))
+	{
+		if (seg->ladder)
+		{
+			return true;
+		}
+	}
+
+	return false;
+}
+
+// A plan made while frozen at round start is walked as-is when the round goes live,
+// so route dispersal may not add a ladder climb the shortest route does without
+static bool IsFreezePlanDetourClimb(CNEOBot* bot, const PathFollower& path, const Vector& goal, RouteType route, float maxPathLength, bool includeGoalIfPathFails, bool requireGoalArea)
+{
+	if (route == FASTEST_ROUTE || !(bot->GetNeoFlags() & NEO_FL_FREEZETIME) || !HasLadder(path))
+	{
+		return false;
+	}
+
+	CNEOBotPathCost shortestCost(bot, FASTEST_ROUTE);
+	shortestCost.m_bIgnoreReservations = true;
+	Path shortest;
+	shortest.Compute(bot, goal, shortestCost, maxPathLength, includeGoalIfPathFails, requireGoalArea);
+	return shortest.IsValid() && !HasLadder(shortest);
+}
+
 // By default, assumes that we would prefer to have partial paths even if we can't make a full path
 // to accomodate scenarios like getting as close as possible to a hazard area but not into it
 // Set includeGoalIfPathFails to false if you need to get the full path (or nothing on failure)
@@ -51,8 +80,19 @@ bool CNEOBotPathCompute(CNEOBot* bot, PathFollower& path, const Vector& goal, Ro
 	bool reachedGoal = path.Compute(bot, goal, cost_with_reservations, maxPathLength, includeGoalIfPathFails, requireGoalArea);
 	if (IsPathUsable(path, reachedGoal, includeGoalIfPathFails))
 	{
-		CNEOBotReservePath(bot, path);
-		return true;
+		if (IsFreezePlanDetourClimb(bot, path, goal, route, maxPathLength, includeGoalIfPathFails, requireGoalArea))
+		{
+			// disperse over routes without a climb instead
+			CNEOBotPathCost cost_without_ladders(bot, route);
+			cost_without_ladders.m_bRefuseLadders = true;
+			reachedGoal = path.Compute(bot, goal, cost_without_ladders, maxPathLength, includeGoalIfPathFails, requireGoalArea);
+		}
+
+		if (IsPathUsable(path, reachedGoal, includeGoalIfPathFails))
+		{
+			CNEOBotReservePath(bot, path);
+			return true;
+		}
 	}
 
 	CNEOBotPathCost cost_without_reservations(bot, FASTEST_ROUTE);
