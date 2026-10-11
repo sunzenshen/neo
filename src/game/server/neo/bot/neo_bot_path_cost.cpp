@@ -135,16 +135,15 @@ float CNEOBotPathCost::operator()(CNavArea* baseArea, CNavArea* fromArea, const 
 		}
 	}
 
-	// A frozen bot's plan has no random preference or exposure penalty,
-	// and inside the region visible from its spawn no reservation penalty either, so it goes direct there
-	const bool bFrozenPlan = ( m_freezeStartArea != nullptr );
-	const bool bDirectFromSpawn = bFrozenPlan
+	// Inside the region visible from the frozen bot's spawn, go direct:
+	// no route dispersal and no exposure penalty
+	const bool bDirectFromSpawn = m_freezeStartArea
 		&& ( area == m_freezeStartArea || m_freezeStartArea->IsPotentiallyVisible( area ) );
 
 	// add a random penalty unique to this character so they choose different routes to the same place
 	float preference = 1.0f;
 
-	if (m_routeType == DEFAULT_ROUTE && !bFrozenPlan)
+	if (m_routeType == DEFAULT_ROUTE && !bDirectFromSpawn)
 	{
 		// this term causes the same bot to choose different routes over time,
 		// but keep the same route for a period in case of repaths
@@ -195,7 +194,7 @@ float CNEOBotPathCost::operator()(CNavArea* baseArea, CNavArea* fromArea, const 
 		}
 	}
 
-	if ( !m_bIgnoreVisibilityExposure && (m_routeType != FASTEST_ROUTE) && !bFrozenPlan )
+	if ( !m_bIgnoreVisibilityExposure && (m_routeType != FASTEST_ROUTE) && !bDirectFromSpawn )
 	{
 		// Weapon range penalties
 		auto* myWeapon = assert_cast<CNEOBaseCombatWeapon*>(m_me->GetActiveWeapon());
