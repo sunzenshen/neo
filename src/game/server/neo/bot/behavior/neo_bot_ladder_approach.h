@@ -40,6 +40,8 @@ private:
 	IntervalTimer m_progressTimer;	// since the bot last moved PROGRESS_STEP
 	Vector m_ladderCenter;
 	CountdownTimer m_timeoutTimer;
+	IntervalTimer m_pushTimer;	// patch 63: pushing into the ladder's foot since
+	CountdownTimer m_hopTimer;
 
 	static constexpr float MOUNT_RANGE = 25.0f;         // Distance to start climbing
 	static constexpr float HANG_CLEARANCE = 2.0f;       // Gap between the face and the hull of a bot about to mount in front of it

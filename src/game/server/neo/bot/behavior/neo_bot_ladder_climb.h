@@ -28,7 +28,7 @@ public:
 	virtual ActionResult<CNEOBot> OnResume( CNEOBot *me, Action<CNEOBot> *interruptingAction ) override;
 
 private:
-	void EnterDismountPhase( CNEOBot *me );
+	void EnterDismountPhase( CNEOBot *me, const char *why = "" );
 	void ResolveExitArea( CNEOBot *me );
 	const CNavArea *FindLanding( const PathFollower *path, const CNavArea *pathExit ) const;
 	const CNavArea *LadderEndArea() const;
@@ -53,6 +53,7 @@ private:
 	CountdownTimer m_dismountTimer;
 	CountdownTimer m_nudgeTimer;	// shimmying sideways past a snag
 	int m_nNudges;
+	float m_flLateralTarget = 0.0f;	// NEO-HARNESS-TEMP research arm (patch 75): where across the ladder to hold the bot
 
 	static constexpr float STUCK_CHECK_INTERVAL = 0.4f;
 	static constexpr float STUCK_Z_TOLERANCE = 2.0f;
