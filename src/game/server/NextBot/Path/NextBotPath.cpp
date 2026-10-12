@@ -42,7 +42,6 @@ static bool IsLinkAcrossGap( const CNavArea *from, const Vector &fromPos, const 
 	return ( closeFrom - closeTo ).AsVector2D().IsLengthGreaterThan( GapSeparationTolerance );
 }
 
-#ifdef NEO
 // NEO-HARNESS-TEMP research arm (2026-09-23, patch 55)
 ConVar neo_bot_trivial_fallback_partial( "neo_bot_trivial_fallback_partial", "0", FCVAR_CHEAT,
 	"Research: a straight-line fallback path (search never left the start area) reports PARTIAL_PATH, not COMPLETE_PATH" );
