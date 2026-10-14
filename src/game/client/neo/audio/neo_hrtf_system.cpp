@@ -15,6 +15,7 @@
 #include "view.h"
 
 #include "miniaudio.h"
+#include "neo_gamerules.h"
 
 // memdbgon must be the last include file in a .cpp file!!!
 #include "tier0/memdbgon.h"
@@ -289,8 +290,9 @@ ConVar cl_neo_hrtf_engine_floor("cl_neo_hrtf_engine_floor", "0.016", FCVAR_CLIEN
 
 static CNeoHrtfSystem s_neoHrtfSystem;
 
+extern ConVar sv_neo_hrtf;
 CNeoHrtfLocalSoundScope::CNeoHrtfLocalSoundScope(NeoHrtfLocalSound place)
-	: m_place(cl_neo_hrtf.GetBool() ? place : NeoHrtfLocalSound::None)
+	: m_place(cl_neo_hrtf.GetBool() && sv_neo_hrtf.GetBool() ? place : NeoHrtfLocalSound::None)
 	, m_guidBefore(0)
 {
 	if (m_place != NeoHrtfLocalSound::None)
@@ -389,7 +391,7 @@ void CNeoHrtfSystem::LevelShutdownPostEntity()
 
 void CNeoHrtfSystem::Update(float)
 {
-	if (!cl_neo_hrtf.GetBool())
+	if (!cl_neo_hrtf.GetBool() || !sv_neo_hrtf.GetBool())
 	{
 		// The disabled path is one cvar read: nothing was started, so there is nothing to undo.
 		// Disabling after a run (including sv_cheats reverting the cvar) tears down once here
