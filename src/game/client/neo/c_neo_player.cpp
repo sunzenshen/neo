@@ -847,7 +847,9 @@ void C_NEO_Player::PostDataUpdate( DataUpdateType_t updateType )
 void C_NEO_Player::PlayStepSound( Vector &vecOrigin,
 	surfacedata_t *psurface, float fvol, bool force )
 {
+#ifdef NEO_STEAMAUDIO
 	CNeoHrtfLocalSoundScope hrtfScope(IsLocalPlayer() ? NeoHrtfLocalSound::Feet : NeoHrtfLocalSound::None);
+#endif // NEO_STEAMAUDIO
 	BaseClass::PlayStepSound(vecOrigin, psurface, fvol, force);
 }
 
@@ -1785,7 +1787,9 @@ void C_NEO_Player::PlayCloakSound(void)
 	params.m_pOrigin = &GetAbsOrigin();
 	params.m_nChannel = CHAN_VOICE; // NEO TODO (Adam) This doesn't change the channel this sound is played on, set correct channel in sound script
 
+#ifdef NEO_STEAMAUDIO
 	CNeoHrtfLocalSoundScope hrtfScope(NeoHrtfLocalSound::Body);
+#endif // NEO_STEAMAUDIO
 	EmitSound(filter, entindex(), params);
 }
 
