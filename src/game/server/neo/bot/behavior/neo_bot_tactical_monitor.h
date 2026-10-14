@@ -36,6 +36,7 @@ private:
 
 	CountdownTimer m_detpackCheckTimer;
 	ActionResult< CNEOBot > MonitorArmedDetpack(CNEOBot *me);
+	bool IsTeammateInDetpackBlast(CNEOBot *me, const Vector &vecDetpackPos) const;
 
 	ActionResult< CNEOBot > ScavengeForPrimaryWeapon(CNEOBot* me);
 

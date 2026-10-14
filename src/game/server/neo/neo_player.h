@@ -85,6 +85,7 @@ public:
 	virtual void ChangeTeam(int iTeam) OVERRIDE;
 	virtual void PickupObject(CBaseEntity *pObject, bool bLimitMassAndSize) OVERRIDE;
 	virtual void PlayStepSound(Vector &vecOrigin, surfacedata_t *psurface, float fvol, bool force) OVERRIDE;
+	virtual void OnEmitFootstepSound(const CSoundParameters& params, const Vector& vecOrigin, float fVolume) OVERRIDE;
 	const char* GetOverrideStepSound(const char* pBaseStepSound) override;
 	virtual void Splash() override;
 	virtual void Weapon_Drop(CBaseCombatWeapon *pWeapon, const Vector *pvecTarget = NULL, const Vector *pVelocity = NULL) OVERRIDE;

@@ -38,6 +38,7 @@
 #include "player_resource.h"
 #include "neo_player_shared.h"
 #include "bot/neo_bot.h"
+#include "bot/neo_bot_memory_sound_footstep.h"
 #include "nav_mesh.h"
 #include "neo_spawn_manager.h"
 #include "recipientfilter.h"
@@ -2934,6 +2935,15 @@ void CNEO_Player::PlayStepSound( Vector &vecOrigin,
 	surfacedata_t *psurface, float fvol, bool force )
 {
 	BaseClass::PlayStepSound(vecOrigin, psurface, fvol, force);
+}
+
+void CNEO_Player::OnEmitFootstepSound(const CSoundParameters& params, const Vector& vecOrigin, float fVolume)
+{
+	BaseClass::OnEmitFootstepSound(params, vecOrigin, fVolume);
+
+	// Bots listen for footsteps, for example near a detpack they planted.
+	// The step origin from UpdateStepSound is unset under NEO, so use my own origin
+	NEOMemorySoundFootstep::OnFootstep(this, GetAbsOrigin(), fVolume, params.soundlevel);
 }
 
 bool CNEO_Player::IsCarryingGhost(void) const

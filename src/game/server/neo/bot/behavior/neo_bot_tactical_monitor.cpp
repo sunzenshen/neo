@@ -7,6 +7,7 @@
 
 #include "bot/neo_bot.h"
 #include "bot/neo_bot_manager.h"
+#include "bot/neo_bot_memory_sound_footstep.h"
 #include "bot/neo_bot_path_reservation.h"
 
 #include "bot/behavior/neo_bot_detpack_trigger.h"
@@ -206,7 +207,42 @@ ActionResult< CNEOBot > CNEOBotTacticalMonitor::MonitorArmedDetpack( CNEOBot *me
 		return SuspendFor( new CNEOBotDetpackTrigger(), "Triggering detpack!" );
 	}
 
+	// An enemy I cannot see may still be heard walking over the detpack
+	const float flMaxRadius = NEO_DETPACK_DAMAGE_RADIUS * flThresholdMultiplier;
+	if ( NEOMemorySoundFootstep::HeardEnemyStepNear( me->EyePosition(), me->GetTeamNumber(), me->entindex(), vecDetpackPos, flMaxRadius )
+		&& !IsTeammateInDetpackBlast( me, vecDetpackPos ) )
+	{
+		return SuspendFor( new CNEOBotDetpackTrigger(), "Triggering detpack on heard footsteps!" );
+	}
+
 	return Continue();
+}
+
+
+//-----------------------------------------------------------------------------------------
+// Bots may know where their teammates are, so hold a heard-only detonation for any of them in the blast
+bool CNEOBotTacticalMonitor::IsTeammateInDetpackBlast( CNEOBot *me, const Vector &vecDetpackPos ) const
+{
+	if ( !NEORules()->IsTeamplay() )
+	{
+		return false;
+	}
+
+	for ( int i = 1; i <= gpGlobals->maxClients; ++i )
+	{
+		CBasePlayer *pPlayer = UTIL_PlayerByIndex( i );
+		if ( !pPlayer || pPlayer == me || !pPlayer->IsAlive() || !me->InSameTeam( pPlayer ) )
+		{
+			continue;
+		}
+
+		if ( vecDetpackPos.DistToSqr( pPlayer->GetAbsOrigin() ) <= Square( NEO_DETPACK_DAMAGE_RADIUS ) )
+		{
+			return true;
+		}
+	}
+
+	return false;
 }
 
 

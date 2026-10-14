@@ -1523,6 +1523,7 @@ set(UNITY_SOURCE_NEO_BOT
     neo/bot/neo_bot_locomotion.cpp
     neo/bot/neo_bot_manager.cpp
     neo/bot/neo_bot_memory_sound_combat.cpp
+    neo/bot/neo_bot_memory_sound_footstep.cpp
     neo/bot/neo_bot_profile.cpp
     neo/bot/neo_bot_squad.cpp
     neo/bot/neo_bot_suppressive_fire.cpp
@@ -1589,6 +1590,7 @@ target_sources_grouped(
     neo/bot/neo_bot_locomotion.h
     neo/bot/neo_bot_manager.h
     neo/bot/neo_bot_memory_sound_combat.h
+    neo/bot/neo_bot_memory_sound_footstep.h
     neo/bot/neo_bot_profile.h
     neo/bot/neo_bot_squad.h
     neo/bot/neo_bot_suppressive_fire.h

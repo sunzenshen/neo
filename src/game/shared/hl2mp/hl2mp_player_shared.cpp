@@ -152,6 +152,11 @@ void CHL2MP_Player::PlayStepSound( Vector &vecOrigin, surfacedata_t *psurface, f
 	ep.m_pOrigin = &vecOrigin;
 
 	EmitSound( filter, entindex(), ep );
+
+#ifdef NEO
+	// Like CBasePlayer::PlayStepSound, so the server can let bots hear the step
+	OnEmitFootstepSound( params, vecOrigin, fvol );
+#endif
 }
 
 

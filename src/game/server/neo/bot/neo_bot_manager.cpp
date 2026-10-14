@@ -6,6 +6,7 @@
 #include "neo_bot.h"
 #include "neo_gamerules.h"
 #include "neo_bot_memory_sound_combat.h"
+#include "neo_bot_memory_sound_footstep.h"
 #include "neo_bot_path_reservation.h"
 
 
@@ -141,6 +142,7 @@ void CNEOBotManager::OnMapLoaded( void )
 
 	CNEOBotPathReservations()->Clear();
 	NEOMemorySoundCombat::Reset();
+	NEOMemorySoundFootstep::Reset();
 }
 
 
