@@ -3871,6 +3871,16 @@ bool CNavMesh::UpdateGeneration( float maxTime )
 			m_generationState = COMPUTE_MESH_VISIBILITY;
 			m_generationIndex = 0;
 			BeginVisibilityComputations();
+
+			// NAV_VIS_DEBUG (nav-analyze-fast): debug only, NAV_VIS_DEBUG_REMOVE=<targetname> removes those entities first
+			if ( const char *removeName = getenv( "NAV_VIS_DEBUG_REMOVE" ) )
+			{
+				for ( CBaseEntity *ent = gEntList.FindEntityByName( NULL, removeName ); ent; ent = gEntList.FindEntityByName( ent, removeName ) )
+				{
+					Msg( "NAV_VIS_DEBUG removing %s (%d)\n", removeName, ent->entindex() );
+					UTIL_Remove( ent );
+				}
+			}
 			NavVisBench();	// NAV_PROFILE (nav-analyze-fast): only when NAV_VIS_BENCH is set
 			Msg( "Computing mesh visibility...\n" );
 		
@@ -3891,6 +3901,20 @@ bool CNavMesh::UpdateGeneration( float maxTime )
 #endif // NEO
 			// the whole pass runs in this frame, since its threads only pay off on one large batch;
 			// the encoding below runs in the next frame
+			// NAV_VIS_DEBUG (nav-analyze-fast): NAV_VIS_STOCK_PATH runs the per-area path, for comparison
+			while ( getenv( "NAV_VIS_STOCK_PATH" ) && m_generationIndex < TheNavAreas.Count() )
+			{
+				CNavArea *area = TheNavAreas[ m_generationIndex ];
+				++m_generationIndex;
+
+				area->ComputeVisibilityToMesh();
+
+				if ( Plat_FloatTime() - startTime > maxTime )
+				{
+					return true;
+				}
+			}
+
 			if ( m_generationIndex < TheNavAreas.Count() )
 			{
 				CNavArea::ComputeMeshVisibility();

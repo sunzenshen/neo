@@ -266,6 +266,9 @@ void CNavMesh::Update( void )
 {
 	VPROF( "CNavMesh::Update" );
 
+	extern void NavVisDebugTick();	// NAV_VIS_DEBUG (nav-analyze-fast): debug only
+	NavVisDebugTick();
+
 	if (IsGenerating())
 	{
 		UpdateGeneration( 0.03 );

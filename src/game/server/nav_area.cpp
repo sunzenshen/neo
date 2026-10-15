@@ -5508,6 +5508,98 @@ bool CNavArea::IsInPVS( void ) const
 }
 
 
+
+//--------------------------------------------------------------------------------------------------------
+// NAV_VIS_DEBUG (nav-analyze-fast): debug only, not for merge. NAV_VIS_DEBUG_PAIRS="2:42,2:1642" prints the
+// visibility test of those pairs (either direction) and, from CNavMesh::Update, re-tests them once a second.
+static int s_navVisDebugPairs[ 16 ][ 2 ];
+static int s_navVisDebugPairCount = -1;
+
+static void NavVisDebugParse()
+{
+	s_navVisDebugPairCount = 0;
+	const char *list = getenv( "NAV_VIS_DEBUG_PAIRS" );
+	while ( list && *list && s_navVisDebugPairCount < 16 )
+	{
+		int a = 0, b = 0, used = 0;
+		if ( sscanf( list, "%d:%d%n", &a, &b, &used ) != 2 )
+		{
+			break;
+		}
+		s_navVisDebugPairs[ s_navVisDebugPairCount ][ 0 ] = a;
+		s_navVisDebugPairs[ s_navVisDebugPairCount ][ 1 ] = b;
+		++s_navVisDebugPairCount;
+		list += used;
+		while ( *list == ',' || *list == ' ' )
+		{
+			++list;
+		}
+	}
+}
+
+static bool NavVisDebugPair( unsigned int a, unsigned int b )
+{
+	if ( s_navVisDebugPairCount < 0 )
+	{
+		NavVisDebugParse();
+	}
+
+	for ( int i = 0; i < s_navVisDebugPairCount; ++i )
+	{
+		const int *p = s_navVisDebugPairs[ i ];
+		if ( ( p[ 0 ] == (int)a && p[ 1 ] == (int)b ) || ( p[ 0 ] == (int)b && p[ 1 ] == (int)a ) )
+		{
+			return true;
+		}
+	}
+	return false;
+}
+
+static void NavVisDebugHull( unsigned int from, unsigned int to, const trace_t &tr, bool accepted )
+{
+	CBaseEntity *ent = tr.m_pEnt;
+	CBaseAnimating *anim = ent ? ent->GetBaseAnimating() : NULL;
+	Msg( "NAV_VIS_DEBUG hull %u->%u main=%d tick=%d curtime=%.3f frac=%.6f end=(%.2f %.2f %.2f) startsolid=%d allsolid=%d accepted=%d"
+		" ent=%d %s %s solid=%d seq=%d cycle=%.4f origin=(%.1f %.1f %.1f) mins=(%.1f %.1f %.1f) maxs=(%.1f %.1f %.1f)\n",
+		from, to, ThreadInMainThread() ? 1 : 0, gpGlobals->tickcount, gpGlobals->curtime, tr.fraction, tr.endpos.x, tr.endpos.y,
+		tr.endpos.z, tr.startsolid ? 1 : 0, tr.allsolid ? 1 : 0, accepted ? 1 : 0, ent ? ent->entindex() : -1,
+		ent ? ent->GetClassname() : "-", ent ? STRING( ent->GetModelName() ) : "-", ent ? (int)ent->GetSolid() : -1,
+		anim ? anim->GetSequence() : -1, anim ? anim->GetCycle() : -1.0f,
+		ent ? ent->GetAbsOrigin().x : 0.0f, ent ? ent->GetAbsOrigin().y : 0.0f, ent ? ent->GetAbsOrigin().z : 0.0f,
+		ent ? ent->WorldAlignMins().x : 0.0f, ent ? ent->WorldAlignMins().y : 0.0f, ent ? ent->WorldAlignMins().z : 0.0f,
+		ent ? ent->WorldAlignMaxs().x : 0.0f, ent ? ent->WorldAlignMaxs().y : 0.0f, ent ? ent->WorldAlignMaxs().z : 0.0f );
+}
+
+void NavVisDebugTick()
+{
+	static double s_last = 0.0;
+	static int s_count = 0;
+	if ( s_navVisDebugPairCount < 0 )
+	{
+		NavVisDebugParse();
+	}
+
+	if ( s_navVisDebugPairCount == 0 || s_count >= 40 || Plat_FloatTime() - s_last < 1.0 )
+	{
+		return;
+	}
+
+	s_last = Plat_FloatTime();
+	++s_count;
+	for ( int i = 0; i < s_navVisDebugPairCount; ++i )
+	{
+		CNavArea *a = TheNavMesh->GetNavAreaByID( s_navVisDebugPairs[ i ][ 0 ] );
+		CNavArea *b = TheNavMesh->GetNavAreaByID( s_navVisDebugPairs[ i ][ 1 ] );
+		if ( !a || !b )
+		{
+			continue;
+		}
+
+		Msg( "NAV_VIS_DEBUG tick %d %u->%u = %d, %u->%u = %d\n", s_count, a->GetID(), b->GetID(), a->ComputeVisibility( b, false, false ),
+			b->GetID(), a->GetID(), b->ComputeVisibility( a, false, false ) );
+	}
+}
+
 //--------------------------------------------------------------------------------------------------------
 /**
  * Do actual line-of-sight traces to determine if any part of given area is visible from this area
@@ -5583,6 +5675,11 @@ CNavArea::VisibilityType CNavArea::ComputeVisibility( const CNavArea *area, bool
 
 	UTIL_TraceHull( vThisCenter, vTarget, vTraceMins, vTraceMaxs, MASK_NAV_VISION, &traceFilter, &tr );
 	NavProfAdd( NAV_PROF_VIS_HULL_TRACES );
+	const bool debugPair = NavVisDebugPair( GetID(), area->GetID() );	// NAV_VIS_DEBUG
+	if ( debugPair )
+	{
+		NavVisDebugHull( GetID(), area->GetID(), tr, tr.fraction == 1.0 || ( tr.endpos.x > vOtherMins.x && tr.endpos.x < vOtherMaxs.x && tr.endpos.y > vOtherMins.y && tr.endpos.y < vOtherMaxs.y ) );
+	}
 
 	if ( tr.fraction == 1.0 ||  ( tr.endpos.x > vOtherMins.x && tr.endpos.x < vOtherMaxs.x && tr.endpos.y > vOtherMins.y && tr.endpos.y < vOtherMaxs.y ) )
 	{
@@ -5621,7 +5718,13 @@ CNavArea::VisibilityType CNavArea::ComputeVisibility( const CNavArea *area, bool
 			// If we are already POTENTIALLY_VISIBLE, and no longer COMPLETELY_VISIBLE, there's
 			// no way for vis to change again.
 			if ( vis == POTENTIALLY_VISIBLE )
+			{
+				if ( debugPair )
+				{
+					Msg( "NAV_VIS_DEBUG samples %u->%u = 1 (early)\n", GetID(), area->GetID() );
+				}
 				return POTENTIALLY_VISIBLE;
+			}
 
 			Vector testPos( GetCorner( NORTH_WEST ) + shift );
 			testPos.z = GetZ( testPos ) + eye.z;
@@ -5648,6 +5751,10 @@ CNavArea::VisibilityType CNavArea::ComputeVisibility( const CNavArea *area, bool
 		}
 	}
 
+	if ( debugPair )
+	{
+		Msg( "NAV_VIS_DEBUG samples %u->%u = %d\n", GetID(), area->GetID(), vis );
+	}
 	return (VisibilityType)vis;
 }
 
