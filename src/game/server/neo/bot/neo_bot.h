@@ -469,6 +469,7 @@ public:
 
 private:
 	void ToggleCloak(void);
+	Vector FindPathHorizon() const;
 
 	CNEOBotSuppressiveFire m_suppressiveFire;
 
@@ -478,6 +479,7 @@ private:
 	CNEOBotIntention *m_intention;
 
 	CountdownTimer m_lookAtEnemyInvasionAreasTimer;
+	CNavArea *m_lookAroundArea;		// the area the last look-around ran in
 
 	CNavArea* m_spawnArea;			// where we spawned
 	CountdownTimer m_justLostPointTimer;

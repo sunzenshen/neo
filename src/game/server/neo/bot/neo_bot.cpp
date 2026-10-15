@@ -589,6 +589,7 @@ CNEOBot::CNEOBot()
 	m_didReselectClass = false;
 	m_spotWhereEnemySentryLastInjuredMe = vec3_origin;
 	m_isLookingAroundForEnemies = true;
+	m_lookAroundArea = NULL;
 	m_behaviorFlags = 0;
 	m_attentionFocusEntity = NULL;
 	m_noisyTimer.Invalidate();
@@ -661,6 +662,7 @@ void CNEOBot::Spawn()
 	m_squad = NULL;
 	m_didReselectClass = false;
 	m_isLookingAroundForEnemies = true;
+	m_lookAroundArea = NULL;
 	m_attentionFocusEntity = NULL;
 
 	m_delayedNoticeVector.RemoveAll();
@@ -1275,14 +1277,94 @@ Vector CNEOBot::FindVisibleThrowPointNear( const Vector &vecPos ) const
 
 
 //-----------------------------------------------------------------------------------------------------
+// On entering a nav area, a calm bot glances at the farthest point of its path it can see,
+// looking at most this far along the path ahead,
+static constexpr float BOT_HORIZON_PATH_RANGE = 1200.0f;
+// testing a point at least every this many units along it,
+static constexpr float BOT_HORIZON_SAMPLE_STEP = 128.0f;
+// and skipping points this close, which say nothing about what lies ahead
+static constexpr float BOT_HORIZON_MIN_RANGE = 64.0f;
+// Path facing already covers a point within this many degrees of where the bot looks
+static constexpr float BOT_HORIZON_MIN_ANGLE = 45.0f;
+// at most once in this many seconds,
+static constexpr float BOT_HORIZON_COOLDOWN = 1.5f;
+// holding the glance this long (path facing takes the head back after it)
+static constexpr float BOT_HORIZON_HOLD_MIN = 0.6f;
+static constexpr float BOT_HORIZON_HOLD_MAX = 1.0f;
+
+// Returns the farthest point along the path ahead with a clear line from the eyes, at eye height,
+// or vec3_invalid when the bot follows no path or sees none of it
+Vector CNEOBot::FindPathHorizon() const
+{
+	const PathFollower *path = GetCurrentPath();
+	if (!path || !path->IsValid() || !path->GetCurrentGoal())
+		return vec3_invalid;
+
+	// sample the path from our feet to the range limit, near to far
+	CUtlVector<Vector> samples;
+	Vector from = GetAbsOrigin();
+	float travelled = 0.0f;
+	for (const Path::Segment *seg = path->GetCurrentGoal(); seg; seg = path->NextSegment(seg))
+	{
+		const Vector leg = seg->pos - from;
+		const float legLength = leg.Length();
+		const int steps = Max(1, (int)ceilf(legLength / BOT_HORIZON_SAMPLE_STEP));
+		for (int i = 1; i <= steps; ++i)
+		{
+			const float along = legLength * i / steps;
+			if (travelled + along > BOT_HORIZON_PATH_RANGE)
+				break;
+
+			samples.AddToTail(from + leg * ((float)i / steps));
+		}
+
+		travelled += legLength;
+		if (travelled > BOT_HORIZON_PATH_RANGE)
+			break;
+
+		from = seg->pos;
+	}
+
+	// search back from the far end, so the first clear line is the farthest one
+	const Vector eyeOffset(0.0f, 0.0f, HumanEyeHeight);
+	for (int i = samples.Count() - 1; i >= 0; --i)
+	{
+		if (samples[i].AsVector2D().DistToSqr(GetAbsOrigin().AsVector2D()) < Square(BOT_HORIZON_MIN_RANGE))
+			break;
+
+		const Vector spot = samples[i] + eyeOffset;
+		if (GetVisionInterface()->IsLineOfSightClear(spot))
+			return spot;
+	}
+
+	return vec3_invalid;
+}
+
 // Update our view to watch where members of the given team will be coming from
 void CNEOBot::UpdateLookingAroundForIncomingPlayers(bool lookForEnemies)
 {
+	CNavArea *area = GetLastKnownArea();
+	const bool areaChanged = (area != m_lookAroundArea);
+	m_lookAroundArea = area;
+	if (!area || !areaChanged)
+		return;
+
 	if (!m_lookAtEnemyInvasionAreasTimer.IsElapsed())
 		return;
 
-	const float maxLookInterval = 1.0f;
-	m_lookAtEnemyInvasionAreasTimer.Start(RandomFloat(0.333f, maxLookInterval));
+	// where the path leads out of sight is where someone ahead would first appear
+	const Vector horizon = FindPathHorizon();
+	if (horizon == vec3_invalid)
+		return;
+
+	const Vector toHorizon = horizon - EyePosition();
+	const float yawOff = AngleDiff(RAD2DEG(atan2f(toHorizon.y, toHorizon.x)), EyeAngles().y);
+	if (fabsf(yawOff) <= BOT_HORIZON_MIN_ANGLE)
+		return;
+
+	// INTERESTING outranks the path facing, and a threat look outranks the glance
+	GetBodyInterface()->AimHeadTowards(horizon, IBody::INTERESTING, RandomFloat(BOT_HORIZON_HOLD_MIN, BOT_HORIZON_HOLD_MAX), NULL, "Glancing where the path leads out of sight");
+	m_lookAtEnemyInvasionAreasTimer.Start(BOT_HORIZON_COOLDOWN);
 }
 
 
