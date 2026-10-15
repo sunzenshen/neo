@@ -620,7 +620,8 @@ void CNEOBaseCombatWeapon::ItemHolsterFrame(void)
 	UpdateInaccuracy();
 }
 
-// Handles lowering the weapon view model when character is sprinting
+// Lowers the weapon view model while the owner sprints or climbs a ladder,
+// playing the model's lowering and raising sequences where it has them
 void CNEOBaseCombatWeapon::ProcessAnimationEvents()
 {
 	if (GetNeoWepBits() & NEO_WEP_THROWABLE)
@@ -634,34 +635,35 @@ void CNEOBaseCombatWeapon::ProcessAnimationEvents()
 		return;
 	}
 
-	const auto next = [this](const int activity, const float nextAttackDelay = 0.2) {
-		SendWeaponAnim(activity);
-		if (GetNeoWepBits() & NEO_WEP_THROWABLE)
-		{
-			return;
-		}
-		m_flNextPrimaryAttack = Max(gpGlobals->curtime + nextAttackDelay, m_flNextPrimaryAttack.Get());
-		m_flNextSecondaryAttack = m_flNextPrimaryAttack;
-	};
-
-	// NEO JANK (Adam) Why do we have to bombard the zr68l viewmodel with SendWeaponAnim(ACT_VM_IDLE_LOWERED) during sprint to make it act normally? Breakpoint in SendWeaponAnim isn't triggered by anything else after this animation is sent while sprinting
-	const bool loweredCheck = GetNeoWepBits() & NEO_WEP_ZR68_L ? true : !m_bLowered;
-	if (loweredCheck && !m_bInReload &&
-		(pOwner->IsSprinting() || pOwner->GetMoveType() == MOVETYPE_LADDER))
-	{
-		m_bLowered = true;
-		next(ACT_VM_IDLE_LOWERED);
-	}
-	else if (m_bLowered && !(pOwner->IsSprinting() || pOwner->GetMoveType() == MOVETYPE_LADDER))
+	// a reload plays from any pose, and the weapon lowers again after it
+	if (m_bInReload)
 	{
 		m_bLowered = false;
-		next(ACT_VM_IDLE);
+		return;
 	}
-	else if (m_bLowered && gpGlobals->curtime > m_flNextPrimaryAttack)
+
+	const bool bLower = pOwner->IsSprinting() || pOwner->GetMoveType() == MOVETYPE_LADDER;
+	if (!bLower && !m_bLowered)
 	{
-		SetWeaponIdleTime(gpGlobals->curtime + 0.2);
-		m_flNextPrimaryAttack = Max(gpGlobals->curtime + 0.2f, m_flNextPrimaryAttack.Get());
-		m_flNextSecondaryAttack = m_flNextPrimaryAttack;
+		return;
+	}
+
+	// no attack while lowered, nor for a moment after the weapon starts to rise
+	static constexpr float RAISE_ATTACK_DELAY = 0.2f;
+	m_flNextPrimaryAttack = Max(gpGlobals->curtime + RAISE_ATTACK_DELAY, m_flNextPrimaryAttack.Get());
+	m_flNextSecondaryAttack = m_flNextPrimaryAttack;
+
+	if (bLower == m_bLowered)
+	{
+		return;
+	}
+
+	// the models label their idletolow sequence ACT_VM_LOWERED_TO_IDLE and lowtoidle ACT_VM_IDLE_TO_LOWERED,
+	// and WeaponIdle moves on to the lowered or ready idle when it ends
+	m_bLowered = bLower;
+	if (!SendWeaponAnim(bLower ? ACT_VM_LOWERED_TO_IDLE : ACT_VM_IDLE_TO_LOWERED))
+	{
+		SendWeaponAnim(bLower ? ACT_VM_IDLE_LOWERED : ACT_VM_IDLE);
 	}
 }
 
