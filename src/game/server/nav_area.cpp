@@ -5916,6 +5916,8 @@ void CNavArea::ComputeVisPair( VisPair_t &pair )
 
 	pair.visSourceToOther = visThisToOther;
 	pair.visOtherToSource = visOtherToThis;
+
+	NavProfAdd( NAV_PROF_VIS_PAIRS );	// NAV_PROFILE (nav-analyze-fast)
 }
 
 
@@ -5944,6 +5946,8 @@ void CNavArea::ComputeMeshVisibility( void )
 	firstPair.SetCount( areaCount + 1 );
 	CUtlVector< byte > pvs;
 	pvs.SetCount( areaCount * sizeof( m_PVS ) );
+
+	const int64 profStart = NavProfNowNs();	// NAV_PROFILE (nav-analyze-fast)
 
 	// the pairs, in the order ComputeVisibilityToMesh visits them, and each source area's PVS
 	NavAreaCollector collector;
@@ -5983,6 +5987,7 @@ void CNavArea::ComputeMeshVisibility( void )
 		V_memcpy( pvs.Base() + a * sizeof( m_PVS ), m_PVS, sizeof( m_PVS ) );
 	}
 	firstPair[ areaCount ] = pairs.Count();
+	const int64 profCollected = NavProfNowNs();
 
 	// ParallelProcess runs the caller and one job per pool thread, and queues jobs only when it has 2 or more
 	const int threads = nav_vis_threads.GetInt();
@@ -5998,6 +6003,7 @@ void CNavArea::ComputeMeshVisibility( void )
 	ParallelProcess( "CNavArea::ComputeMeshVisibility", pool ? pool : g_pThreadPool, pairs.Base(), pairs.Count(), &ComputeVisPair,
 		NULL, NULL, pool ? INT_MAX : 0 );
 	s_pVisPassPVS = NULL;
+	const int64 profComputed = NavProfNowNs();
 
 	if ( pool )
 	{
@@ -6030,6 +6036,9 @@ void CNavArea::ComputeMeshVisibility( void )
 			}
 		}
 	}
+
+	Msg( "NAV_PROFILE pass threads=%d pairs=%d collect_s=%.3f compute_s=%.3f assemble_s=%.3f\n", threads, pairs.Count(),
+		( profCollected - profStart ) / 1e9, ( profComputed - profCollected ) / 1e9, ( NavProfNowNs() - profComputed ) / 1e9 );
 }
 
 
