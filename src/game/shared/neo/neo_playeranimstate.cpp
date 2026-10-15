@@ -12,17 +12,18 @@
 // memdbgon must be the last include file in a .cpp file!!!
 #include "tier0/memdbgon.h"
 
-#define DEFAULT_IDLE_NAME "idle_upper_"
-#define DEFAULT_CROUCH_IDLE_NAME "crouch_idle_upper_"
-#define DEFAULT_CROUCH_WALK_NAME "crouch_walk_upper_"
-#define DEFAULT_WALK_NAME "walk_upper_"
-#define DEFAULT_RUN_NAME "run_upper_"
+// Upper body sequence names, each followed by the weapon's animation suffix
+static constexpr const char *AIM_IDLE_NAME = "idle_upper_";
+static constexpr const char *AIM_CROUCH_IDLE_NAME = "crouch_idle_upper_";
+static constexpr const char *AIM_CROUCH_WALK_NAME = "crouch_walk_upper_";
+static constexpr const char *AIM_WALK_NAME = "walk_upper_";
+static constexpr const char *AIM_RUN_NAME = "run_upper_";
 
-#define DEFAULT_FIRE_IDLE_NAME "idle_shoot_"
-#define DEFAULT_FIRE_CROUCH_NAME "crouch_idle_shoot_"
-#define DEFAULT_FIRE_CROUCH_WALK_NAME "crouch_walk_shoot_"
-#define DEFAULT_FIRE_WALK_NAME "walk_shoot_"
-#define DEFAULT_FIRE_RUN_NAME "run_shoot_"
+static constexpr const char *FIRE_IDLE_NAME = "idle_shoot_";
+static constexpr const char *FIRE_CROUCH_NAME = "crouch_idle_shoot_";
+static constexpr const char *FIRE_CROUCH_WALK_NAME = "crouch_walk_shoot_";
+static constexpr const char *FIRE_WALK_NAME = "walk_shoot_";
+static constexpr const char *FIRE_RUN_NAME = "run_shoot_";
 
 // The fire, reload and throw sequences play on the layer above the base's aim layers
 static constexpr int GESTURE_LAYER = AIMSEQUENCE_LAYER + NUM_AIMSEQUENCE_LAYERS;
@@ -311,7 +312,7 @@ bool CNEOPlayerAnimState::IsLeaning() const
 #ifdef CLIENT_DLL
 	constexpr float BONE_CONTROLLER_VALUE_NOT_LEANING = 0.5f;
 #else
-	constexpr int BONE_CONTROLLER_VALUE_NOT_LEANING = 0;
+	constexpr float BONE_CONTROLLER_VALUE_NOT_LEANING = 0.0f;
 #endif // CLIENT_DLL
 	return m_pPlayer->GetBoneController( LEAN_BONE_CONTROLLER ) != BONE_CONTROLLER_VALUE_NOT_LEANING;
 }
@@ -342,11 +343,10 @@ const char *CNEOPlayerAnimState::GetAimSuffix() const
 		return nullptr;
 	}
 
-	// NEO TODO (Adam) give classes missing animations
 	const int iClass = static_cast<CNEO_Player *>( m_pPlayer )->m_iNeoClass;
 	if ( IsRemoteDet( pWeapon ) )
 	{
-		// only recon has the detpack animations
+		// only recon has the detpack animations, the other classes hold it like a grenade
 		if ( iClass != NEO_CLASS_RECON )
 		{
 			return "Grenade";
@@ -380,21 +380,21 @@ int CNEOPlayerAnimState::CalcAimLayerSequence( float *flCycle, float *flAimSeque
 	const Activity act = GetCurrentMainSequenceActivity();
 	if ( bForceIdle )
 	{
-		return CalcSequenceIndex( "%s%s", ( act == ACT_CROUCHIDLE ) ? DEFAULT_CROUCH_IDLE_NAME : DEFAULT_IDLE_NAME, pSuffix );
+		return CalcSequenceIndex( "%s%s", ( act == ACT_CROUCHIDLE ) ? AIM_CROUCH_IDLE_NAME : AIM_IDLE_NAME, pSuffix );
 	}
 
 	switch ( act )
 	{
 	case ACT_RUN:
-		return CalcSequenceIndex( "%s%s", DEFAULT_RUN_NAME, pSuffix );
+		return CalcSequenceIndex( "%s%s", AIM_RUN_NAME, pSuffix );
 	case ACT_WALK:
-		return CalcSequenceIndex( "%s%s", DEFAULT_WALK_NAME, pSuffix );
+		return CalcSequenceIndex( "%s%s", AIM_WALK_NAME, pSuffix );
 	case ACT_CROUCHIDLE:
-		return CalcSequenceIndex( "%s%s", DEFAULT_CROUCH_IDLE_NAME, pSuffix );
+		return CalcSequenceIndex( "%s%s", AIM_CROUCH_IDLE_NAME, pSuffix );
 	case ACT_RUN_CROUCH:
-		return CalcSequenceIndex( "%s%s", DEFAULT_CROUCH_WALK_NAME, pSuffix );
+		return CalcSequenceIndex( "%s%s", AIM_CROUCH_WALK_NAME, pSuffix );
 	default:
-		return CalcSequenceIndex( "%s%s", DEFAULT_IDLE_NAME, pSuffix );
+		return CalcSequenceIndex( "%s%s", AIM_IDLE_NAME, pSuffix );
 	}
 }
 
@@ -428,15 +428,15 @@ int CNEOPlayerAnimState::CalcFireSequence()
 	switch ( GetCurrentMainSequenceActivity() )
 	{
 	case ACT_RUN:
-		return CalcSequenceIndex( "%s%s", DEFAULT_FIRE_RUN_NAME, pSuffix );
+		return CalcSequenceIndex( "%s%s", FIRE_RUN_NAME, pSuffix );
 	case ACT_WALK:
-		return CalcSequenceIndex( "%s%s", DEFAULT_FIRE_WALK_NAME, pSuffix );
+		return CalcSequenceIndex( "%s%s", FIRE_WALK_NAME, pSuffix );
 	case ACT_CROUCHIDLE:
-		return CalcSequenceIndex( "%s%s", DEFAULT_FIRE_CROUCH_NAME, pSuffix );
+		return CalcSequenceIndex( "%s%s", FIRE_CROUCH_NAME, pSuffix );
 	case ACT_RUN_CROUCH:
-		return CalcSequenceIndex( "%s%s", DEFAULT_FIRE_CROUCH_WALK_NAME, pSuffix );
+		return CalcSequenceIndex( "%s%s", FIRE_CROUCH_WALK_NAME, pSuffix );
 	default:
-		return CalcSequenceIndex( "%s%s", DEFAULT_FIRE_IDLE_NAME, pSuffix );
+		return CalcSequenceIndex( "%s%s", FIRE_IDLE_NAME, pSuffix );
 	}
 }
 
