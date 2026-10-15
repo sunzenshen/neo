@@ -29,6 +29,7 @@ enum NavProfileVisCounter
 	NAV_PROF_VIS_CANDIDATES,	// areas within nav_max_view_distance, summed over source areas
 	NAV_PROF_VIS_PAIR_SKIPPED,	// candidates dropped because the pair was already computed from the other side
 	NAV_PROF_VIS_PAIRS,			// ComputeVisToArea calls, self included
+	NAV_PROF_VIS_PAIRS_OFF_MAIN,	// ComputeVisToArea calls run by a thread pool thread
 	NAV_PROF_VIS_CALLS,			// ComputeVisibility calls
 	NAV_PROF_VIS_DIST_REJECT,	// ComputeVisibility early out: beyond nav_max_view_distance
 	NAV_PROF_VIS_PVS_REJECT,	// ComputeVisibility early out: outside the PVS
