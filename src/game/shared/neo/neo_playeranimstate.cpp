@@ -38,6 +38,9 @@ static constexpr float ANIM_TOPSPEED_RUN_CROUCH = 85.0f;
 // and bots sprint through turns at 100-180
 static constexpr float SPRINT_LEGS_MIN_SPEED = 100.0f;
 
+// The feet face the eyes when they are this close (degrees)
+static constexpr float FEET_FACE_EYES_TOLERANCE = 1.0f;
+
 // Don't check if a jumping player is on the ground for this long:
 // sometimes the client still has the on-ground flag set right when the jump event comes in
 static constexpr float JUMP_MIN_TIME = 0.2f;
@@ -285,13 +288,21 @@ float CNEOPlayerAnimState::GetCurrentMaxGroundSpeed()
 
 void CNEOPlayerAnimState::ComputePoseParam_BodyYaw()
 {
-	// a leaning player's feet turn to the eyes, as after standing still for the face-front time
-	if ( IsLeaning() )
+	// a leaning player's feet turn to the eyes, as the base turns a new player's (no turn yet),
+	const bool bLeaning = IsLeaning();
+	if ( bLeaning )
 	{
-		m_flLastTurnTime = -FLT_MAX;
+		m_flLastTurnTime = 0.0f;
 	}
 
 	BaseClass::ComputePoseParam_BodyYaw();
+
+	// and the face-front time counts from the lean or the last frame the feet faced the eyes:
+	// the base counts from the feet's last turn, so after standing still it squared the feet up on the next turn at once
+	if ( bLeaning || fabsf( AngleDiff( m_flEyeYaw, m_flCurrentFeetYaw ) ) < FEET_FACE_EYES_TOLERANCE )
+	{
+		m_flLastTurnTime = gpGlobals->curtime;
+	}
 }
 
 bool CNEOPlayerAnimState::IsLeaning() const
