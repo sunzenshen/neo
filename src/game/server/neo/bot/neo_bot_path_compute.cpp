@@ -95,7 +95,7 @@ bool CNEOBotPathUpdateChase(CNEOBot* bot, ChasePath& path, CBaseEntity* subject,
 // A chase goal off the mesh moves onto the nearest area when it is at most a player's width past the area's edge,
 static constexpr float BOT_CHASE_GOAL_MAX_OUTSIDE_AREA = 2.0f * HalfHumanWidth;
 // and at most a step below the area's surface (a jump above it bounds a subject in mid-jump)
-static constexpr float BOT_CHASE_GOAL_MAX_DEPTH_BELOW_AREA = StepHeight;
+static const float BOT_CHASE_GOAL_MAX_DEPTH_BELOW_AREA = StepHeight;
 
 static bool GetChaseGoalOnMesh(INextBot* bot, const Vector& pos, Vector* onMesh)
 {
