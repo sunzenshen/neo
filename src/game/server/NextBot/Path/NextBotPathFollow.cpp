@@ -487,7 +487,7 @@ bool PathFollower::CheckProgress( INextBot *bot )
 #ifdef NEO
 	// a path recomputed in mid-air starts from the area the bot jumped from, so its goal is the take-off behind it:
 	// while the bot is still jumping the gap, or once it is down from the take-off or on the landing's area, head for the landing instead
-	if ( m_goal && m_goal->type == JUMP_OVER_GAP )
+	if ( m_goal->type == JUMP_OVER_GAP )
 	{
 		const Path::Segment *landing = NextSegment( m_goal );
 
