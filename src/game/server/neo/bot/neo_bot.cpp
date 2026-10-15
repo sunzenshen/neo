@@ -589,6 +589,8 @@ CNEOBot::CNEOBot()
 	m_didReselectClass = false;
 	m_spotWhereEnemySentryLastInjuredMe = vec3_origin;
 	m_isLookingAroundForEnemies = true;
+	m_lookAroundArea = NULL;
+	m_lastGlanceArea = NULL;
 	m_behaviorFlags = 0;
 	m_attentionFocusEntity = NULL;
 	m_noisyTimer.Invalidate();
@@ -661,6 +663,8 @@ void CNEOBot::Spawn()
 	m_squad = NULL;
 	m_didReselectClass = false;
 	m_isLookingAroundForEnemies = true;
+	m_lookAroundArea = NULL;
+	m_lastGlanceArea = NULL;
 	m_attentionFocusEntity = NULL;
 
 	m_delayedNoticeVector.RemoveAll();
@@ -1275,14 +1279,121 @@ Vector CNEOBot::FindVisibleThrowPointNear( const Vector &vecPos ) const
 
 
 //-----------------------------------------------------------------------------------------------------
+// On entering a nav area, a calm bot glances at an area that just came into view:
+// one potentially visible from here but not from the area it left,
+static constexpr float BOT_GLANCE_MAX_RANGE = 1500.0f;
+// and within this many degrees of the direction it walks
+static constexpr float BOT_GLANCE_MAX_ANGLE = 75.0f;
+// at most once in this many seconds,
+static constexpr float BOT_GLANCE_COOLDOWN = 1.5f;
+// holding the glance this long (path facing takes the head back after it)
+static constexpr float BOT_GLANCE_HOLD_MIN = 0.6f;
+static constexpr float BOT_GLANCE_HOLD_MAX = 1.0f;
+// and trying this many spots in the area for a clear line to look along
+static constexpr int BOT_GLANCE_AIM_TRIES = 3;
+
+class CMarkArea
+{
+public:
+	bool operator()(CNavArea *area)
+	{
+		area->Mark();
+		return true;
+	}
+};
+
+// Collects the unmarked areas in range and ahead of the walking direction
+class CCollectNewlyVisibleAreas
+{
+public:
+	CCollectNewlyVisibleAreas(const Vector &origin, const Vector2D &walkDir, const CNavArea *skipArea)
+		: m_origin(origin), m_walkDir(walkDir), m_skipArea(skipArea)
+	{
+		m_cosMaxAngle = cosf(DEG2RAD(BOT_GLANCE_MAX_ANGLE));
+	}
+
+	bool operator()(CNavArea *area)
+	{
+		if (area->IsMarked() || area == m_skipArea)
+			return true;
+
+		const Vector toArea = area->GetCenter() - m_origin;
+		if (toArea.IsLengthGreaterThan(BOT_GLANCE_MAX_RANGE))
+			return true;
+
+		Vector2D toArea2D = toArea.AsVector2D();
+		if (toArea2D.NormalizeInPlace() < 1.0f)
+			return true;
+
+		if (DotProduct2D(toArea2D, m_walkDir) < m_cosMaxAngle)
+			return true;
+
+		m_areas.AddToTail(area);
+		return true;
+	}
+
+	CUtlVector<const CNavArea *> m_areas;
+
+private:
+	Vector m_origin;
+	Vector2D m_walkDir;
+	const CNavArea *m_skipArea;
+	float m_cosMaxAngle;
+};
+
+const CNavArea *CNEOBot::PickNewlyVisibleArea(CNavArea *area, CNavArea *leftArea) const
+{
+	// the direction we walk, or the step between the two areas when we barely move
+	Vector2D walkDir = GetAbsVelocity().AsVector2D();
+	if (walkDir.NormalizeInPlace() < 10.0f)
+	{
+		walkDir = (area->GetCenter() - leftArea->GetCenter()).AsVector2D();
+		if (walkDir.NormalizeInPlace() < 1.0f)
+			return NULL;
+	}
+
+	// mark what the area we left could already see, then keep what only this area sees
+	CNavArea::MakeNewMarker();
+	CMarkArea markVisible;
+	leftArea->ForAllPotentiallyVisibleAreas(markVisible);
+	leftArea->Mark();
+
+	CCollectNewlyVisibleAreas collect(GetAbsOrigin(), walkDir, m_lastGlanceArea);
+	area->ForAllPotentiallyVisibleAreas(collect);
+	if (collect.m_areas.IsEmpty())
+		return NULL;
+
+	return collect.m_areas[RandomInt(0, collect.m_areas.Count() - 1)];
+}
+
 // Update our view to watch where members of the given team will be coming from
 void CNEOBot::UpdateLookingAroundForIncomingPlayers(bool lookForEnemies)
 {
+	CNavArea *area = GetLastKnownArea();
+	CNavArea *leftArea = m_lookAroundArea;
+	m_lookAroundArea = area;
+	if (!area || !leftArea || area == leftArea)
+		return;
+
 	if (!m_lookAtEnemyInvasionAreasTimer.IsElapsed())
 		return;
 
-	const float maxLookInterval = 1.0f;
-	m_lookAtEnemyInvasionAreasTimer.Start(RandomFloat(0.333f, maxLookInterval));
+	const CNavArea *glanceArea = PickNewlyVisibleArea(area, leftArea);
+	if (!glanceArea)
+		return;
+
+	for (int i = 0; i < BOT_GLANCE_AIM_TRIES; ++i)
+	{
+		const Vector gazeSpot = glanceArea->GetRandomPoint() + Vector(0, 0, 0.75f * HumanHeight);
+		if (!GetVisionInterface()->IsLineOfSightClear(gazeSpot))
+			continue;
+
+		// INTERESTING outranks the path facing, and a threat look outranks the glance
+		GetBodyInterface()->AimHeadTowards(gazeSpot, IBody::INTERESTING, RandomFloat(BOT_GLANCE_HOLD_MIN, BOT_GLANCE_HOLD_MAX), NULL, "Glancing at a newly visible area");
+		m_lastGlanceArea = glanceArea;
+		m_lookAtEnemyInvasionAreasTimer.Start(BOT_GLANCE_COOLDOWN);
+		return;
+	}
 }
 
 
