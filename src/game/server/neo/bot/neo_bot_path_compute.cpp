@@ -4,6 +4,7 @@
 #include "bot/neo_bot_path_reservation.h"
 #include "NextBot/Path/NextBotPathFollow.h"
 #include "NextBot/Path/NextBotChasePath.h"
+#include "nav_mesh.h"
 
 // memdbgon must be the last include file in a .cpp file!!!
 #include "tier0/memdbgon.h"
@@ -89,4 +90,58 @@ bool CNEOBotPathUpdateChase(CNEOBot* bot, ChasePath& path, CBaseEntity* subject,
 	}
 
 	return false;
+}
+
+// A chase goal off the mesh moves onto the nearest area when it is at most a player's width past the area's edge,
+static constexpr float BOT_CHASE_GOAL_MAX_OUTSIDE_AREA = 2.0f * HalfHumanWidth;
+// and at most a step below the area's surface (a jump above it bounds a subject in mid-jump)
+static constexpr float BOT_CHASE_GOAL_MAX_DEPTH_BELOW_AREA = StepHeight;
+
+static bool GetChaseGoalOnMesh(INextBot* bot, const Vector& pos, Vector* onMesh)
+{
+	const float maxHeightAboveArea = bot->GetLocomotionInterface()->GetMaxJumpHeight();
+
+	CNavArea* area = TheNavMesh->GetNavArea(pos, maxHeightAboveArea);
+	if (!area)
+	{
+		area = TheNavMesh->GetNearestNavArea(pos, true, BOT_CHASE_GOAL_MAX_OUTSIDE_AREA, true);
+	}
+
+	if (!area)
+	{
+		return false;
+	}
+
+	area->GetClosestPointOnArea(pos, onMesh);
+
+	const float heightAboveArea = pos.z - onMesh->z;
+	if (heightAboveArea > maxHeightAboveArea || heightAboveArea < -BOT_CHASE_GOAL_MAX_DEPTH_BELOW_AREA)
+	{
+		return false;
+	}
+
+	// a step above the area's plane, as nav_generate areas often sit a little below the floor they cover
+	onMesh->z += StepHeight;
+	return true;
+}
+
+// ChasePath leads its subject by the subject's velocity, and the lead can end past an area's edge, inside a wall or over a void,
+// where Path::Compute finds no goal area and the chase fails with no path
+Vector CNEOBotChasePath::PredictSubjectPosition(INextBot* bot, CBaseEntity* subject) const
+{
+	const Vector predicted = ChasePath::PredictSubjectPosition(bot, subject);
+
+	Vector onMesh;
+	if (GetChaseGoalOnMesh(bot, predicted, &onMesh))
+	{
+		return onMesh;
+	}
+
+	// a lead with no area near it heads for the subject itself
+	if (GetChaseGoalOnMesh(bot, subject->GetAbsOrigin(), &onMesh))
+	{
+		return onMesh;
+	}
+
+	return predicted;
 }

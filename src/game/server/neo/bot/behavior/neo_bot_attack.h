@@ -2,6 +2,7 @@
 
 #include "NextBotBehavior.h"
 #include "Path/NextBotChasePath.h"
+#include "bot/neo_bot_path_compute.h"
 
 class CNEOBot;
 class CKnownEntity;
@@ -35,7 +36,7 @@ private:
 	const CNavArea *m_attackCoverArea; // attempting to advance towards this cover area
 	const CNavArea *m_goalArea; // if set, engage enemies while moving towards this destination
 	PathFollower m_path;
-	ChasePath m_chasePath;
+	CNEOBotChasePath m_chasePath;
 	CountdownTimer m_coverSearchTimer;
 	CountdownTimer m_grenadeThrowCooldownTimer;
 };

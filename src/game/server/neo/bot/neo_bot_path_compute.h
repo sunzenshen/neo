@@ -1,10 +1,10 @@
 #pragma once
 
 #include "nav_pathfind.h"
+#include "NextBot/Path/NextBotChasePath.h"
 
 class CNEOBot;
 class PathFollower;
-class ChasePath;
 class CBaseEntity;
 
 bool CNEOBotPathCompute
@@ -26,3 +26,13 @@ bool CNEOBotPathUpdateChase
 	RouteType route,
 	Vector *pPredictedSubjectPos = NULL
 );
+
+// A chase that leads its subject toward a position on the nav mesh,
+// so the path has a goal area to reach
+class CNEOBotChasePath : public ChasePath
+{
+public:
+	CNEOBotChasePath( SubjectChaseType chaseHow ) : ChasePath( chaseHow ) { }
+
+	virtual Vector PredictSubjectPosition( INextBot *bot, CBaseEntity *subject ) const override;
+};
