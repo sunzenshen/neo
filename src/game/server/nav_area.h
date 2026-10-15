@@ -22,6 +22,23 @@
 enum { MAX_NAV_TEAMS = 2 };
 #endif // NEO
 
+// NAV_PROFILE (nav-analyze-fast): profiling instrumentation, counts the visibility work of nav_analyze,
+// printed by CNavMesh::UpdateGeneration when COMPUTE_MESH_VISIBILITY ends
+enum NavProfileVisCounter
+{
+	NAV_PROF_VIS_CANDIDATES,	// areas within nav_max_view_distance, summed over source areas
+	NAV_PROF_VIS_PAIR_SKIPPED,	// candidates dropped because the pair was already computed from the other side
+	NAV_PROF_VIS_PAIRS,			// ComputeVisToArea calls, self included
+	NAV_PROF_VIS_CALLS,			// ComputeVisibility calls
+	NAV_PROF_VIS_DIST_REJECT,	// ComputeVisibility early out: beyond nav_max_view_distance
+	NAV_PROF_VIS_PVS_REJECT,	// ComputeVisibility early out: outside the PVS
+	NAV_PROF_VIS_HULL_ACCEPT,	// ComputeVisibility early out: the hull trace reached the other area
+	NAV_PROF_VIS_HULL_TRACES,
+	NAV_PROF_VIS_LINE_TRACES,	// line traces in IsPartiallyVisible
+	NAV_PROF_VIS_COUNT
+};
+extern int64 volatile g_navProfileVis[ NAV_PROF_VIS_COUNT ];
+
 #define DebuggerBreakOnNaN_StagingOnly( _val )
 
 class CFuncElevator;
