@@ -34,35 +34,38 @@ static void CNEOBotReservePath(CNEOBot* me, PathFollower& path)
 	}
 }
 
-// Path::Compute falls back to a two-segment straight line when no area it reached is nearer the goal than our own,
-// and a line up to a goal above jump height ends in the path follower's "goal is high above us" failure
-static bool IsTrivialClimb(CNEOBot* bot, const PathFollower& path)
+// The last leg walks from the last area the path reached to the goal position,
+// and the path follower takes a goal more than a jump above that area's floor as a fall (FAIL_FELL_OFF)
+static bool IsGoalLegTooHigh(CNEOBot* bot, const PathFollower& path)
 {
 	const Path::Segment* goalSeg = path.LastSegment();
-	if (path.NextSegment(path.FirstSegment()) != goalSeg)
+	const Path::Segment* legStart = path.PriorSegment(goalSeg);
+	if (!legStart || !legStart->area)
 	{
 		return false;
 	}
 
-	const ILocomotion* mover = bot->GetLocomotionInterface();
-	return goalSeg->pos.z > mover->GetFeet().z + mover->GetMaxJumpHeight();
+	// a planned jump-up, gap jump, drop or ladder carries the bot along this leg
+	if (legStart->type != Path::ON_GROUND || goalSeg->type != Path::ON_GROUND)
+	{
+		return false;
+	}
+
+	const float rise = goalSeg->pos.z - legStart->area->GetZ(goalSeg->pos);
+	return rise > bot->GetLocomotionInterface()->GetMaxJumpHeight();
 }
 
-// A path that stops short of the goal is only wanted if the caller asked for partial paths,
-// and never when it is a straight line up to a goal we cannot climb to
+// A path that stops short of the goal is only wanted if the caller asked for partial paths
 static bool IsPathUsable(CNEOBot* bot, const PathFollower& path, bool reachedGoal, bool includeGoalIfPathFails)
 {
-	if (!path.IsValid())
+	// Path::Compute can take an area below the goal for the goal's own, as CNavArea::Contains skips areas outside its height range,
+	// so a complete path's last leg is checked too
+	if (!path.IsValid() || IsGoalLegTooHigh(bot, path))
 	{
 		return false;
 	}
 
-	if (reachedGoal)
-	{
-		return true;
-	}
-
-	return includeGoalIfPathFails && !IsTrivialClimb(bot, path);
+	return reachedGoal || includeGoalIfPathFails;
 }
 
 // By default, assumes that we would prefer to have partial paths even if we can't make a full path
