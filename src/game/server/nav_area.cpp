@@ -39,11 +39,130 @@
 #include "nav_shared.h"
 #endif // NEO
 
+#include <time.h>
+#include <stdlib.h>
+
 // memdbgon must be the last include file in a .cpp file!!!
 #include "tier0/memdbgon.h"
 
 // NAV_PROFILE (nav-analyze-fast): profiling instrumentation
-int64 volatile g_navProfileVis[ NAV_PROF_VIS_COUNT ];
+NavProfThreadSlot g_navProfSlots[ NAV_PROF_MAX_THREADS ];
+static int32 volatile s_navProfNextSlot = 1;
+static int32 volatile s_navProfGeneration = 1;
+static thread_local int t_navProfSlot = 0;
+static thread_local int t_navProfGeneration = 0;
+
+// per visibility batch (one ComputeVisibilityToMesh call), written by the main thread except where noted
+static int32 volatile s_navProfBatchId;
+static int64 s_navProfBatchStartNs;
+static int32 volatile s_navProfBatchPoolSeen;
+static int64 s_navProfBatches;				// batches of 3+ items, the ones ParallelProcess queues jobs for
+static int64 s_navProfBatchItems;
+static int64 s_navProfBatchNs;				// wall time of those batches' ParallelProcess calls
+static int64 s_navProfBatchesWithPool;		// batches in which a pool thread took an item
+static int64 s_navProfFirstPoolNs;			// written by the first pool thread of a batch
+static int64 s_navProfFirstPoolHist[ 5 ];	// < 0.05, < 1, < 10, < 100, >= 100 ms
+static int64 s_navProfThreadsSum;			// distinct threads that took items, summed over batches
+static int64 s_navProfMainCollectNs, s_navProfMainPvsNs, s_navProfMainPPNs, s_navProfMainPostNs;
+
+int64 NavProfNowNs()
+{
+	struct timespec ts;
+	clock_gettime( CLOCK_MONOTONIC, &ts );
+	return (int64)ts.tv_sec * 1000000000LL + ts.tv_nsec;
+}
+
+NavProfThreadSlot &NavProfSlot()
+{
+	if ( t_navProfGeneration != s_navProfGeneration )
+	{
+		t_navProfGeneration = s_navProfGeneration;
+		const bool isMain = ThreadInMainThread();
+		int slot = isMain ? 0 : ThreadInterlockedIncrement( &s_navProfNextSlot ) - 1;
+		t_navProfSlot = MIN( slot, NAV_PROF_MAX_THREADS - 1 );
+		g_navProfSlots[ t_navProfSlot ].used = true;
+		g_navProfSlots[ t_navProfSlot ].isMain = isMain;
+	}
+	return g_navProfSlots[ t_navProfSlot ];
+}
+
+void NavProfSum( int64 *totals )
+{
+	memset( totals, 0, sizeof( int64 ) * NAV_PROF_VIS_COUNT );
+	for ( int i = 0; i < NAV_PROF_MAX_THREADS; ++i )
+	{
+		for ( int k = 0; k < NAV_PROF_VIS_COUNT; ++k )
+		{
+			totals[ k ] += g_navProfSlots[ i ].c[ k ];
+		}
+	}
+}
+
+// main thread only, while no worker runs profiled code
+void NavProfReset()
+{
+	memset( (void *)g_navProfSlots, 0, sizeof( g_navProfSlots ) );
+	s_navProfNextSlot = 1;
+	ThreadInterlockedIncrement( &s_navProfGeneration );
+	s_navProfBatchId = 0;
+	s_navProfBatches = s_navProfBatchItems = s_navProfBatchNs = s_navProfBatchesWithPool = s_navProfFirstPoolNs = s_navProfThreadsSum = 0;
+	memset( s_navProfFirstPoolHist, 0, sizeof( s_navProfFirstPoolHist ) );
+	s_navProfMainCollectNs = s_navProfMainPvsNs = s_navProfMainPPNs = s_navProfMainPostNs = 0;
+}
+
+void NavProfPrintThreads( const char *tag, double wallSeconds )
+{
+	for ( int i = 0; i < NAV_PROF_MAX_THREADS; ++i )
+	{
+		const NavProfThreadSlot &t = g_navProfSlots[ i ];
+		if ( !t.used )
+		{
+			continue;
+		}
+
+		Msg( "NAV_PROFILE thread tag=%s slot=%d main=%d items=%lld item_ms=%.1f busy=%.1f%% us_per_item=%.2f pairs=%lld"
+			" line=%lld hull=%lld pvs_reject=%lld batches_joined=%lld join_ms_mean=%.3f\n", tag, i, t.isMain ? 1 : 0, t.items,
+			t.itemNs / 1e6, wallSeconds > 0 ? 100.0 * t.itemNs / 1e9 / wallSeconds : 0.0, t.items ? t.itemNs / 1e3 / t.items : 0.0,
+			t.c[ NAV_PROF_VIS_PAIRS ], t.c[ NAV_PROF_VIS_LINE_TRACES ], t.c[ NAV_PROF_VIS_HULL_TRACES ], t.c[ NAV_PROF_VIS_PVS_REJECT ],
+			t.batchesJoined, t.batchesJoined ? t.joinDelayNs / 1e6 / t.batchesJoined : 0.0 );
+	}
+}
+
+void NavProfPrintBatches()
+{
+	const int64 b = MAX( s_navProfBatches, 1 );
+	Msg( "NAV_PROFILE batches pooled=%lld items_mean=%.1f ms_mean=%.3f with_pool=%lld (%.1f%%) threads_mean=%.2f"
+		" first_pool_ms_mean=%.3f first_pool_hist(<0.05,<1,<10,<100,>=100ms)=%lld,%lld,%lld,%lld,%lld\n",
+		s_navProfBatches, (double)s_navProfBatchItems / b, s_navProfBatchNs / 1e6 / b, s_navProfBatchesWithPool,
+		100.0 * s_navProfBatchesWithPool / b, (double)s_navProfThreadsSum / b,
+		s_navProfBatchesWithPool ? s_navProfFirstPoolNs / 1e6 / s_navProfBatchesWithPool : 0.0,
+		s_navProfFirstPoolHist[ 0 ], s_navProfFirstPoolHist[ 1 ], s_navProfFirstPoolHist[ 2 ], s_navProfFirstPoolHist[ 3 ], s_navProfFirstPoolHist[ 4 ] );
+	Msg( "NAV_PROFILE main collect_hash_s=%.3f setup_pvs_s=%.3f parallel_process_s=%.3f own_items_s=%.3f post_s=%.3f\n",
+		s_navProfMainCollectNs / 1e9, s_navProfMainPvsNs / 1e9, s_navProfMainPPNs / 1e9, g_navProfSlots[ 0 ].itemNs / 1e9,
+		s_navProfMainPostNs / 1e9 );
+}
+
+// a pool thread's first item in the current batch: record the delay since the batch started
+static void NavProfNoteJoin( NavProfThreadSlot &slot, int64 now )
+{
+	if ( slot.isMain || slot.lastBatch == s_navProfBatchId )
+	{
+		return;
+	}
+
+	slot.lastBatch = s_navProfBatchId;
+	++slot.batchesJoined;
+	const int64 delay = now - s_navProfBatchStartNs;
+	slot.joinDelayNs += delay;
+	if ( !ThreadInterlockedAssignIf( &s_navProfBatchPoolSeen, 1, 0 ) )
+	{
+		return;
+	}
+
+	s_navProfFirstPoolNs += delay;
+	const double ms = delay / 1e6;
+	++s_navProfFirstPoolHist[ ms < 0.05 ? 0 : ms < 1 ? 1 : ms < 10 ? 2 : ms < 100 ? 3 : 4 ];
+}
 
 extern void HintMessageToAllPlayers( const char *message );
 
@@ -5396,7 +5515,7 @@ bool CNavArea::IsInPVS( void ) const
 CNavArea::VisibilityType CNavArea::ComputeVisibility( const CNavArea *area, bool isPVSValid, bool bCheckPVS, bool *pOutsidePVS ) const
 {
 	float distanceSq = area->GetCenter().DistToSqr( GetCenter() );
-	ThreadInterlockedIncrement64( &g_navProfileVis[ NAV_PROF_VIS_CALLS ] );
+	NavProfAdd( NAV_PROF_VIS_CALLS );
 
 	if ( nav_max_view_distance.GetFloat() > 0.00001f )
 	{
@@ -5404,7 +5523,7 @@ CNavArea::VisibilityType CNavArea::ComputeVisibility( const CNavArea *area, bool
 		if ( distanceSq > Sqr( nav_max_view_distance.GetFloat() ) )
 		{
 			// too far to be visible
-			ThreadInterlockedIncrement64( &g_navProfileVis[ NAV_PROF_VIS_DIST_REJECT ] );
+			NavProfAdd( NAV_PROF_VIS_DIST_REJECT );
 			return NOT_VISIBLE;
 		}
 	}
@@ -5428,7 +5547,7 @@ CNavArea::VisibilityType CNavArea::ComputeVisibility( const CNavArea *area, bool
 		{
 			if ( pOutsidePVS )
 				*pOutsidePVS = true;
-			ThreadInterlockedIncrement64( &g_navProfileVis[ NAV_PROF_VIS_PVS_REJECT ] );
+			NavProfAdd( NAV_PROF_VIS_PVS_REJECT );
 			return NOT_VISIBLE;
 		}
 
@@ -5463,11 +5582,11 @@ CNavArea::VisibilityType CNavArea::ComputeVisibility( const CNavArea *area, bool
 	CTraceFilterNoNPCsOrPlayer traceFilter( NULL, COLLISION_GROUP_NONE );
 
 	UTIL_TraceHull( vThisCenter, vTarget, vTraceMins, vTraceMaxs, MASK_NAV_VISION, &traceFilter, &tr );
-	ThreadInterlockedIncrement64( &g_navProfileVis[ NAV_PROF_VIS_HULL_TRACES ] );
+	NavProfAdd( NAV_PROF_VIS_HULL_TRACES );
 
 	if ( tr.fraction == 1.0 ||  ( tr.endpos.x > vOtherMins.x && tr.endpos.x < vOtherMaxs.x && tr.endpos.y > vOtherMins.y && tr.endpos.y < vOtherMaxs.y ) )
 	{
-		ThreadInterlockedIncrement64( &g_navProfileVis[ NAV_PROF_VIS_HULL_ACCEPT ] );
+		NavProfAdd( NAV_PROF_VIS_HULL_ACCEPT );
 		return COMPLETELY_VISIBLE; // Counter-intuitive: the way this function was written, "COMPLETELY_VISIBLE" actually means "I am completely visible to the other"
 	}
 
@@ -5629,10 +5748,13 @@ void CNavArea::ComputeVisToArea( CNavArea *&pOtherArea )
 	CNavArea *area = assert_cast< CNavArea * >( pOtherArea );
 	VisibilityType visThisToOther = ( area == g_pCurVisArea ) ? COMPLETELY_VISIBLE : NOT_VISIBLE;
 	VisibilityType visOtherToThis = NOT_VISIBLE;
-	ThreadInterlockedIncrement64( &g_navProfileVis[ NAV_PROF_VIS_PAIRS ] );
-	if ( !ThreadInMainThread() )
+	NavProfThreadSlot &profSlot = NavProfSlot();
+	const int64 profStart = NavProfNowNs();
+	NavProfNoteJoin( profSlot, profStart );
+	NavProfAdd( NAV_PROF_VIS_PAIRS );
+	if ( !profSlot.isMain )
 	{
-		ThreadInterlockedIncrement64( &g_navProfileVis[ NAV_PROF_VIS_PAIRS_OFF_MAIN ] );
+		NavProfAdd( NAV_PROF_VIS_PAIRS_OFF_MAIN );
 	}
 
 	if ( area != g_pCurVisArea )
@@ -5671,6 +5793,9 @@ void CNavArea::ComputeVisToArea( CNavArea *&pOtherArea )
 		info.attributes = visOtherToThis;
 		area->m_potentiallyVisibleAreas.AddToTail( info );
 	}
+
+	++profSlot.items;
+	profSlot.itemNs += NavProfNowNs() - profStart;
 }
 
 
@@ -5691,8 +5816,9 @@ void CNavArea::ComputeVisibilityToMesh( void )
 		radius = DEF_NAV_VIEW_DISTANCE;
 	}
 	collector.m_area.EnsureCapacity( 1000 );
+	int64 profT0 = NavProfNowNs();
 	TheNavMesh->ForAllAreasInRadius( collector, GetCenter(), radius );
-	ThreadInterlockedExchangeAdd64( &g_navProfileVis[ NAV_PROF_VIS_CANDIDATES ], collector.m_area.Count() );
+	NavProfAdd( NAV_PROF_VIS_CANDIDATES, collector.m_area.Count() );
 
 	NavVisPair_t visPair;
 	UtlHashHandle_t hHash;
@@ -5705,15 +5831,34 @@ void CNavArea::ComputeVisibilityToMesh( void )
 		hHash = g_pNavVisPairHash->Find( visPair );
 		if ( hHash != g_pNavVisPairHash->InvalidHandle() )
 		{
-			ThreadInterlockedIncrement64( &g_navProfileVis[ NAV_PROF_VIS_PAIR_SKIPPED ] );
+			NavProfAdd( NAV_PROF_VIS_PAIR_SKIPPED );
 			collector.m_area.FastRemove( i );
 		}
 	}
 
+	int64 profT1 = NavProfNowNs();
 	SetupPVS();
+	int64 profT2 = NavProfNowNs();
 
 	g_pCurVisArea = this;
+	ThreadInterlockedIncrement( &s_navProfBatchId );
+	s_navProfBatchPoolSeen = 0;
+	s_navProfBatchStartNs = profT2;
 	ParallelProcess( "CNavArea::ComputeVisibilityToMesh", collector.m_area.Base(), collector.m_area.Count(), &ComputeVisToArea );
+	int64 profT3 = NavProfNowNs();
+	if ( collector.m_area.Count() >= 3 )
+	{
+		++s_navProfBatches;
+		s_navProfBatchItems += collector.m_area.Count();
+		s_navProfBatchNs += profT3 - profT2;
+		s_navProfBatchesWithPool += s_navProfBatchPoolSeen ? 1 : 0;
+		int threads = 1;
+		for ( int i = 1; i < NAV_PROF_MAX_THREADS; ++i )
+		{
+			threads += ( g_navProfSlots[ i ].used && g_navProfSlots[ i ].lastBatch == s_navProfBatchId ) ? 1 : 0;
+		}
+		s_navProfThreadsSum += threads;
+	}
 
 	m_potentiallyVisibleAreas.EnsureCapacity( g_ComputedVis.Count() );
 	while ( g_ComputedVis.Count() )
@@ -5727,6 +5872,12 @@ void CNavArea::ComputeVisibilityToMesh( void )
 		Assert( g_pNavVisPairHash->Find( visPair ) == g_pNavVisPairHash->InvalidHandle() );
 		g_pNavVisPairHash->Insert( visPair );
 	}
+
+	int64 profT4 = NavProfNowNs();
+	s_navProfMainCollectNs += profT1 - profT0;
+	s_navProfMainPvsNs += profT2 - profT1;
+	s_navProfMainPPNs += profT3 - profT2;
+	s_navProfMainPostNs += profT4 - profT3;
 }
 
 
@@ -5776,7 +5927,7 @@ bool CNavArea::IsPartiallyVisible( const Vector &eye, const CBaseEntity *ignore 
 
 	// check center
 	UTIL_TraceLine( eye, GetCenter() + Vector( 0, 0, offset ), MASK_NAV_VISION, &traceFilter, &result );
-	ThreadInterlockedIncrement64( &g_navProfileVis[ NAV_PROF_VIS_LINE_TRACES ] );
+	NavProfAdd( NAV_PROF_VIS_LINE_TRACES );
 	if (result.fraction >= 1.0f)
 	{
 		return true;
@@ -5799,7 +5950,7 @@ bool CNavArea::IsPartiallyVisible( const Vector &eye, const CBaseEntity *ignore 
 		}
 
 		UTIL_TraceLine( eye, corner + Vector( 0, 0, offset ), MASK_NAV_VISION, &traceFilter, &result );
-		ThreadInterlockedIncrement64( &g_navProfileVis[ NAV_PROF_VIS_LINE_TRACES ] );
+		NavProfAdd( NAV_PROF_VIS_LINE_TRACES );
 		if (result.fraction >= 1.0f)
 		{
 			return true;
@@ -5983,3 +6134,185 @@ Vector CNavArea::GetRandomPoint( void ) const
 
 
 
+
+
+//--------------------------------------------------------------------------------------------------------
+// NAV_PROFILE (nav-analyze-fast): trace scaling bench, profiling only, run when the NAV_VIS_BENCH environment
+// variable lists thread counts (such as "1 3 4 8 15"); one ParallelProcess call per mode and thread count,
+// on a private pool, results discarded
+struct NavBenchItem
+{
+	CNavArea *from;
+	CNavArea *to;
+};
+
+static int64 s_navBenchSink[ NAV_PROF_MAX_THREADS * 16 ];
+
+static void NavBenchItemDone( NavProfThreadSlot &slot, int64 start )
+{
+	++slot.items;
+	slot.itemNs += NavProfNowNs() - start;
+}
+
+// the visibility test of a pair, without the PVS check so every item traces
+static void NavBenchVis( NavBenchItem &item )
+{
+	NavProfThreadSlot &slot = NavProfSlot();
+	int64 start = NavProfNowNs();
+	s_navBenchSink[ ( &slot - g_navProfSlots ) * 16 ] += item.from->ComputeVisibility( item.to, true, false );
+	NavBenchItemDone( slot, start );
+}
+
+static void NavBenchEyes( const NavBenchItem &item, Vector &from, Vector &to )
+{
+	const Vector eye( 0, 0, 0.75f * HumanHeight );
+	from = item.from->GetCenter() + eye;
+	to = item.to->GetCenter() + eye;
+}
+
+static void NavBenchLine( NavBenchItem &item )
+{
+	NavProfThreadSlot &slot = NavProfSlot();
+	int64 start = NavProfNowNs();
+	Vector from, to;
+	NavBenchEyes( item, from, to );
+	trace_t tr;
+	CTraceFilterNoNPCsOrPlayer traceFilter( NULL, COLLISION_GROUP_NONE );
+	UTIL_TraceLine( from, to, MASK_NAV_VISION, &traceFilter, &tr );
+	NavProfAdd( NAV_PROF_VIS_LINE_TRACES );
+	s_navBenchSink[ ( &slot - g_navProfSlots ) * 16 ] += ( tr.fraction >= 1.0f );
+	NavBenchItemDone( slot, start );
+}
+
+// the swept box ComputeVisibility uses: the source area's footprint, from its eye center
+static void NavBenchHull( NavBenchItem &item )
+{
+	NavProfThreadSlot &slot = NavProfSlot();
+	int64 start = NavProfNowNs();
+	Vector from, to;
+	NavBenchEyes( item, from, to );
+	Vector mins = item.from->GetCorner( NORTH_WEST ) - item.from->GetCenter();
+	Vector maxs = item.from->GetCorner( SOUTH_EAST ) - item.from->GetCenter();
+	mins.z = 0.0f;
+	maxs.z = 0.1f;
+	trace_t tr;
+	CTraceFilterNoNPCsOrPlayer traceFilter( NULL, COLLISION_GROUP_NONE );
+	UTIL_TraceHull( from, to, mins, maxs, MASK_NAV_VISION, &traceFilter, &tr );
+	NavProfAdd( NAV_PROF_VIS_HULL_TRACES );
+	s_navBenchSink[ ( &slot - g_navProfSlots ) * 16 ] += ( tr.fraction >= 1.0f );
+	NavBenchItemDone( slot, start );
+}
+
+// the same item handling with no trace: the cost of the pool, the timers and the vector math
+static void NavBenchNone( NavBenchItem &item )
+{
+	NavProfThreadSlot &slot = NavProfSlot();
+	int64 start = NavProfNowNs();
+	Vector from, to;
+	NavBenchEyes( item, from, to );
+	s_navBenchSink[ ( &slot - g_navProfSlots ) * 16 ] += ( from.DistToSqr( to ) > 1.0f );
+	NavBenchItemDone( slot, start );
+}
+
+static int NavBenchEnvInt( const char *name, int fallback )
+{
+	const char *value = getenv( name );
+	return value ? atoi( value ) : fallback;
+}
+
+void NavVisBench()
+{
+	const char *threadList = getenv( "NAV_VIS_BENCH" );
+	if ( !threadList || TheNavAreas.Count() < 2 )
+	{
+		return;
+	}
+
+	struct BenchMode
+	{
+		const char *name;
+		void (*fn)( NavBenchItem & );
+		int items;
+	} modes[] =
+	{
+		{ "vis", NavBenchVis, NavBenchEnvInt( "NAV_VIS_BENCH_VIS", 120000 ) },
+		{ "line", NavBenchLine, NavBenchEnvInt( "NAV_VIS_BENCH_LINE", 3000000 ) },
+		{ "hull", NavBenchHull, NavBenchEnvInt( "NAV_VIS_BENCH_HULL", 1000000 ) },
+		{ "none", NavBenchNone, NavBenchEnvInt( "NAV_VIS_BENCH_NONE", 3000000 ) },
+	};
+
+	int maxItems = 0;
+	for ( int m = 0; m < ARRAYSIZE( modes ); ++m )
+	{
+		maxItems = MAX( maxItems, modes[ m ].items );
+	}
+
+	// a fixed pseudo-random pair sample, the same for every mode and thread count
+	CUtlVector< NavBenchItem > items;
+	items.SetCount( maxItems );
+	const unsigned int n = TheNavAreas.Count();
+	unsigned int seed = 12345;
+	for ( int i = 0; i < maxItems; ++i )
+	{
+		seed = seed * 1103515245u + 12345u;
+		unsigned int a = ( seed >> 8 ) % n;
+		seed = seed * 1103515245u + 12345u;
+		unsigned int b = ( seed >> 8 ) % n;
+		if ( a == b )
+		{
+			b = ( b + 1 ) % n;
+		}
+		items[ i ].from = TheNavAreas[ a ];
+		items[ i ].to = TheNavAreas[ b ];
+	}
+
+	for ( int m = 0; m < ARRAYSIZE( modes ); ++m )
+	{
+		char list[ 256 ];
+		Q_strncpy( list, threadList, sizeof( list ) );
+		for ( char *tok = strtok( list, " ," ); tok; tok = strtok( NULL, " ," ) )
+		{
+			const int threads = atoi( tok );
+			if ( threads < 1 || threads > NAV_PROF_MAX_THREADS - 1 )
+			{
+				continue;
+			}
+
+			// ParallelProcess runs the caller plus (pool size) jobs, and queues jobs only when there are 2 or more
+			IThreadPool *pool = NULL;
+			if ( threads > 1 )
+			{
+				pool = CreateThreadPool();
+				ThreadPoolStartParams_t params( false, threads - 1 );
+				pool->Start( params );
+			}
+
+			NavProfReset();
+			const int64 start = NavProfNowNs();
+			ParallelProcess( "NavVisBench", pool ? pool : g_pThreadPool, items.Base(), modes[ m ].items, modes[ m ].fn, NULL, NULL,
+				pool ? INT_MAX : 0 );
+			const double wall = ( NavProfNowNs() - start ) / 1e9;
+
+			int used = 0;
+			int64 busyNs = 0;
+			for ( int i = 0; i < NAV_PROF_MAX_THREADS; ++i )
+			{
+				used += g_navProfSlots[ i ].used ? 1 : 0;
+				busyNs += g_navProfSlots[ i ].itemNs;
+			}
+			Msg( "NAV_PROFILE bench mode=%s threads=%d threads_used=%d items=%d wall_s=%.3f us_per_item_wall=%.3f busy_s=%.3f parallelism=%.2f\n",
+				modes[ m ].name, threads, used, modes[ m ].items, wall, wall * 1e6 / modes[ m ].items, busyNs / 1e9, busyNs / 1e9 / wall );
+			char tag[ 64 ];
+			Q_snprintf( tag, sizeof( tag ), "bench-%s-%d", modes[ m ].name, threads );
+			NavProfPrintThreads( tag, wall );
+
+			if ( pool )
+			{
+				pool->Stop();
+				DestroyThreadPool( pool );
+			}
+		}
+	}
+
+	NavProfReset();
+}

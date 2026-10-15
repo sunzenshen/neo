@@ -38,7 +38,28 @@ enum NavProfileVisCounter
 	NAV_PROF_VIS_LINE_TRACES,	// line traces in IsPartiallyVisible
 	NAV_PROF_VIS_COUNT
 };
-extern int64 volatile g_navProfileVis[ NAV_PROF_VIS_COUNT ];
+// per-thread slots, so the hot path writes no cache line another thread writes
+enum { NAV_PROF_MAX_THREADS = 64 };
+struct alignas( 128 ) NavProfThreadSlot
+{
+	int64 c[ NAV_PROF_VIS_COUNT ];
+	int64 items;			// work items (pairs or bench items) run by this thread
+	int64 itemNs;			// time inside those items
+	int64 batchesJoined;	// visibility batches in which this pool thread took at least one item
+	int64 joinDelayNs;		// summed delay from batch start to this thread's first item
+	int lastBatch;
+	bool used;
+	bool isMain;
+};
+extern NavProfThreadSlot g_navProfSlots[ NAV_PROF_MAX_THREADS ];
+NavProfThreadSlot &NavProfSlot();
+int64 NavProfNowNs();
+inline void NavProfAdd( int counter, int64 n = 1 ) { NavProfSlot().c[ counter ] += n; }
+void NavProfSum( int64 *totals );
+void NavProfReset();
+void NavProfPrintThreads( const char *tag, double wallSeconds );
+void NavProfPrintBatches();
+void NavVisBench();
 
 #define DebuggerBreakOnNaN_StagingOnly( _val )
 

@@ -3683,13 +3683,16 @@ static void NavProfileFrame( int stateAtEntry, int stateNow, bool isGenerating, 
 		now - s_navProfileEnterTime, s_navProfileBusyTime, s_navProfileFrames, TheNavAreas.Count() );
 	if ( isVisibility )
 	{
-		const int64 *c = (const int64 *)g_navProfileVis;
+		int64 c[ NAV_PROF_VIS_COUNT ];
+		NavProfSum( c );
 		Msg( "NAV_PROFILE vis threads=%d candidates=%lld pair_skipped=%lld pairs=%lld pairs_off_main=%lld calls=%lld dist_reject=%lld pvs_reject=%lld"
 			" hull_accept=%lld hull_traces=%lld line_traces=%lld\n", g_pThreadPool ? g_pThreadPool->NumThreads() : -1,
 			c[ NAV_PROF_VIS_CANDIDATES ], c[ NAV_PROF_VIS_PAIR_SKIPPED ], c[ NAV_PROF_VIS_PAIRS ], c[ NAV_PROF_VIS_PAIRS_OFF_MAIN ],
 			c[ NAV_PROF_VIS_CALLS ],
 			c[ NAV_PROF_VIS_DIST_REJECT ], c[ NAV_PROF_VIS_PVS_REJECT ], c[ NAV_PROF_VIS_HULL_ACCEPT ],
 			c[ NAV_PROF_VIS_HULL_TRACES ], c[ NAV_PROF_VIS_LINE_TRACES ] );
+		NavProfPrintThreads( "vis", now - s_navProfileEnterTime );
+		NavProfPrintBatches();
 	}
 
 	// the next state's clock starts now, so the gaps between frames are charged to a state
@@ -3697,7 +3700,7 @@ static void NavProfileFrame( int stateAtEntry, int stateNow, bool isGenerating, 
 	s_navProfileEnterTime = now;
 	s_navProfileBusyTime = 0.0;
 	s_navProfileFrames = 0;
-	memset( (void *)g_navProfileVis, 0, sizeof( g_navProfileVis ) );
+	NavProfReset();
 }
 
 #ifdef NEO
@@ -3868,6 +3871,7 @@ bool CNavMesh::UpdateGeneration( float maxTime )
 			m_generationState = COMPUTE_MESH_VISIBILITY;
 			m_generationIndex = 0;
 			BeginVisibilityComputations();
+			NavVisBench();	// NAV_PROFILE (nav-analyze-fast): only when NAV_VIS_BENCH is set
 			Msg( "Computing mesh visibility...\n" );
 		
 			return true;
