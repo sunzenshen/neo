@@ -32,6 +32,11 @@
 // After this, need to start turning feet
 #define MAX_TORSO_ANGLE		70.0f
 
+#ifdef NEO
+// A twist this far past the max body yaw still counts as within it (degrees)
+static constexpr float BODY_YAW_LIMIT_TOLERANCE = 0.01f;
+#endif
+
 // Below this amount, don't play a turning animation/perform IK
 #define MIN_TURN_ANGLE_REQUIRING_TURN_ANIMATION		15.0f
 
@@ -866,7 +871,12 @@ void CBasePlayerAnimState::ComputePoseParam_BodyYaw()
 		// If he's rotated his view further than the model can turn, make him face forward.
 		float flDiff = AngleNormalize(  m_flGoalFeetYaw - m_flEyeYaw );
 
+#ifdef NEO
+		// after a half turn the feet stop exactly at the limit, and float error must not turn them a second time
+		if ( fabs(flDiff) > m_AnimConfig.m_flMaxBodyYawDegrees + BODY_YAW_LIMIT_TOLERANCE )
+#else
 		if ( fabs(flDiff) > m_AnimConfig.m_flMaxBodyYawDegrees )
+#endif
 		{
 			if ( flDiff  > 0 )
 				m_flGoalFeetYaw -= m_AnimConfig.m_flMaxBodyYawDegrees;
