@@ -15,6 +15,7 @@ public:
 
 	virtual ActionResult< CNEOBot >	OnStart(CNEOBot* me, Action< CNEOBot >* priorAction);
 	virtual ActionResult< CNEOBot >	Update(CNEOBot* me, float interval);
+	virtual ActionResult< CNEOBot >	OnResume(CNEOBot* me, Action< CNEOBot >* interruptingAction);
 
 	virtual EventDesiredResult< CNEOBot > OnNavAreaChanged(CNEOBot* me, CNavArea* newArea, CNavArea* oldArea);
 	virtual EventDesiredResult< CNEOBot > OnOtherKilled(CNEOBot* me, CBaseCombatCharacter* victim, const CTakeDamageInfo& info);
@@ -27,6 +28,8 @@ public:
 
 private:
 	CountdownTimer m_hazardCheckTimer;
+	IntervalTimer m_retreatStartTimer;
+	CountdownTimer m_retreatReentryTimer;
 	CountdownTimer m_maintainTimer;
 
 	CountdownTimer m_acknowledgeAttentionTimer;
@@ -39,6 +42,7 @@ private:
 
 	ActionResult< CNEOBot > ScavengeForPrimaryWeapon(CNEOBot* me);
 
+	ActionResult< CNEOBot > StartRetreat(CNEOBot* me, const char* reason);
 	void AvoidBumpingFriends(CNEOBot* me);
 	ActionResult< CNEOBot > WatchForLadders(CNEOBot* me);
 };

@@ -92,6 +92,33 @@ ActionResult< CNEOBot >	CNEOBotTacticalMonitor::OnStart( CNEOBot *me, Action< CN
 }
 
 
+// A retreat that ends within about one bot update found nothing to do,
+static constexpr float RETREAT_QUICK_END_TIME = 0.25f;
+// so wait this long before starting another one
+static constexpr float RETREAT_REENTRY_COOLDOWN = 1.0f;
+
+//-----------------------------------------------------------------------------------------
+ActionResult< CNEOBot > CNEOBotTacticalMonitor::StartRetreat( CNEOBot *me, const char *reason )
+{
+	m_retreatStartTimer.Start();
+	return SuspendFor( new CNEOBotRetreatToCover, reason );
+}
+
+
+//-----------------------------------------------------------------------------------------
+ActionResult< CNEOBot > CNEOBotTacticalMonitor::OnResume( CNEOBot *me, Action< CNEOBot > *interruptingAction )
+{
+	// without a cooldown, a retreat that ends at once is restarted on the next update while ShouldRetreat stays yes
+	if ( m_retreatStartTimer.HasStarted() && m_retreatStartTimer.IsLessThen( RETREAT_QUICK_END_TIME ) )
+	{
+		m_retreatReentryTimer.Start( RETREAT_REENTRY_COOLDOWN );
+	}
+
+	m_retreatStartTimer.Invalidate();
+	return Continue();
+}
+
+
 //-----------------------------------------------------------------------------------------
 ActionResult< CNEOBot > CNEOBotTacticalMonitor::MonitorArmedDetpack( CNEOBot *me )
 {
@@ -353,9 +380,15 @@ ActionResult< CNEOBot >	CNEOBotTacticalMonitor::Update( CNEOBot *me, float inter
 		const CKnownEntity *threat = me->GetVisionInterface()->GetPrimaryKnownThreat( true );
 		QueryResultType shouldRetreat = IsThreatGhostCarrier( threat ) ? ANSWER_NO : me->GetIntentionInterface()->ShouldRetreat( me );
 
+		// a retreat that just ended at once would end the same way if started again now
+		if ( !m_retreatReentryTimer.IsElapsed() )
+		{
+			shouldRetreat = ANSWER_NO;
+		}
+
 		if ( shouldRetreat == ANSWER_YES )
 		{
-			return SuspendFor( new CNEOBotRetreatToCover, "Backing off" );
+			return StartRetreat( me, "Backing off" );
 		}
 		else if ( shouldRetreat != ANSWER_NO )
 		{
@@ -367,7 +400,7 @@ ActionResult< CNEOBot >	CNEOBotTacticalMonitor::Update( CNEOBot *me, float inter
 				{
 					if ( weapon->Clip1() <= 1 )
 					{
-						return SuspendFor( new CNEOBotRetreatToCover, "Moving to cover to reload" );
+						return StartRetreat( me, "Moving to cover to reload" );
 					}
 				}
 			}
