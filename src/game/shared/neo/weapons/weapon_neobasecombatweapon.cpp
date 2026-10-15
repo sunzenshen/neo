@@ -644,13 +644,12 @@ void CNEOBaseCombatWeapon::ProcessAnimationEvents()
 		m_flNextSecondaryAttack = m_flNextPrimaryAttack;
 	};
 
-	// NEO JANK (Adam) Why do we have to bombard the zr68l viewmodel with SendWeaponAnim(ACT_VM_IDLE_LOWERED) during sprint to make it act normally? Breakpoint in SendWeaponAnim isn't triggered by anything else after this animation is sent while sprinting
-	const bool loweredCheck = GetNeoWepBits() & NEO_WEP_ZR68_L ? true : !m_bLowered;
-	if (loweredCheck && !m_bInReload &&
+	if (!m_bLowered && !m_bInReload &&
 		(pOwner->IsSprinting() || pOwner->GetMoveType() == MOVETYPE_LADDER))
 	{
 		m_bLowered = true;
-		next(ACT_VM_IDLE_LOWERED);
+		// the ZR68L stays raised instead of playing its lowered sequence, a sway loop
+		next(GetNeoWepBits() & NEO_WEP_ZR68_L ? ACT_VM_IDLE : ACT_VM_IDLE_LOWERED);
 	}
 	else if (m_bLowered && !(pOwner->IsSprinting() || pOwner->GetMoveType() == MOVETYPE_LADDER))
 	{
