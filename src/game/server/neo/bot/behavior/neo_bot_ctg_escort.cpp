@@ -9,6 +9,10 @@
 
 extern ConVar sv_neo_grenade_blast_radius;
 
+// The scout is the escort the carrier follows, so a scout that loses sight of the carrier waits this long for it
+// before it walks back to regroup
+static constexpr float ESCORT_SCOUT_HOLD_TIME = 6.0f;
+
 //---------------------------------------------------------------------------------------------
 CNEOBotCtgEscort::CNEOBotCtgEscort( void ) : 
 	m_role( ROLE_SCREEN ),
@@ -17,6 +21,7 @@ CNEOBotCtgEscort::CNEOBotCtgEscort( void ) :
 	m_vecGoalPos = CNEO_Player::VECTOR_INVALID_WAYPOINT;
 	m_repathTimer.Invalidate();
 	m_lostSightOfCarrierTimer.Invalidate();
+	m_scoutHoldTimer.Invalidate();
 }
 
 //---------------------------------------------------------------------------------------------
@@ -26,6 +31,7 @@ ActionResult< CNEOBot >	CNEOBotCtgEscort::OnStart( CNEOBot *me, Action< CNEOBot 
 	m_path.Invalidate();
 	m_repathTimer.Invalidate();
 	m_lostSightOfCarrierTimer.Invalidate();
+	m_scoutHoldTimer.Invalidate();
 
 	m_role = ROLE_SCREEN;
 	m_vecGoalPos = CNEO_Player::VECTOR_INVALID_WAYPOINT;
@@ -90,6 +96,7 @@ ActionResult< CNEOBot >	CNEOBotCtgEscort::Update( CNEOBot *me, float interval )
 	if ( bCanSeeCarrier )
 	{
 		m_lostSightOfCarrierTimer.Invalidate();
+		m_scoutHoldTimer.Invalidate();
 
 		if ( !m_bHasGoal )
 		{
@@ -131,6 +138,22 @@ ActionResult< CNEOBot >	CNEOBotCtgEscort::Update( CNEOBot *me, float interval )
 	// Check again based on grace period checks above
 	if ( !bCanSeeCarrier )
 	{
+		// walking back to the carrier would undo its advance, so the scout waits for the carrier to come into sight
+		if ( m_role == ROLE_SCOUT && m_bHasGoal )
+		{
+			if ( !m_scoutHoldTimer.HasStarted() )
+			{
+				m_scoutHoldTimer.Start( ESCORT_SCOUT_HOLD_TIME );
+			}
+
+			if ( !m_scoutHoldTimer.IsElapsed() )
+			{
+				m_path.Invalidate();
+				m_chasePath.Invalidate();
+				return Continue();
+			}
+		}
+
 		m_path.Invalidate();
 		CNEOBotPathUpdateChase( me, m_chasePath, pGhostCarrier, SAFEST_ROUTE );
 	}
@@ -215,6 +238,10 @@ ActionResult< CNEOBot > CNEOBotCtgEscort::OnResume( CNEOBot *me, Action< CNEOBot
 	m_chasePath.Invalidate();
 	m_path.Invalidate();
 	m_repathTimer.Invalidate();
+
+	// a ladder climb or a fight is not losing sight of the carrier, so the grace period starts again
+	m_lostSightOfCarrierTimer.Invalidate();
+	m_scoutHoldTimer.Invalidate();
 	return Continue();
 }
 

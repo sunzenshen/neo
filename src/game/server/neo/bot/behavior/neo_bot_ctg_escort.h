@@ -27,6 +27,7 @@ private:
 	ChasePath m_chasePath;
 	CountdownTimer m_repathTimer;
 	CountdownTimer m_lostSightOfCarrierTimer;
+	CountdownTimer m_scoutHoldTimer;
 
 	enum EscortRole
 	{
