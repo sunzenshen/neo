@@ -309,6 +309,7 @@ void CNEOPlayerAnimState::ComputePoseParam_BodyYaw()
 bool CNEOPlayerAnimState::IsLeaning() const
 {
 	constexpr int LEAN_BONE_CONTROLLER = 0;
+	// the client reads the lean controller encoded 0-1 (0.5 is upright), the server reads it in degrees
 #ifdef CLIENT_DLL
 	constexpr float BONE_CONTROLLER_VALUE_NOT_LEANING = 0.5f;
 #else
@@ -343,7 +344,7 @@ const char *CNEOPlayerAnimState::GetAimSuffix() const
 		return nullptr;
 	}
 
-	const int iClass = static_cast<CNEO_Player *>( m_pPlayer )->m_iNeoClass;
+	const int iClass = ToNEOPlayer( m_pPlayer )->m_iNeoClass;
 	if ( IsRemoteDet( pWeapon ) )
 	{
 		// only recon has the detpack animations, the other classes hold it like a grenade
@@ -411,7 +412,7 @@ int CNEOPlayerAnimState::CalcFireSequence()
 	{
 		// a class without the detpack animations throws it like a grenade and does not swing the remote
 		const bool bRemote = IsDetRemoteOut( pWeapon, DET_REMOTE_FIRE_DELAY );
-		if ( static_cast<CNEO_Player *>( m_pPlayer )->m_iNeoClass == NEO_CLASS_RECON )
+		if ( ToNEOPlayer( m_pPlayer )->m_iNeoClass == NEO_CLASS_RECON )
 		{
 			pSuffix = bRemote ? "detremote" : "detpack";
 		}
