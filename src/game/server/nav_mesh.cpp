@@ -3781,4 +3781,15 @@ void CNavMesh::EndVisibilityComputations( void )
 	}
 
 	Msg( "NavMesh Visibility List Lengths:  min = %d, avg = %d, max = %d\n", minVisLength, avgVisLength, maxVisLength );
+
+	// NAV_PROFILE (nav-analyze-fast): profiling instrumentation, how many areas store a delta against a neighbor
+	int inheritCount = 0;
+	FOR_EACH_VEC( TheNavAreas, it )
+	{
+		if ( TheNavAreas[ it ]->m_inheritVisibilityFrom.area )
+		{
+			++inheritCount;
+		}
+	}
+	Msg( "NAV_PROFILE vis_inherit areas=%d of %d\n", inheritCount, TheNavAreas.Count() );
 }

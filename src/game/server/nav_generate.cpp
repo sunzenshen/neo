@@ -17,6 +17,7 @@
 #include "viewport_panel_names.h"
 //#include "terror/TerrorShared.h"
 #include "fmtstr.h"
+#include "vstdlib/jobthread.h"
 
 #ifdef TERROR
 #include "func_simpleladder.h"
@@ -3640,6 +3641,64 @@ static void HideAnalysisProgress( void )
 /**
  * Process the auto-generation for 'maxTime' seconds. return false if generation is complete.
  */
+// NAV_PROFILE (nav-analyze-fast): profiling instrumentation, per-state wall time, busy time and frames,
+// in GenerationStateType order
+static const char *s_navProfileStateName[] =
+{
+	"SAMPLE_WALKABLE_SPACE",
+	"CREATE_AREAS_FROM_SAMPLES",
+	"FIND_HIDING_SPOTS",
+	"FIND_ENCOUNTER_SPOTS",
+	"FIND_SNIPER_SPOTS",
+	"FIND_EARLIEST_OCCUPY_TIMES",
+	"FIND_LIGHT_INTENSITY",
+	"COMPUTE_MESH_VISIBILITY",
+	"CUSTOM",
+	"SAVE_NAV_MESH",
+};
+static int s_navProfileState = -1;
+static double s_navProfileEnterTime;
+static double s_navProfileBusyTime;
+static int s_navProfileFrames;
+
+static void NavProfileFrame( int stateAtEntry, int stateNow, bool isGenerating, bool isVisibility, double frameStart )
+{
+	double now = Plat_FloatTime();
+	if ( s_navProfileState != stateAtEntry )
+	{
+		s_navProfileState = stateAtEntry;
+		s_navProfileEnterTime = frameStart;
+		s_navProfileBusyTime = 0.0;
+		s_navProfileFrames = 0;
+	}
+
+	s_navProfileBusyTime += now - frameStart;
+	++s_navProfileFrames;
+	if ( stateNow == stateAtEntry && isGenerating )
+	{
+		return;
+	}
+
+	Msg( "NAV_PROFILE state=%s seconds=%.3f busy=%.3f frames=%d areas=%d\n", s_navProfileStateName[ stateAtEntry ],
+		now - s_navProfileEnterTime, s_navProfileBusyTime, s_navProfileFrames, TheNavAreas.Count() );
+	if ( isVisibility )
+	{
+		const int64 *c = (const int64 *)g_navProfileVis;
+		Msg( "NAV_PROFILE vis threads=%d candidates=%lld pair_skipped=%lld pairs=%lld calls=%lld dist_reject=%lld pvs_reject=%lld"
+			" hull_accept=%lld hull_traces=%lld line_traces=%lld\n", g_pThreadPool ? g_pThreadPool->NumThreads() : -1,
+			c[ NAV_PROF_VIS_CANDIDATES ], c[ NAV_PROF_VIS_PAIR_SKIPPED ], c[ NAV_PROF_VIS_PAIRS ], c[ NAV_PROF_VIS_CALLS ],
+			c[ NAV_PROF_VIS_DIST_REJECT ], c[ NAV_PROF_VIS_PVS_REJECT ], c[ NAV_PROF_VIS_HULL_ACCEPT ],
+			c[ NAV_PROF_VIS_HULL_TRACES ], c[ NAV_PROF_VIS_LINE_TRACES ] );
+	}
+
+	// the next state's clock starts now, so the gaps between frames are charged to a state
+	s_navProfileState = isGenerating ? stateNow : -1;
+	s_navProfileEnterTime = now;
+	s_navProfileBusyTime = 0.0;
+	s_navProfileFrames = 0;
+	memset( (void *)g_navProfileVis, 0, sizeof( g_navProfileVis ) );
+}
+
 #ifdef NEO
 ConVar nav_neo_skip_visibility_calculation("nav_neo_skip_visibility_calculation", "0", 0, "Skip visibility calculation", true, 0, true, 1);
 #endif // NEO
@@ -3652,6 +3711,18 @@ bool CNavMesh::UpdateGeneration( float maxTime )
 	static CUtlVector<CNavArea *> s_unlitSeedAreas;
 
 	static ConVarRef host_thread_mode( "host_thread_mode" );
+
+	// NAV_PROFILE (nav-analyze-fast): profiling instrumentation, runs on every return from this frame's work
+	struct NavProfileScope
+	{
+		const CNavMesh *mesh;
+		int stateAtEntry;
+		double start;
+		~NavProfileScope()
+		{
+			NavProfileFrame( stateAtEntry, mesh->m_generationState, mesh->IsGenerating(), stateAtEntry == COMPUTE_MESH_VISIBILITY, start );
+		}
+	} navProfileScope = { this, m_generationState, startTime };
 
 	switch( m_generationState )
 	{
@@ -3830,7 +3901,9 @@ bool CNavMesh::UpdateGeneration( float maxTime )
 
 			Msg( "Optimizing mesh visibility...\n" );
 
+			double endVisStart = Plat_FloatTime();
 			EndVisibilityComputations();
+			Msg( "NAV_PROFILE step=EndVisibilityComputations seconds=%.3f\n", Plat_FloatTime() - endVisStart );
 
 			Msg( "Computing mesh visibility...DONE\n" );
 
