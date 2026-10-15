@@ -5630,6 +5630,10 @@ void CNavArea::ComputeVisToArea( CNavArea *&pOtherArea )
 	VisibilityType visThisToOther = ( area == g_pCurVisArea ) ? COMPLETELY_VISIBLE : NOT_VISIBLE;
 	VisibilityType visOtherToThis = NOT_VISIBLE;
 	ThreadInterlockedIncrement64( &g_navProfileVis[ NAV_PROF_VIS_PAIRS ] );
+	if ( !ThreadInMainThread() )
+	{
+		ThreadInterlockedIncrement64( &g_navProfileVis[ NAV_PROF_VIS_PAIRS_OFF_MAIN ] );
+	}
 
 	if ( area != g_pCurVisArea )
 	{

@@ -3684,9 +3684,10 @@ static void NavProfileFrame( int stateAtEntry, int stateNow, bool isGenerating, 
 	if ( isVisibility )
 	{
 		const int64 *c = (const int64 *)g_navProfileVis;
-		Msg( "NAV_PROFILE vis threads=%d candidates=%lld pair_skipped=%lld pairs=%lld calls=%lld dist_reject=%lld pvs_reject=%lld"
+		Msg( "NAV_PROFILE vis threads=%d candidates=%lld pair_skipped=%lld pairs=%lld pairs_off_main=%lld calls=%lld dist_reject=%lld pvs_reject=%lld"
 			" hull_accept=%lld hull_traces=%lld line_traces=%lld\n", g_pThreadPool ? g_pThreadPool->NumThreads() : -1,
-			c[ NAV_PROF_VIS_CANDIDATES ], c[ NAV_PROF_VIS_PAIR_SKIPPED ], c[ NAV_PROF_VIS_PAIRS ], c[ NAV_PROF_VIS_CALLS ],
+			c[ NAV_PROF_VIS_CANDIDATES ], c[ NAV_PROF_VIS_PAIR_SKIPPED ], c[ NAV_PROF_VIS_PAIRS ], c[ NAV_PROF_VIS_PAIRS_OFF_MAIN ],
+			c[ NAV_PROF_VIS_CALLS ],
 			c[ NAV_PROF_VIS_DIST_REJECT ], c[ NAV_PROF_VIS_PVS_REJECT ], c[ NAV_PROF_VIS_HULL_ACCEPT ],
 			c[ NAV_PROF_VIS_HULL_TRACES ], c[ NAV_PROF_VIS_LINE_TRACES ] );
 	}
