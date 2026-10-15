@@ -16,10 +16,6 @@ ConVar neo_bot_debug_retreat_to_cover( "neo_bot_debug_retreat_to_cover", "0", FC
 ConVar neo_bot_wait_in_cover_min_time( "neo_bot_wait_in_cover_min_time", "1", FCVAR_CHEAT );
 ConVar neo_bot_wait_in_cover_max_time( "neo_bot_wait_in_cover_max_time", "2", FCVAR_CHEAT );
 
-// A Supa7 can fire before its reload ends, so a bot holding this many shells stops waiting in cover for the reload
-// (with one shell, the tactical monitor would send it back to cover to reload at once)
-static constexpr int BOT_SUPA7_LEAVE_COVER_MIN_SHELLS = 2;
-
 
 //---------------------------------------------------------------------------------------------
 CNEOBotRetreatToCover::CNEOBotRetreatToCover( float hideDuration )
@@ -327,15 +323,11 @@ ActionResult< CNEOBot >	CNEOBotRetreatToCover::Update( CNEOBot *me, float interv
 			return ChangeTo( m_actionToChangeToOnceCoverReached, "Doing given action now that I'm in cover" );
 		}
 
-		// stay in cover while we fully reload, unless a Supa7 already holds enough shells to fight
+		// stay in cover while we reload, until we can fire again
 		CNEOBaseCombatWeapon* myWeapon = static_cast<CNEOBaseCombatWeapon*>(me->GetActiveWeapon());
-		if ( myWeapon && myWeapon->m_bInReload )
+		if ( me->IsReloadStoppingFire( myWeapon ) )
 		{
-			const bool bIsSupa7 = ( myWeapon->GetNeoWepBits() & NEO_WEP_SUPA7 ) != 0;
-			if ( !bIsSupa7 || myWeapon->Clip1() < BOT_SUPA7_LEAVE_COVER_MIN_SHELLS )
-			{
-				return Continue();
-			}
+			return Continue();
 		}
 
 		if ( m_waitInCoverTimer.IsElapsed() )

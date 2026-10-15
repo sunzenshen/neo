@@ -1960,6 +1960,24 @@ bool CNEOBot::IsBarrageAndReloadWeapon(CNEOBaseCombatWeapon* weapon) const
 }
 
 
+// A Supa7 can fire before its reload ends, so a bot holding this many shells is ready to fight
+// (with one shell, the tactical monitor would send it to cover to reload at once)
+static constexpr int BOT_SUPA7_FIGHT_MIN_SHELLS = 2;
+
+//-----------------------------------------------------------------------------------------------------
+// Return true if given weapon is reloading and cannot fire until the reload ends
+bool CNEOBot::IsReloadStoppingFire(CNEOBaseCombatWeapon* weapon) const
+{
+	if (!weapon || !weapon->m_bInReload)
+	{
+		return false;
+	}
+
+	const bool bIsSupa7 = (weapon->GetNeoWepBits() & NEO_WEP_SUPA7) != 0;
+	return !bIsSupa7 || weapon->Clip1() < BOT_SUPA7_FIGHT_MIN_SHELLS;
+}
+
+
 //-----------------------------------------------------------------------------------------------------
 // Return true if given weapon doesn't make much sound when used (ie: spy knife, etc)
 bool CNEOBot::IsQuietWeapon(CNEOBaseCombatWeapon* weapon) const

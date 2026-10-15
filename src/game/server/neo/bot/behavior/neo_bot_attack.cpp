@@ -495,7 +495,7 @@ QueryResultType	CNEOBotAttack::ShouldRetreat( const INextBot *me ) const
 
 	if (myWeapon)
 	{
-		if (myWeapon->m_bInReload || (myWeapon->Clip1() <= 1))
+		if (meNeoBot->IsReloadStoppingFire(myWeapon) || (myWeapon->Clip1() <= 1))
 		{
 			return ANSWER_YES;
 		}

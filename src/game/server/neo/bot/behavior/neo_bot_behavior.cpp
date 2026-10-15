@@ -1207,7 +1207,7 @@ QueryResultType	CNEOBotMainAction::ShouldRetreat( const INextBot *bot ) const
 	if (threat)
 	{
 		CNEOBaseCombatWeapon* myWeapon = static_cast<CNEOBaseCombatWeapon*>(me->GetActiveWeapon());
-		if (myWeapon && myWeapon->m_bInReload)
+		if (me->IsReloadStoppingFire(myWeapon))
 		{
 			return ANSWER_YES;
 		}

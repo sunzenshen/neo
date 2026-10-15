@@ -180,6 +180,7 @@ public:
 	bool IsContinuousFireWeapon(CNEOBaseCombatWeapon* weapon) const;		// return true if given weapon "sprays" bullets/fire/etc continuously (ie: not individual rockets/etc)
 	bool IsExplosiveProjectileWeapon(CNEOBaseCombatWeapon* weapon) const;// return true if given weapon launches explosive projectiles with splash damage
 	bool IsBarrageAndReloadWeapon(CNEOBaseCombatWeapon* weapon) const;	// return true if given weapon has small clip and long reload cost (ie: rocket launcher, etc)
+	bool IsReloadStoppingFire(CNEOBaseCombatWeapon* weapon) const;		// return true if given weapon is reloading and cannot fire until the reload ends
 	bool IsQuietWeapon(CNEOBaseCombatWeapon* weapon) const;				// return true if given weapon doesn't make much sound when used (ie: spy knife, etc)
 
 	bool IsEnvironmentNoisy(void) const;							// return true if there are/have been loud noises (ie: non-quiet weapons) nearby very recently
