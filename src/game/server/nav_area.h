@@ -543,7 +543,7 @@ public:
 		COMPLETELY_VISIBLE		= 0x02,
 	};
 
-	VisibilityType ComputeVisibility( const CNavArea *area, bool isPVSValid, bool bCheckPVS = true, bool *pOutsidePVS = NULL ) const;	// do actual line-of-sight traces to determine if any part of given area is visible from this area
+	VisibilityType ComputeVisibility( const CNavArea *area, bool isPVSValid, bool bCheckPVS = true, bool *pOutsidePVS = NULL, const byte *pvs = NULL ) const;	// do actual line-of-sight traces to determine if any part of given area is visible from this area; pvs replaces the current PVS when given
 	void SetupPVS( void ) const;
 	bool IsInPVS( void ) const;					// return true if this area is within the current PVS
 
@@ -794,6 +794,9 @@ private:
 	void ComputeVisibilityToMesh( void );						// compute visibility to surrounding mesh
 	void ResetPotentiallyVisibleAreas();
 	static void ComputeVisToArea( CNavArea *&pOtherArea );
+	static void ComputeMeshVisibility( void );					// compute visibility between all areas of the mesh at once, on a thread pool
+	struct VisPair_t;
+	static void ComputeVisPair( VisPair_t &pair );
 
 #ifndef _X360
 	typedef CUtlVectorConservative<AreaBindInfo> CAreaBindInfoArray; // shaves 8 bytes off structure caused by need to support editing

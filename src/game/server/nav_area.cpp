@@ -189,6 +189,7 @@ const float DEF_NAV_VIEW_DISTANCE = 1500.0;
 ConVar nav_max_view_distance( "nav_max_view_distance", "6000", FCVAR_CHEAT, "Maximum range for precomputed nav mesh visibility (0 = default 1500 units)" );
 ConVar nav_update_visibility_on_edit( "nav_update_visibility_on_edit", "0", FCVAR_CHEAT, "If nonzero editing the mesh will incrementally recompue visibility" );
 ConVar nav_potentially_visible_dot_tolerance( "nav_potentially_visible_dot_tolerance", "0.98", FCVAR_CHEAT );
+ConVar nav_vis_threads( "nav_vis_threads", "4", FCVAR_CHEAT, "Threads that compute nav mesh visibility, the calling thread included (the engine's model cache lets at most 4 trace at once)", true, 1, true, 32 );
 ConVar nav_show_potentially_visible( "nav_show_potentially_visible", "0", FCVAR_CHEAT, "Show areas that are potentially visible from the current nav area" );
 
 Color s_selectedSetColor( 255, 255, 200, 96 );
@@ -5511,7 +5512,7 @@ bool CNavArea::IsInPVS( void ) const
 /**
  * Do actual line-of-sight traces to determine if any part of given area is visible from this area
  */
-CNavArea::VisibilityType CNavArea::ComputeVisibility( const CNavArea *area, bool isPVSValid, bool bCheckPVS, bool *pOutsidePVS ) const
+CNavArea::VisibilityType CNavArea::ComputeVisibility( const CNavArea *area, bool isPVSValid, bool bCheckPVS, bool *pOutsidePVS, const byte *pvs ) const
 {
 	float distanceSq = area->GetCenter().DistToSqr( GetCenter() );
 	NavProfAdd( NAV_PROF_VIS_CALLS );
@@ -5542,7 +5543,7 @@ CNavArea::VisibilityType CNavArea::ComputeVisibility( const CNavArea *area, bool
 		areaExtent.Encompass( area->GetCorner( NORTH_EAST ) + eye );
 		areaExtent.Encompass( area->GetCorner( SOUTH_WEST ) + eye );
 		areaExtent.Encompass( area->GetCorner( SOUTH_EAST ) + eye );
-		if ( !engine->CheckBoxInPVS( areaExtent.lo, areaExtent.hi, m_PVS, m_nPVSSize ) )
+		if ( !engine->CheckBoxInPVS( areaExtent.lo, areaExtent.hi, pvs ? pvs : m_PVS, m_nPVSSize ) )
 		{
 			if ( pOutsidePVS )
 				*pOutsidePVS = true;
@@ -5867,6 +5868,168 @@ void CNavArea::ComputeVisibilityToMesh( void )
 	s_navProfMainPvsNs += profT2 - profT1;
 	s_navProfMainPPNs += profT3 - profT2;
 	s_navProfMainPostNs += profT4 - profT3;
+}
+
+
+//--------------------------------------------------------------------------------------------------------
+// One pair of ComputeMeshVisibility: the visibility test of ComputeVisToArea, with the results kept in the pair,
+// so the lists can be built afterwards in an order that does not depend on which thread ran which pair
+struct CNavArea::VisPair_t
+{
+	CNavArea *other;
+	int source;							// index in TheNavAreas of the area whose collector holds 'other'
+	unsigned char visSourceToOther;		// stored in the source area's list
+	unsigned char visOtherToSource;		// stored in the other area's list
+};
+
+static const byte *s_pVisPassPVS;		// one PVS per source area, in TheNavAreas order
+
+void CNavArea::ComputeVisPair( VisPair_t &pair )
+{
+	CNavArea *source = TheNavAreas[ pair.source ];
+	CNavArea *area = pair.other;
+	const byte *pvs = s_pVisPassPVS + pair.source * sizeof( m_PVS );
+	VisibilityType visThisToOther = ( area == source ) ? COMPLETELY_VISIBLE : NOT_VISIBLE;
+	VisibilityType visOtherToThis = NOT_VISIBLE;
+
+	if ( area != source )
+	{
+		bool bOutsidePVS = false;
+
+		visOtherToThis = source->ComputeVisibility( area, true, true, &bOutsidePVS, pvs );
+
+		if ( !bOutsidePVS && ( visOtherToThis || ( source->GetCenter() - area->GetCenter() ).LengthSqr() < Sqr( nav_max_view_distance.GetFloat() ) ) )
+		{
+			visThisToOther = area->ComputeVisibility( source, true, false );
+		}
+
+		if ( !visOtherToThis && visThisToOther )
+		{
+			visOtherToThis = POTENTIALLY_VISIBLE;
+		}
+
+		if ( !visThisToOther && visOtherToThis )
+		{
+			visThisToOther = POTENTIALLY_VISIBLE;
+		}
+	}
+
+	pair.visSourceToOther = visThisToOther;
+	pair.visOtherToSource = visOtherToThis;
+}
+
+
+//--------------------------------------------------------------------------------------------------------
+/**
+ * Compute every area's visibility list in one pass: the pairs of all areas, as ComputeVisibilityToMesh
+ * would visit them area by area, run in one ParallelProcess call, so the pool threads work for the
+ * whole pass instead of one short batch per area.
+ * The lists are then built in the order a single thread produces with ComputeVisibilityToMesh:
+ *
+ *   for each area A in TheNavAreas order:
+ *     append (A, vis) to each other area B of A's pairs, in collector order
+ *     append (B, vis) to A, in reverse collector order (g_ComputedVis pops last in, first out)
+ */
+void CNavArea::ComputeMeshVisibility( void )
+{
+	const int areaCount = TheNavAreas.Count();
+	float radius = nav_max_view_distance.GetFloat();
+	if ( radius == 0.0f )
+	{
+		radius = DEF_NAV_VIEW_DISTANCE;
+	}
+
+	CUtlVector< VisPair_t > pairs;
+	CUtlVector< int > firstPair;
+	firstPair.SetCount( areaCount + 1 );
+	CUtlVector< byte > pvs;
+	pvs.SetCount( areaCount * sizeof( m_PVS ) );
+
+	// the pairs, in the order ComputeVisibilityToMesh visits them, and each source area's PVS
+	NavAreaCollector collector;
+	collector.m_area.EnsureCapacity( 1000 );
+	for ( int a = 0; a < areaCount; ++a )
+	{
+		CNavArea *source = TheNavAreas[ a ];
+		source->m_inheritVisibilityFrom.area = NULL;
+		source->m_isInheritedFrom = false;
+
+		collector.m_area.RemoveAll();
+		TheNavMesh->ForAllAreasInRadius( collector, source->GetCenter(), radius );
+
+		// the same elimination as ComputeVisibilityToMesh, so the remaining pairs keep its order
+		for ( int i = collector.m_area.Count() - 1; i >= 0; --i )
+		{
+			if ( collector.m_area[i]->m_isVisibilityComputed )
+			{
+				collector.m_area.FastRemove( i );
+			}
+		}
+
+		source->m_isVisibilityComputed = true;
+
+		firstPair[ a ] = pairs.Count();
+		FOR_EACH_VEC( collector.m_area, it )
+		{
+			VisPair_t &pair = pairs[ pairs.AddToTail() ];
+			pair.other = collector.m_area[ it ];
+			pair.source = a;
+			pair.visSourceToOther = NOT_VISIBLE;
+			pair.visOtherToSource = NOT_VISIBLE;
+		}
+
+		// SetupPVS fills the one static PVS buffer, so each source area keeps a copy for the threads
+		source->SetupPVS();
+		V_memcpy( pvs.Base() + a * sizeof( m_PVS ), m_PVS, sizeof( m_PVS ) );
+	}
+	firstPair[ areaCount ] = pairs.Count();
+
+	// ParallelProcess runs the caller and one job per pool thread, and queues jobs only when it has 2 or more
+	const int threads = nav_vis_threads.GetInt();
+	IThreadPool *pool = NULL;
+	if ( threads > 1 )
+	{
+		pool = CreateThreadPool();
+		ThreadPoolStartParams_t params( false, threads - 1 );
+		pool->Start( params );
+	}
+
+	s_pVisPassPVS = pvs.Base();
+	ParallelProcess( "CNavArea::ComputeMeshVisibility", pool ? pool : g_pThreadPool, pairs.Base(), pairs.Count(), &ComputeVisPair,
+		NULL, NULL, pool ? INT_MAX : 0 );
+	s_pVisPassPVS = NULL;
+
+	if ( pool )
+	{
+		pool->Stop();
+		DestroyThreadPool( pool );
+	}
+
+	for ( int a = 0; a < areaCount; ++a )
+	{
+		CNavArea *source = TheNavAreas[ a ];
+		AreaBindInfo info;
+
+		for ( int i = firstPair[ a ]; i < firstPair[ a + 1 ]; ++i )
+		{
+			if ( pairs[ i ].visOtherToSource != NOT_VISIBLE )
+			{
+				info.area = source;
+				info.attributes = pairs[ i ].visOtherToSource;
+				pairs[ i ].other->m_potentiallyVisibleAreas.AddToTail( info );
+			}
+		}
+
+		for ( int i = firstPair[ a + 1 ] - 1; i >= firstPair[ a ]; --i )
+		{
+			if ( pairs[ i ].visSourceToOther != NOT_VISIBLE )
+			{
+				info.area = pairs[ i ].other;
+				info.attributes = pairs[ i ].visSourceToOther;
+				source->m_potentiallyVisibleAreas.AddToTail( info );
+			}
+		}
+	}
 }
 
 

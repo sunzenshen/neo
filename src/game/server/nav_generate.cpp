@@ -3889,19 +3889,13 @@ bool CNavMesh::UpdateGeneration( float maxTime )
 				return true;
 			}
 #endif // NEO
-			while( m_generationIndex < TheNavAreas.Count() )
+			// the whole pass runs in this frame, since its threads only pay off on one large batch;
+			// the encoding below runs in the next frame
+			if ( m_generationIndex < TheNavAreas.Count() )
 			{
-				CNavArea *area = TheNavAreas[ m_generationIndex ];
-				++m_generationIndex;
-
-				area->ComputeVisibilityToMesh();
-
-				// don't go over our time allotment
-				if ( Plat_FloatTime() - startTime > maxTime )
-				{
-					AnalysisProgress( "Computing mesh visibility...", 100, 100 * m_generationIndex / TheNavAreas.Count() );
-					return true;
-				}
+				CNavArea::ComputeMeshVisibility();
+				m_generationIndex = TheNavAreas.Count();
+				return true;
 			}
 
 			Msg( "Optimizing mesh visibility...\n" );
