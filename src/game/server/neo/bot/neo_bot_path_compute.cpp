@@ -34,10 +34,35 @@ static void CNEOBotReservePath(CNEOBot* me, PathFollower& path)
 	}
 }
 
-// A path that stops short of the goal is only wanted if the caller asked for partial paths
-static bool IsPathUsable(const PathFollower& path, bool reachedGoal, bool includeGoalIfPathFails)
+// Path::Compute falls back to a two-segment straight line when no area it reached is nearer the goal than our own,
+// and a line up to a goal above jump height ends in the path follower's "goal is high above us" failure
+static bool IsTrivialClimb(CNEOBot* bot, const PathFollower& path)
 {
-	return path.IsValid() && (reachedGoal || includeGoalIfPathFails);
+	const Path::Segment* goalSeg = path.LastSegment();
+	if (path.NextSegment(path.FirstSegment()) != goalSeg)
+	{
+		return false;
+	}
+
+	const ILocomotion* mover = bot->GetLocomotionInterface();
+	return goalSeg->pos.z > mover->GetFeet().z + mover->GetMaxJumpHeight();
+}
+
+// A path that stops short of the goal is only wanted if the caller asked for partial paths,
+// and never when it is a straight line up to a goal we cannot climb to
+static bool IsPathUsable(CNEOBot* bot, const PathFollower& path, bool reachedGoal, bool includeGoalIfPathFails)
+{
+	if (!path.IsValid())
+	{
+		return false;
+	}
+
+	if (reachedGoal)
+	{
+		return true;
+	}
+
+	return includeGoalIfPathFails && !IsTrivialClimb(bot, path);
 }
 
 // By default, assumes that we would prefer to have partial paths even if we can't make a full path
@@ -49,7 +74,7 @@ bool CNEOBotPathCompute(CNEOBot* bot, PathFollower& path, const Vector& goal, Ro
 
 	CNEOBotPathCost cost_with_reservations(bot, route);
 	bool reachedGoal = path.Compute(bot, goal, cost_with_reservations, maxPathLength, includeGoalIfPathFails, requireGoalArea);
-	if (IsPathUsable(path, reachedGoal, includeGoalIfPathFails))
+	if (IsPathUsable(bot, path, reachedGoal, includeGoalIfPathFails))
 	{
 		CNEOBotReservePath(bot, path);
 		return true;
@@ -58,7 +83,7 @@ bool CNEOBotPathCompute(CNEOBot* bot, PathFollower& path, const Vector& goal, Ro
 	CNEOBotPathCost cost_without_reservations(bot, FASTEST_ROUTE);
 	cost_without_reservations.m_bIgnoreReservations = true;
 	reachedGoal = path.Compute(bot, goal, cost_without_reservations, maxPathLength, includeGoalIfPathFails, requireGoalArea);
-	if (IsPathUsable(path, reachedGoal, includeGoalIfPathFails))
+	if (IsPathUsable(bot, path, reachedGoal, includeGoalIfPathFails))
 	{
 		CNEOBotReservePath(bot, path);
 		return true;
