@@ -3677,6 +3677,50 @@ bool CNavArea::IsHidingSpotCollision( const Vector &pos ) const
 	return false;
 }
 
+#ifdef NEO
+// NEO-HARNESS-TEMP: neo_nav_analyze_static_world, an opt-in experiment (proposal 0036), not for upstream.
+// Movable, animated and spawned entities change during an analysis, so its result depends on when each trace runs.
+ConVar neo_nav_analyze_static_world( "neo_nav_analyze_static_world", "0", FCVAR_CHEAT,
+	"If nonzero, nav_analyze's visibility and hiding spot cover traces hit only the world and static props." );
+
+// The rule is by entity, not class or move type: anything that is not the world entity is skipped,
+// so doors, func_rotating, func_breakable, prop_dynamic, prop_physics and the juggernaut are skipped,
+// and so is a func_brush or prop_dynamic that never moves (a judgment call, listed in entfilter-notes.md).
+// Static props are not entities (EntityFromEntityHandle returns NULL), so the base filter decides them.
+class CTraceFilterNavStaticWorld : public CTraceFilter
+{
+public:
+	CTraceFilterNavStaticWorld( ITraceFilter *base ) : m_base( base ) {}
+
+	virtual bool ShouldHitEntity( IHandleEntity *pHandleEntity, int contentsMask )
+	{
+		if ( !m_base->ShouldHitEntity( pHandleEntity, contentsMask ) )
+		{
+			return false;
+		}
+
+		CBaseEntity *pEntity = EntityFromEntityHandle( pHandleEntity );
+		return !pEntity || pEntity->IsWorld();
+	}
+
+	virtual TraceType_t GetTraceType() const { return m_base->GetTraceType(); }
+
+private:
+	ITraceFilter *m_base;
+};
+
+// the filter an analysis trace uses: the static-world wrapper while generating with the cvar on, else the base filter
+static ITraceFilter *NavAnalysisFilter( ITraceFilter *base, CTraceFilterNavStaticWorld *wrapper )
+{
+	if ( neo_nav_analyze_static_world.GetBool() && TheNavMesh->IsGenerating() )
+	{
+		return wrapper;
+	}
+
+	return base;
+}
+#endif // NEO
+
 //--------------------------------------------------------------------------------------------------------------
 bool IsHidingSpotInCover( const Vector &spot )
 {
@@ -3691,7 +3735,10 @@ bool IsHidingSpotInCover( const Vector &spot )
 	// if we are crouched underneath something, that counts as good cover
 	to = from + Vector( 0, 0, 20.0f );
 #ifdef NEO
-	UTIL_TraceLine( from, to, MASK_PLAYERSOLID_BRUSHONLY, NULL, COLLISION_GROUP_NONE, &result );
+	CTraceFilterSimple simpleFilter( NULL, COLLISION_GROUP_NONE );
+	CTraceFilterNavStaticWorld staticFilter( &simpleFilter );
+	ITraceFilter *coverFilter = NavAnalysisFilter( &simpleFilter, &staticFilter );
+	UTIL_TraceLine( from, to, MASK_PLAYERSOLID_BRUSHONLY, coverFilter, &result );
 #else
 	UTIL_TraceLine( from, to, MASK_NPCSOLID_BRUSHONLY, NULL, COLLISION_GROUP_NONE, &result );
 #endif // NEO
@@ -3706,7 +3753,7 @@ bool IsHidingSpotInCover( const Vector &spot )
 		to = from + Vector( coverRange * (float)cos(angle), coverRange * (float)sin(angle), HalfHumanHeight );
 
 #ifdef NEO
-		UTIL_TraceLine( from, to, MASK_PLAYERSOLID_BRUSHONLY, NULL, COLLISION_GROUP_NONE, &result );
+		UTIL_TraceLine( from, to, MASK_PLAYERSOLID_BRUSHONLY, coverFilter, &result );
 #else
 		UTIL_TraceLine( from, to, MASK_NPCSOLID_BRUSHONLY, NULL, COLLISION_GROUP_NONE, &result );
 #endif // NEO
@@ -5454,8 +5501,12 @@ CNavArea::VisibilityType CNavArea::ComputeVisibility( const CNavArea *area, bool
 
 	trace_t tr;
 	CTraceFilterNoNPCsOrPlayer traceFilter( NULL, COLLISION_GROUP_NONE );
-
+#ifdef NEO
+	CTraceFilterNavStaticWorld staticFilter( &traceFilter );
+	UTIL_TraceHull( vThisCenter, vTarget, vTraceMins, vTraceMaxs, MASK_NAV_VISION, NavAnalysisFilter( &traceFilter, &staticFilter ), &tr );
+#else
 	UTIL_TraceHull( vThisCenter, vTarget, vTraceMins, vTraceMaxs, MASK_NAV_VISION, &traceFilter, &tr );
+#endif // NEO
 
 	if ( tr.fraction == 1.0 ||  ( tr.endpos.x > vOtherMins.x && tr.endpos.x < vOtherMaxs.x && tr.endpos.y > vOtherMins.y && tr.endpos.y < vOtherMaxs.y ) )
 	{
@@ -5933,10 +5984,16 @@ bool CNavArea::IsEntirelyVisible( const Vector &eye, const CBaseEntity *ignore )
 	Vector corner;
 	trace_t result;
 	CTraceFilterNoNPCsOrPlayer traceFilter( ignore, COLLISION_GROUP_NONE );
+#ifdef NEO
+	CTraceFilterNavStaticWorld staticFilter( &traceFilter );
+	ITraceFilter *visFilter = NavAnalysisFilter( &traceFilter, &staticFilter );
+#else
+	ITraceFilter *visFilter = &traceFilter;
+#endif // NEO
 	const float offset = 0.75f * HumanHeight;
 
 	// check center
-	UTIL_TraceLine( eye, GetCenter() + Vector( 0, 0, offset ), MASK_NAV_VISION, &traceFilter, &result );
+	UTIL_TraceLine( eye, GetCenter() + Vector( 0, 0, offset ), MASK_NAV_VISION, visFilter, &result );
 	if (result.fraction < 1.0f)
 	{
 		return false;
@@ -5945,7 +6002,7 @@ bool CNavArea::IsEntirelyVisible( const Vector &eye, const CBaseEntity *ignore )
 	for( int c=0; c<NUM_CORNERS; ++c )
 	{
 		corner = GetCorner( (NavCornerType)c );
-		UTIL_TraceLine( eye, corner + Vector( 0, 0, offset ), MASK_NAV_VISION, &traceFilter, &result );
+		UTIL_TraceLine( eye, corner + Vector( 0, 0, offset ), MASK_NAV_VISION, visFilter, &result );
 		if (result.fraction < 1.0f)
 		{
 			return false;
@@ -5966,10 +6023,16 @@ bool CNavArea::IsPartiallyVisible( const Vector &eye, const CBaseEntity *ignore 
 	Vector corner;
 	trace_t result;
 	CTraceFilterNoNPCsOrPlayer traceFilter( ignore, COLLISION_GROUP_NONE );
+#ifdef NEO
+	CTraceFilterNavStaticWorld staticFilter( &traceFilter );
+	ITraceFilter *visFilter = NavAnalysisFilter( &traceFilter, &staticFilter );
+#else
+	ITraceFilter *visFilter = &traceFilter;
+#endif // NEO
 	const float offset = 0.75f * HumanHeight;
 
 	// check center
-	UTIL_TraceLine( eye, GetCenter() + Vector( 0, 0, offset ), MASK_NAV_VISION, &traceFilter, &result );
+	UTIL_TraceLine( eye, GetCenter() + Vector( 0, 0, offset ), MASK_NAV_VISION, visFilter, &result );
 	if (result.fraction >= 1.0f)
 	{
 		return true;
@@ -5991,7 +6054,7 @@ bool CNavArea::IsPartiallyVisible( const Vector &eye, const CBaseEntity *ignore 
 			continue;
 		}
 
-		UTIL_TraceLine( eye, corner + Vector( 0, 0, offset ), MASK_NAV_VISION, &traceFilter, &result );
+		UTIL_TraceLine( eye, corner + Vector( 0, 0, offset ), MASK_NAV_VISION, visFilter, &result );
 		if (result.fraction >= 1.0f)
 		{
 			return true;
