@@ -57,8 +57,19 @@ private:
     CNEOBot *m_me;
 };
 
-CNEOBotRetreatFromHazardArea::CNEOBotRetreatFromHazardArea()
+CNEOBotRetreatFromHazardArea::CNEOBotRetreatFromHazardArea(HazardRetreatKind kind)
+    : m_kind(kind)
 {
+}
+
+bool CNEOBotRetreatFromHazardArea::IsHazardToLeave(const CNEOBot *me, const CNavArea *area, HazardRetreatKind kind)
+{
+    if (kind == RETREAT_FROM_DEADLY_HAZARD)
+    {
+        return CNEOBotPathReservations()->IsAreaDeadlyHazard(area->GetID(), me);
+    }
+
+    return CNEOBotPathReservations()->IsAreaHazardous(area->GetID(), me);
 }
 
 CNavArea *CNEOBotRetreatFromHazardArea::FindSafeArea(CNEOBot *me)
@@ -112,7 +123,7 @@ ActionResult<CNEOBot> CNEOBotRetreatFromHazardArea::Update(CNEOBot *me, float in
         return Done("Can't identify my nav area!");
     }
 
-    if ( !CNEOBotPathReservations()->IsAreaHazardous(myArea->GetID(), me))
+    if (!IsHazardToLeave(me, myArea, m_kind))
     {
         return Done("Left hazardous area");
     }

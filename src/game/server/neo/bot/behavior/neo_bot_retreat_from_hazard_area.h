@@ -5,10 +5,19 @@
 #include "neo/bot/neo_bot.h"
 #include "neo/bot/neo_bot_path_compute.h"
 
+// which hazards a retreat leaves: a bot in a hurry for its objective accepts smoke
+enum HazardRetreatKind
+{
+    RETREAT_FROM_ANY_HAZARD,
+    RETREAT_FROM_DEADLY_HAZARD,
+};
+
 class CNEOBotRetreatFromHazardArea : public Action<CNEOBot>
 {
 public:
-    CNEOBotRetreatFromHazardArea();
+    CNEOBotRetreatFromHazardArea(HazardRetreatKind kind = RETREAT_FROM_ANY_HAZARD);
+
+    static bool IsHazardToLeave(const CNEOBot *me, const CNavArea *area, HazardRetreatKind kind);
 
     virtual ActionResult<CNEOBot> OnStart(CNEOBot *me, Action<CNEOBot> *priorAction) OVERRIDE;
     virtual ActionResult<CNEOBot> Update(CNEOBot *me, float interval) OVERRIDE;
@@ -19,6 +28,7 @@ public:
     virtual const char *GetName() const OVERRIDE { return "RetreatFromHazardArea"; }
 
 private:
+    HazardRetreatKind m_kind;
     CNavArea *m_safeArea;
     PathFollower m_path;
 

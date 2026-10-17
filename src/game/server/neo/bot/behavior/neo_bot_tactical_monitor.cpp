@@ -372,22 +372,26 @@ ActionResult< CNEOBot >	CNEOBotTacticalMonitor::Update( CNEOBot *me, float inter
 				}
 			}
 		}
+	}
 
-		// Don't want to interfere with human squad leader's control just to ignore hazards
-		// Might be annoying if bots ignored following or waypoints (e.g. smoke sightlines avoidance)
-		if ( !me->m_hCommandingPlayer.Get() && m_hazardCheckTimer.IsElapsed() )
+	// Don't want to interfere with human squad leader's control just to ignore hazards
+	// Might be annoying if bots ignored following or waypoints (e.g. smoke sightlines avoidance)
+	if ( !me->m_hCommandingPlayer.Get() && m_hazardCheckTimer.IsElapsed() )
+	{
+		m_hazardCheckTimer.Start( 0.5f );
+		CNavArea *myArea = me->GetLastKnownArea();
+
+		// a bot in a hurry for its objective accepts smoke,
+		// but still leaves a deadly hazard such as a frag grenade's blast area
+		const HazardRetreatKind kind = bInAHurry ? RETREAT_FROM_DEADLY_HAZARD : RETREAT_FROM_ANY_HAZARD;
+		if ( myArea && CNEOBotRetreatFromHazardArea::IsHazardToLeave( me, myArea, kind ) )
 		{
-			m_hazardCheckTimer.Start( 0.5f );
-			CNavArea *myArea = me->GetLastKnownArea();
-			if ( myArea )
-			{
-				if ( CNEOBotPathReservations()->IsAreaHazardous( myArea->GetID(), me ) )
-				{
-					return SuspendFor( new CNEOBotRetreatFromHazardArea( ), "Avoiding hazard area" );
-				}
-			}
+			return SuspendFor( new CNEOBotRetreatFromHazardArea( kind ), "Avoiding hazard area" );
 		}
+	}
 
+	if ( !bInAHurry )
+	{
 		ActionResult< CNEOBot > scavengeResult = ScavengeForPrimaryWeapon( me );
 		if ( scavengeResult.IsRequestingChange() )
 		{

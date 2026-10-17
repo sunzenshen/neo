@@ -445,46 +445,58 @@ void CNEOBotPathReservationSystem::AddSmokeHazard(int navAreaID, float expireTim
 }
 
 //-------------------------------------------------------------------------------------------------
-float CNEOBotPathReservationSystem::GetAreaHazardousTime(int navAreaID, const CNEOBot *me) const
+const HazardInfo *CNEOBotPathReservationSystem::FindHazard(int navAreaID, const CNEOBot *me) const
 {
     if (!neo_bot_path_reservation_avoid_penalty_enable.GetBool())
     {
-        return 0.0f;
+        return nullptr;
     }
 
 	if (!me)
 	{
-		return 0.0f;
+		return nullptr;
 	}
 
 	int teamID = me->GetTeamNumber();
 
 	if (teamID < 0 || teamID >= TEAM__TOTAL)
 	{
-		return 0.0f;
+		return nullptr;
 	}
 
 	int index = m_HazardAreas[teamID].Find(navAreaID);
-	if (m_HazardAreas[teamID].IsValidIndex(index))
+	if (!m_HazardAreas[teamID].IsValidIndex(index))
 	{
-		const HazardInfo &h = m_HazardAreas[teamID][index];
+		return nullptr;
+	}
 
-		auto hazardTimeLeft = h.hazardExpireTime - gpGlobals->curtime;
-		if (hazardTimeLeft > 0)
+	return &m_HazardAreas[teamID][index];
+}
+
+//-------------------------------------------------------------------------------------------------
+float CNEOBotPathReservationSystem::GetAreaHazardousTime(int navAreaID, const CNEOBot *me) const
+{
+	const HazardInfo *h = FindHazard(navAreaID, me);
+	if (!h)
+	{
+		return 0.0f;
+	}
+
+	auto hazardTimeLeft = h->hazardExpireTime - gpGlobals->curtime;
+	if (hazardTimeLeft > 0)
+	{
+		// All bots avoid explosive hazards
+		return hazardTimeLeft;
+	}
+
+	// Support class can see through smoke
+	if (me->GetClass() != NEO_CLASS_SUPPORT)
+	{
+		auto smokeTimeLeft = h->smokeExpireTime - gpGlobals->curtime;
+		if (smokeTimeLeft > 0)
 		{
-	        // All bots avoid explosive hazards
-			return hazardTimeLeft;
+			return smokeTimeLeft;
 		}
-
-        // Support class can see through smoke
-        if (me->GetClass() != NEO_CLASS_SUPPORT)
-        {
-            auto smokeTimeLeft = h.smokeExpireTime - gpGlobals->curtime;
-            if (smokeTimeLeft > 0)
-            {
-                return smokeTimeLeft;
-            }
-        }
 	}
 
 	return 0.0f;
@@ -494,4 +506,12 @@ float CNEOBotPathReservationSystem::GetAreaHazardousTime(int navAreaID, const CN
 bool CNEOBotPathReservationSystem::IsAreaHazardous(int navAreaID, const CNEOBot *me) const
 {
    return GetAreaHazardousTime(navAreaID, me) > 0;
+}
+
+//-------------------------------------------------------------------------------------------------
+// A deadly hazard is any hazard but smoke, such as a frag grenade's blast area
+bool CNEOBotPathReservationSystem::IsAreaDeadlyHazard(int navAreaID, const CNEOBot *me) const
+{
+	const HazardInfo *h = FindHazard(navAreaID, me);
+	return h && h->hazardExpireTime > gpGlobals->curtime;
 }
