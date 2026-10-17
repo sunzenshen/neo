@@ -303,24 +303,25 @@ bool AreaPenalty_t::IsStuckProne() const
 // Functor to propagate deadly hazard to PVS-adjacent areas
 struct CNEOFunctorPropagatePVSDeadlyHazard
 {
-	CNEOFunctorPropagatePVSDeadlyHazard(float expireTime, int teamID)
-		: m_expireTime(expireTime), m_teamID(teamID)
+	CNEOFunctorPropagatePVSDeadlyHazard(float expireTime, int teamID, DeadlyHazardKind kind)
+		: m_expireTime(expireTime), m_teamID(teamID), m_kind(kind)
 	{
 	}
 
 	bool operator()(CNavArea *area)
 	{
-		CNEOBotPathReservations()->AddDeadlyHazard(area->GetID(), m_expireTime, m_teamID);
+		CNEOBotPathReservations()->AddDeadlyHazard(area->GetID(), m_expireTime, m_teamID, false, m_kind);
 		return true;
 	}
 
 	float m_expireTime;
 	int m_teamID;
+	DeadlyHazardKind m_kind;
 };
 
 //-------------------------------------------------------------------------------------------------
 // Marks an area temporarily for bots to avoid or escape from
-void CNEOBotPathReservationSystem::AddDeadlyHazard(int navAreaID, float expireTime, int teamID, bool propagatePVS)
+void CNEOBotPathReservationSystem::AddDeadlyHazard(int navAreaID, float expireTime, int teamID, bool propagatePVS, DeadlyHazardKind kind)
 {
     if ( !neo_bot_path_reservation_avoid_penalty_enable.GetBool() )
     {
@@ -340,6 +341,7 @@ void CNEOBotPathReservationSystem::AddDeadlyHazard(int navAreaID, float expireTi
 		blank.hazardExpireTime = expireTime;
 		blank.smokeExpireTime = 0.0f;
 		blank.smokePropagateTime = 0.0f;
+		blank.fragExpireTime = 0.0f;
 		index = m_HazardAreas[teamID].Insert(navAreaID, blank);
 	}
     else
@@ -350,12 +352,17 @@ void CNEOBotPathReservationSystem::AddDeadlyHazard(int navAreaID, float expireTi
 	    existing.hazardExpireTime = expireTime;
     }
 
+	if ( kind == DEADLY_HAZARD_FRAG )
+	{
+		m_HazardAreas[teamID][index].fragExpireTime = expireTime;
+	}
+
     if ( propagatePVS )
     {
         CNavArea *area = TheNavMesh->GetNavAreaByID(navAreaID);
         if (area)
         {
-            CNEOFunctorPropagatePVSDeadlyHazard propagate(expireTime, teamID);
+            CNEOFunctorPropagatePVSDeadlyHazard propagate(expireTime, teamID, kind);
             // CompletelyVisible: fewer areas to iterate through and definitely exposed
             // vs PotentiallyVisible: for narrow corridors, some areas would count even if only a sliver was exposed
             area->ForAllCompletelyVisibleAreas(propagate);
@@ -366,7 +373,7 @@ void CNEOBotPathReservationSystem::AddDeadlyHazard(int navAreaID, float expireTi
 //-------------------------------------------------------------------------------------------------
 void CNEOBotPathReservationSystem::AddFragHazard(int navAreaID, float expireTime, int teamID)
 {
-    AddDeadlyHazard(navAreaID, expireTime, teamID, true);
+    AddDeadlyHazard(navAreaID, expireTime, teamID, true, DEADLY_HAZARD_FRAG);
     // true (propagatePVS) - propagate hazard to all adjacent PVS areas
     // shorthand for labeling entire trajectory and potential stray angles as hazardous
     // also intended for grenade thrower to duck behind cover from perspective of target
@@ -414,6 +421,7 @@ void CNEOBotPathReservationSystem::AddSmokeHazard(int navAreaID, float expireTim
 		blank.hazardExpireTime = 0.0f;
 		blank.smokeExpireTime = expireTime;
 		blank.smokePropagateTime = 0.0f;
+		blank.fragExpireTime = 0.0f;
 		index = m_HazardAreas[teamID].Insert(navAreaID, blank);
 	}
     else
@@ -509,9 +517,8 @@ bool CNEOBotPathReservationSystem::IsAreaHazardous(int navAreaID, const CNEOBot 
 }
 
 //-------------------------------------------------------------------------------------------------
-// A deadly hazard is any hazard but smoke, such as a frag grenade's blast area
-bool CNEOBotPathReservationSystem::IsAreaDeadlyHazard(int navAreaID, const CNEOBot *me) const
+bool CNEOBotPathReservationSystem::IsAreaFragHazard(int navAreaID, const CNEOBot *me) const
 {
 	const HazardInfo *h = FindHazard(navAreaID, me);
-	return h && h->hazardExpireTime > gpGlobals->curtime;
+	return h && h->fragExpireTime > gpGlobals->curtime;
 }

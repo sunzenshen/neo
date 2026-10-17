@@ -381,9 +381,9 @@ ActionResult< CNEOBot >	CNEOBotTacticalMonitor::Update( CNEOBot *me, float inter
 		m_hazardCheckTimer.Start( 0.5f );
 		CNavArea *myArea = me->GetLastKnownArea();
 
-		// a bot in a hurry for its objective accepts smoke,
-		// but still leaves a deadly hazard such as a frag grenade's blast area
-		const HazardRetreatKind kind = bInAHurry ? RETREAT_FROM_DEADLY_HAZARD : RETREAT_FROM_ANY_HAZARD;
+		// a bot in a hurry for its objective accepts smoke and other hazards,
+		// but still leaves a frag grenade's blast area
+		const HazardRetreatKind kind = bInAHurry ? RETREAT_FROM_FRAG_HAZARD : RETREAT_FROM_ANY_HAZARD;
 		if ( myArea && CNEOBotRetreatFromHazardArea::IsHazardToLeave( me, myArea, kind ) )
 		{
 			return SuspendFor( new CNEOBotRetreatFromHazardArea( kind ), "Avoiding hazard area" );

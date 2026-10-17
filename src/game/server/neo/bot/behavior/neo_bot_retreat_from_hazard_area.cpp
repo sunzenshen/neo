@@ -64,9 +64,9 @@ CNEOBotRetreatFromHazardArea::CNEOBotRetreatFromHazardArea(HazardRetreatKind kin
 
 bool CNEOBotRetreatFromHazardArea::IsHazardToLeave(const CNEOBot *me, const CNavArea *area, HazardRetreatKind kind)
 {
-    if (kind == RETREAT_FROM_DEADLY_HAZARD)
+    if (kind == RETREAT_FROM_FRAG_HAZARD)
     {
-        return CNEOBotPathReservations()->IsAreaDeadlyHazard(area->GetID(), me);
+        return CNEOBotPathReservations()->IsAreaFragHazard(area->GetID(), me);
     }
 
     return CNEOBotPathReservations()->IsAreaHazardous(area->GetID(), me);

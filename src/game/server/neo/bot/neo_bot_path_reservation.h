@@ -35,11 +35,19 @@ struct AreaPenalty_t
     bool IsStuckProne() const;
 };
 
+// a frag grenade's hazard is kept apart, since bots in a hurry still leave it
+enum DeadlyHazardKind
+{
+	DEADLY_HAZARD_OTHER,
+	DEADLY_HAZARD_FRAG,
+};
+
 struct HazardInfo
 {
 	float smokeExpireTime;      // when the smoke hazard risk expires
 	float hazardExpireTime;     // when a general deadly hazard risk expires
 	float smokePropagateTime;   // expiry this area has already propagated to its visible set
+	float fragExpireTime;       // when a frag grenade's hazard expires, a subset of hazardExpireTime
 };
 
 struct BotReservedAreas_t
@@ -86,12 +94,12 @@ public:
     void IncrementAreaDeathPenalty(unsigned int navAreaID, float penaltyAmount);
     AreaPenalty_t GetAreaPenalty(unsigned int navAreaID) const;
 
-    void AddDeadlyHazard(int navAreaID, float expireTime, int teamID, bool propagatePVS = false);
+    void AddDeadlyHazard(int navAreaID, float expireTime, int teamID, bool propagatePVS = false, DeadlyHazardKind kind = DEADLY_HAZARD_OTHER);
     void AddFragHazard(int navAreaID, float expireTime, int teamID);
     void AddSmokeHazard(int navAreaID, float expireTime, int teamID, bool propagatePVS = true);
     float GetAreaHazardousTime(int navAreaID, const CNEOBot *me) const;
     bool IsAreaHazardous(int navAreaID, const CNEOBot *me) const;
-    bool IsAreaDeadlyHazard(int navAreaID, const CNEOBot *me) const;
+    bool IsAreaFragHazard(int navAreaID, const CNEOBot *me) const;
 
 private:
     int CountLiveClaims(const AreaReservation_t &res, const CNEOBot *excluding) const;

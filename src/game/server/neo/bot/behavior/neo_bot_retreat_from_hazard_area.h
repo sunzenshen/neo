@@ -5,11 +5,11 @@
 #include "neo/bot/neo_bot.h"
 #include "neo/bot/neo_bot_path_compute.h"
 
-// which hazards a retreat leaves: a bot in a hurry for its objective accepts smoke
+// which hazards a retreat leaves: a bot in a hurry for its objective leaves only a frag grenade's
 enum HazardRetreatKind
 {
     RETREAT_FROM_ANY_HAZARD,
-    RETREAT_FROM_DEADLY_HAZARD,
+    RETREAT_FROM_FRAG_HAZARD,
 };
 
 class CNEOBotRetreatFromHazardArea : public Action<CNEOBot>
