@@ -30,6 +30,10 @@ ConVar neo_bot_path_penalty_exposure_inverse_base_battle_rifle("neo_bot_path_pen
 ConVar neo_bot_path_penalty_exposure_inverse_base_scoped("neo_bot_path_penalty_exposure_inverse_base_scoped", "1000.0", FCVAR_CHEAT,
 	"Base penalty for calculating inverse traversal penalty for scoped weapons", true, 1.0f, false, 0.0f);
 
+// A bot in a hurry crosses a hazard it may pass at this many times the area's cost,
+// so it still takes a detour of up to that length
+static constexpr float NEO_BOT_PATH_HURRY_HAZARD_MULTIPLIER = 20.0f;
+
 ConVar neo_bot_path_visibility_exposure_enable("neo_bot_path_visibility_exposure_enable", "1", FCVAR_NONE,
 	"Enable visibility-exposure pathing penalties", true, 0, true, 1);
 
@@ -43,6 +47,7 @@ CNEOBotPathCost::CNEOBotPathCost(CNEOBot* me, RouteType routeType)
 	m_maxDropHeight = me->GetLocomotionInterface()->GetDeathDropHeight();
 	m_bIgnoreReservations = !neo_bot_path_reservation_enable.GetBool();
 	m_bIgnoreHazards = (me->m_hCommandingPlayer.Get() != nullptr);
+	m_bInAHurry = ( me->GetIntentionInterface()->ShouldHurry( me ) == ANSWER_YES );
 	m_bIgnoreVisibilityExposure = !neo_bot_path_visibility_exposure_enable.GetBool();
 }
 
@@ -64,14 +69,22 @@ float CNEOBotPathCost::operator()(CNavArea* baseArea, CNavArea* fromArea, const 
 		return -1.0f;
 	}
 
+	bool bHurryThroughHazard = false;
 	if ( !m_bIgnoreHazards && CNEOBotPathReservations()->IsAreaHazardous(area->GetID(), m_me) )
 	{
 		if ( m_routeType == DEFAULT_ROUTE )
 		{
-			// attempt to route around hazards
-			// if blocked, assumes includeGoalIfPathFails=true
-			// to partially path up to boundary of hazard area
-			return -1.0f;
+			if ( m_bInAHurry && CNEOBotPathReservations()->IsAreaHurryPassable(area->GetID(), m_me) )
+			{
+				bHurryThroughHazard = true;
+			}
+			else
+			{
+				// attempt to route around hazards
+				// if blocked, assumes includeGoalIfPathFails=true
+				// to partially path up to boundary of hazard area
+				return -1.0f;
+			}
 		}
 	}
 
@@ -229,6 +242,11 @@ float CNEOBotPathCost::operator()(CNavArea* baseArea, CNavArea* fromArea, const 
 	if (area->HasAttributes(NAV_MESH_AVOID) || (ladder && fromArea->HasAttributes(NAV_MESH_AVOID)))
 	{
 		cost *= neo_bot_path_penalty_avoid_multiplier.GetFloat();
+	}
+
+	if ( bHurryThroughHazard )
+	{
+		cost *= NEO_BOT_PATH_HURRY_HAZARD_MULTIPLIER;
 	}
 	// ------------------------------------------------------------------------------------------------
 

@@ -92,6 +92,7 @@ public:
     void AddSmokeHazard(int navAreaID, float expireTime, int teamID, bool propagatePVS = true);
     void AddNpcTurretHazard(int navAreaID, float expireTime, int teamID, bool propagatePVS = true);
     bool IsAreaNpcTurretHazard(int navAreaID, const CNEOBot *me) const;
+    bool IsAreaHurryPassable(int navAreaID, const CNEOBot *me) const;
     float GetAreaHazardousTime(int navAreaID, const CNEOBot *me) const;
     bool IsAreaHazardous(int navAreaID, const CNEOBot *me) const;
 
