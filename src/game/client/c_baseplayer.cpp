@@ -2543,7 +2543,17 @@ bool C_BasePlayer::ShouldPredict( void )
 {
 #if !defined( NO_ENTITY_PREDICTION )
 	// Do this before calling into baseclass so prediction data block gets allocated
+#ifdef NEO
+	// Only predict the local player while their movement is client-controlled.
+	// In chase / in-eye / fixed observer modes,
+	// predicting the observer locally creates prediction errors while watching another player.
+	// Keep prediction for the roaming camera, which is moved by local input.
+	if ( IsLocalPlayer() &&
+		 ( ( !IsObserver() && m_lifeState < LIFE_DYING ) ||
+		   GetObserverMode() == OBS_MODE_ROAMING ) )
+#else
 	if ( IsLocalPlayer() )
+#endif
 	{
 		return true;
 	}

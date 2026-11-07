@@ -2716,7 +2716,19 @@ void C_BaseEntity::CheckInitPredictable( const char *context )
 		return;
 
 	if ( !ShouldPredict() )
+#ifdef NEO
+	{
+		// Stop existing prediction state if entity should no longer be predicted.
+		// e.g. local player becomes observer/spectator
+		if ( GetPredictable() )
+		{
+			ShutdownPredictable();
+		}
 		return;
+	}
+#else
+		return;
+#endif
 
 	if ( IsIntermediateDataAllocated() )
 		return;
