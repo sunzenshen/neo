@@ -21,16 +21,26 @@ WeaponData
 	// and when each sound piece's first transient plays ("at"), in seconds from the sequence start
 	"ReloadPhases"
 	{
+		"ChamberedRound"	"1"
 		"reload"
 		{
 			"drop" { "credit" "0.700" "sound" "weapon_zr68.reload_drop" "at" "0.146" }
 			"seat" { "credit" "1.333" "sound" "weapon_zr68.reload_seat" "at" "1.294"  "sound2" "weapon_zr68.reload_slap" "at2" "1.729" }
 			"bolt" { "credit" "2.267" "sound" "weapon_zr68.reload_bolt" "at" "2.029" }
 		}
+		"reload_partial"
+		{
+			"drop" { "credit" "0.700" "sound" "weapon_zr68.reload_drop" "at" "0.146" }
+			"seat" { "credit" "1.333" "sound" "weapon_zr68.reload_seat" "at" "1.294"  "sound2" "weapon_zr68.reload_slap" "at2" "1.729" }
+		}
 		"reload_from_drop_dry"
 		{
 			"seat" { "credit" "1.233" "sound" "weapon_zr68.reload_seat" "at" "1.194"  "sound2" "weapon_zr68.reload_slap" "at2" "1.629" }
 			"bolt" { "credit" "2.167" "sound" "weapon_zr68.reload_bolt" "at" "1.929" }
+		}
+		"reload_from_drop_partial"
+		{
+			"seat" { "credit" "1.233" "sound" "weapon_zr68.reload_seat" "at" "1.194"  "sound2" "weapon_zr68.reload_slap" "at2" "1.629" }
 		}
 		"reload_from_seat_dry"
 		{
@@ -40,6 +50,10 @@ WeaponData
 		{
 			"seat" { "credit" "1.433" "sound" "weapon_zr68.reload_seat" "at" "1.394"  "sound2" "weapon_zr68.reload_slap" "at2" "1.829" }
 			"bolt" { "credit" "2.367" "sound" "weapon_zr68.reload_bolt" "at" "2.129" }
+		}
+		"draw_resume_drop_partial"
+		{
+			"seat" { "credit" "1.433" "sound" "weapon_zr68.reload_seat" "at" "1.394"  "sound2" "weapon_zr68.reload_slap" "at2" "1.829" }
 		}
 	}
 	
