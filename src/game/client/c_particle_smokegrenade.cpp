@@ -22,10 +22,19 @@
 
 #ifdef NEO
 #include "c_neo_player.h"
+#include "neo/c_neo_volsmoke.h"
 #endif
 
 // memdbgon must be the last include file in a .cpp file!!!
 #include "tier0/memdbgon.h"
+
+#ifdef NEO
+// Prototype: replace the legacy billboard smoke with a raymarched voxel volume.
+static ConVar neo_volsmoke_hook_grenade( "neo_volsmoke_hook_grenade", "0", FCVAR_CHEAT,
+	"1 = smoke grenades spawn a volumetric smoke (C_NeoVolSmoke) instead of the legacy particle smoke." );
+static ConVar neo_volsmoke_hook_extent( "neo_volsmoke_hook_extent", "192", FCVAR_CHEAT,
+	"AABB half-size used for grenade-spawned volumetric smoke." );
+#endif
 
 // ------------------------------------------------------------------------- //
 // Definitions
@@ -344,6 +353,15 @@ void C_ParticleSmokeGrenade::OnDataChanged( DataUpdateType_t updateType )
 
 	if(updateType == DATA_UPDATE_CREATED )
 	{
+#ifdef NEO
+		if ( neo_volsmoke_hook_grenade.GetBool() )
+		{
+			// Lifetime: the server's fade-end if it has one, else the volsmoke default.
+			const float lifetime = ( m_FadeEndTime > 0.0f ) ? m_FadeEndTime : 25.0f;
+			C_NeoVolSmoke::Create( GetAbsOrigin(), neo_volsmoke_hook_extent.GetFloat(), lifetime );
+			return; // skip the legacy particle system entirely
+		}
+#endif
 		Start(ParticleMgr(), NULL);
 	}
 }
