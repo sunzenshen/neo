@@ -5,3 +5,10 @@
 neo_nightvision_ps30.fxc
 neo_motionvision_ps30.fxc
 neo_thermalvision_ps30.fxc
+neo_volsmoke_ps30.fxc
+
+////////////////////////
+// NEO VERTEX SHADERS //
+////////////////////////
+
+neo_volsmoke_vs30.fxc
