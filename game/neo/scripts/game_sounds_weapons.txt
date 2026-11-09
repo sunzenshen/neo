@@ -1235,6 +1235,24 @@
 
 // PZ252 reload in per-step pieces (sv_neo_reload_experimental).
 
+"weapon_pz.reload_unload"
+{
+	"channel"		"CHAN_ITEM"
+	"soundlevel"		"SNDLVL_NORM"
+	"volume"		"1.0"
+	"pitch"			"PITCH_NORM"
+	"wave"			")weapons/pz/pz_reload_unload.wav"
+}
+
+"weapon_pz.reload_unload_part2"
+{
+	"channel"		"CHAN_ITEM"
+	"soundlevel"		"SNDLVL_NORM"
+	"volume"		"1.0"
+	"pitch"			"PITCH_NORM"
+	"wave"			")weapons/pz/pz_reload_unload_part2.wav"
+}
+
 "weapon_pz.reload_load"
 {
 	"channel"		"CHAN_ITEM"
