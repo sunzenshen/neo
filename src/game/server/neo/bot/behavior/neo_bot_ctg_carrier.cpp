@@ -375,6 +375,9 @@ ActionResult< CNEOBot >	CNEOBotCtgCarrier::Update( CNEOBot *me, float interval )
 //---------------------------------------------------------------------------------------------
 void CNEOBotCtgCarrier::UpdateFollowPath( CNEOBot *me, const CUtlVector<CNEO_Player*> &teammates )
 {
+	// NEO TODO: research for the CTG team-play A/B (neo_bot_research_callouts)
+	NEOBotGhostCallout::CCalledExposureScope exposureScope( me );
+
 	// Strategy:
 	// 1. Identify valid goal (Capture Point).
 	// 2. Scan all teammates:

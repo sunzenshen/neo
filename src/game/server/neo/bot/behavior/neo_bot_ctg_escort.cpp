@@ -3,6 +3,7 @@
 #include "bot/neo_bot.h"
 #include "bot/behavior/neo_bot_ctg_escort.h"
 #include "bot/behavior/neo_bot_attack.h"
+#include "bot/neo_bot_ghost_callout.h"
 #include "bot/neo_bot_path_compute.h"
 #include "neo_gamerules.h"
 #include "weapons/weapon_ghost.h"
@@ -37,6 +38,9 @@ ActionResult< CNEOBot >	CNEOBotCtgEscort::OnStart( CNEOBot *me, Action< CNEOBot 
 //---------------------------------------------------------------------------------------------
 ActionResult< CNEOBot >	CNEOBotCtgEscort::Update( CNEOBot *me, float interval )
 {
+	// NEO TODO: research for the CTG team-play A/B (neo_bot_research_callouts)
+	NEOBotGhostCallout::CCalledExposureScope exposureScope( me );
+
 	if ( !NEORules()->GhostExists() )
 	{
 		return Done( "Ghost does not exist" );

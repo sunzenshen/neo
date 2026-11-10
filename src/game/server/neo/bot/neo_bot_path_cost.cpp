@@ -5,6 +5,7 @@
 #include "neo_bot_locomotion.h"
 #include "nav_mesh.h"
 #include "neo_bot_path_reservation.h"
+#include "neo_bot_ghost_callout.h"
 
 ConVar neo_bot_path_penalty_avoid_multiplier("neo_bot_path_penalty_avoid_multiplier", "20.0", FCVAR_CHEAT,
 	"Penalty multiplier for navmesh avoid areas in pathfinding", true, 1.0f, false, 0.0f);
@@ -357,6 +358,9 @@ float CNEOBotPathCost::operator()(CNavArea* baseArea, CNavArea* fromArea, const 
 
 
 	float cost = (dist * preference);
+
+	// NEO TODO: research for the CTG team-play A/B (neo_bot_research_callouts)
+	cost += dist * NEOBotGhostCallout::GetCalledExposureCost(m_me, area);
 
 	// ------------------------------------------------------------------------------------------------
 	// New path reservation related cost adjustments
