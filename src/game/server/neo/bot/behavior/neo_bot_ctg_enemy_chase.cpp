@@ -5,6 +5,8 @@
 #include "bot/behavior/neo_bot_ctg_enemy.h"
 #include "bot/behavior/neo_bot_attack.h"
 #include "bot/neo_bot_path_compute.h"
+#include "bot/neo_bot_trade.h"
+#include "bot/behavior/neo_bot_trade_response.h"
 #include "neo_gamerules.h"
 
 // Seconds between a chasing bot re-checking whether it is ahead of the carrier,
@@ -40,6 +42,14 @@ ActionResult< CNEOBot > CNEOBotCtgEnemyChase::Update( CNEOBot *me, float interva
 	if ( threat && !threat->IsObsolete() && me->GetIntentionInterface()->ShouldAttack( me, threat ) )
 	{
 		return SuspendFor( new CNEOBotAttack( pGhostCarrier->GetAbsOrigin() ), "Attacking ghoster team" );
+	}
+
+	if ( NEOBotTrade::RespondsDuringEnemyCarry() )
+	{
+		if ( CNEOBotTradeResponse *pTrade = NEOBotTrade::TakeResponse( me ) )
+		{
+			return SuspendFor( pTrade, "Trading a teammate's death" );
+		}
 	}
 
 	CNEOBotPathUpdateChase( me, m_chasePath, pGhostCarrier, m_routeType );

@@ -9,7 +9,7 @@
 #include "tier0/memdbgon.h"
 
 ConVar neo_bot_research_trade( "neo_bot_research_trade", "0", FCVAR_CHEAT,
-	"Research: when a teammate is killed, the nearest teammates that noticed it go after the killer for a few seconds." );
+	"Research: when a teammate is killed, the nearest teammates that noticed it go after the killer for a few seconds. 2 = also while the enemy carries the ghost." );
 ConVar neo_bot_research_trade_log( "neo_bot_research_trade_log", "0", FCVAR_CHEAT,
 	"Research: print NEO_TRADE lines for trade responses." );
 
@@ -65,6 +65,12 @@ namespace NEOBotTrade
 
 		const int iTeamArm = neo_bot_research_team_arm.GetInt();
 		return iTeamArm == 0 || iTeamArm == iTeam;
+	}
+
+	// The killer is often the carrier's escort, so a trade can also be the way to the carrier
+	bool RespondsDuringEnemyCarry()
+	{
+		return neo_bot_research_trade.GetInt() >= 2;
 	}
 
 	bool IsLogging()

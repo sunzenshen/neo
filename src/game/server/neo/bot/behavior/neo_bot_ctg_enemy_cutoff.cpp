@@ -5,6 +5,8 @@
 #include "bot/behavior/neo_bot_ctg_enemy.h"
 #include "bot/behavior/neo_bot_ctg_enemy_chase.h"
 #include "bot/neo_bot_path_compute.h"
+#include "bot/neo_bot_trade.h"
+#include "bot/behavior/neo_bot_trade_response.h"
 #include "neo_gamerules.h"
 
 // Seconds between a bot heading for a cut-off re-picking it,
@@ -60,6 +62,14 @@ ActionResult< CNEOBot > CNEOBotCtgEnemyCutOff::Update( CNEOBot *me, float interv
 	if ( !pGhostCarrier )
 	{
 		return Done( "No enemy ghost carrier" );
+	}
+
+	if ( NEOBotTrade::RespondsDuringEnemyCarry() )
+	{
+		if ( CNEOBotTradeResponse *pTrade = NEOBotTrade::TakeResponse( me ) )
+		{
+			return SuspendFor( pTrade, "Trading a teammate's death" );
+		}
 	}
 
 	if ( m_replanTimer.IsElapsed() )

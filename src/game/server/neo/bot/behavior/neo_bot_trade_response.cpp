@@ -118,7 +118,7 @@ ActionResult< CNEOBot >	CNEOBotTradeResponse::Update( CNEOBot *me, float interva
 	}
 
 	// The ghost changes hands: the CTG behaviors below take over
-	if ( me->IsCarryingGhost() || CNEOBotCtgEnemy::EnemyGhostCarrier( me ) )
+	if ( me->IsCarryingGhost() || ( !NEOBotTrade::RespondsDuringEnemyCarry() && CNEOBotCtgEnemy::EnemyGhostCarrier( me ) ) )
 	{
 		m_pszEndReason = "ghost";
 		return Done( "Ghost carrier changed" );

@@ -23,4 +23,7 @@ namespace NEOBotTrade
 	void OnResponseEnd( const CNEOBot *me );
 
 	bool IsLogging();
+
+	// Research arm 2: also answer while chasing or cutting off the enemy ghost carrier
+	bool RespondsDuringEnemyCarry();
 }
