@@ -1527,6 +1527,7 @@ set(UNITY_SOURCE_NEO_BOT
     neo/bot/neo_bot_profile.cpp
     neo/bot/neo_bot_squad.cpp
     neo/bot/neo_bot_suppressive_fire.cpp
+    neo/bot/neo_bot_team_talk.cpp
     neo/bot/neo_bot_vision.cpp
     neo/bot/behavior/neo_bot_approach_object.cpp
     neo/bot/behavior/neo_bot_attack.cpp
@@ -1596,6 +1597,7 @@ target_sources_grouped(
     neo/bot/neo_bot_profile.h
     neo/bot/neo_bot_squad.h
     neo/bot/neo_bot_suppressive_fire.h
+    neo/bot/neo_bot_team_talk.h
     neo/bot/neo_bot_vision.h
     neo/bot/behavior/neo_bot_approach_object.h
     neo/bot/behavior/neo_bot_attack.h

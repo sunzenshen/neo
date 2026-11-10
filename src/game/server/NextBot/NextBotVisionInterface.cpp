@@ -289,6 +289,41 @@ void IVision::UpdateKnownEntityPosition( CBaseEntity *entity )
 	// We had no idea this entity existed until now
 	AddKnownEntity( entity );
 }
+
+
+//------------------------------------------------------------------------------------------
+// A teammate's report of where the entity was at a past time, as a voice callout gives.
+// Kept only when it is newer than what we already know. Returns true if it changed our knowledge.
+bool IVision::ReportKnownEntityPosition( CBaseEntity *entity, const Vector &pos, CNavArea *area, float when )
+{
+	if ( !entity || entity->IsWorld() )
+	{
+		return false;
+	}
+
+	FOR_EACH_VEC( m_knownEntityVector, it )
+	{
+		CKnownEntity &known = m_knownEntityVector[ it ];
+		if ( !known.Is( entity ) )
+		{
+			continue;
+		}
+
+		const float whenLastKnown = gpGlobals->curtime - known.GetTimeSinceLastKnown();
+		if ( known.IsVisibleInFOVNow() || whenLastKnown >= when )
+		{
+			return false;
+		}
+
+		known.SetReportedPosition( pos, area, when );
+		return true;
+	}
+
+	CKnownEntity known( entity );
+	known.SetReportedPosition( pos, area, when );
+	m_knownEntityVector.AddToTail( known );
+	return true;
+}
 #endif // NEO
 
 

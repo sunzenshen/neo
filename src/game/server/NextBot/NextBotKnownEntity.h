@@ -48,6 +48,17 @@ public:
 		}
 	}
 
+#ifdef NEO
+	// a teammate reported where this entity was at the given time
+	void SetReportedPosition( const Vector &pos, CNavArea *area, float when )
+	{
+		m_lastKnownPostion = pos;
+		m_lastKnownArea = area;
+		m_whenLastKnown = when;
+		m_hasLastKnownPositionBeenSeen = false;
+	}
+#endif // NEO
+
 	virtual CBaseEntity *GetEntity( void ) const
 	{
 		return m_who;

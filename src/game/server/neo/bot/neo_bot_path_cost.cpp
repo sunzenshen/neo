@@ -5,6 +5,7 @@
 #include "neo_bot_locomotion.h"
 #include "nav_mesh.h"
 #include "neo_bot_path_reservation.h"
+#include "neo_bot_team_talk.h"
 
 ConVar neo_bot_path_penalty_avoid_multiplier("neo_bot_path_penalty_avoid_multiplier", "20.0", FCVAR_CHEAT,
 	"Penalty multiplier for navmesh avoid areas in pathfinding", true, 1.0f, false, 0.0f);
@@ -363,6 +364,7 @@ float CNEOBotPathCost::operator()(CNavArea* baseArea, CNavArea* fromArea, const 
 	if ( !m_bIgnoreReservations && (m_routeType != FASTEST_ROUTE) )
 	{
 		cost += CNEOBotPathReservations()->GetAreaPenalty(area->GetID()).GetPathCost();
+		cost += NEOBotTeamTalk::GetFreshDeathPathCost( m_me, area );
 
 		if ( NEORules()->IsTeamplay() )
 		{

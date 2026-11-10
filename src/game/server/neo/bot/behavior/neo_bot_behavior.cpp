@@ -9,6 +9,7 @@
 #include "bot/neo_bot_manager.h"
 #include "bot/neo_bot_path_compute.h"
 #include "bot/neo_bot_path_cost.h"
+#include "bot/neo_bot_team_talk.h"
 #include "bot/behavior/neo_bot_behavior.h"
 #include "bot/behavior/neo_bot_dead.h"
 #include "NextBot/NavMeshEntities/func_nav_prerequisite.h"
@@ -210,6 +211,8 @@ EventDesiredResult<CNEOBot> CNEOBotMainAction::OnKilled( CNEOBot *me, const CTak
 			CNEOBotPathReservations()->IncrementAreaDeathPenalty( nearestArea->GetID(), neo_bot_path_reservation_killed_penalty.GetFloat() );
 		}
 	}
+
+	NEOBotTeamTalk::OnBotKilled( me, info );
 
 	return TryChangeTo( new CNEOBotDead, RESULT_CRITICAL, "I died!" );
 }

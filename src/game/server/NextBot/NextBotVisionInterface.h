@@ -66,6 +66,7 @@ public:
 
 #ifdef NEO
 	virtual void UpdateKnownEntityPosition( CBaseEntity *entity );
+	bool ReportKnownEntityPosition( CBaseEntity *entity, const Vector &pos, CNavArea *area, float when );
 #endif // NEO
 
 	//-- physical vision interface follows ------------------------------------------------------
