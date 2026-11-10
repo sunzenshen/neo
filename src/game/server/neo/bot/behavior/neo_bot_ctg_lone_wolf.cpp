@@ -17,6 +17,9 @@
 //---------------------------------------------------------------------------------------------
 ActionResult< CNEOBot >	CNEOBotCtgLoneWolf::OnStart( CNEOBot *me, Action< CNEOBot > *priorAction )
 {
+	m_heard = NEOBotHearing::HeardNoise();
+	m_bHeardEnemy = false;
+
 	return Continue();
 }
 
@@ -46,6 +49,8 @@ ActionResult< CNEOBot >	CNEOBotCtgLoneWolf::Update( CNEOBot *me, float interval 
 	{
 		return ChangeTo( new CNEOBotAttack(), "Engaging enemy" );
 	}
+
+	UpdateHearing( me );
 
 	if ( !threat && me->GetActiveWeapon() )
 	{
@@ -218,6 +223,46 @@ EventDesiredResult< CNEOBot > CNEOBotCtgLoneWolf::OnMoveToFailure( CNEOBot *me, 
 	m_path.Invalidate();
 	return TryContinue();
 }
+
+//---------------------------------------------------------------------------------------------
+// An enemy ghost carrier already shows on the HUD, so hearing only matters while the enemy does not hold the ghost
+bool CNEOBotCtgLoneWolf::UpdateHearing( CNEOBot *me )
+{
+	m_bHeardEnemy = false;
+
+	if ( !NEOBotHearing::IsEnabledFor( me ) )
+	{
+		return false;
+	}
+
+	CWeaponGhost *pGhostWeapon = NEORules()->m_pGhost;
+	const CBaseCombatCharacter *pGhostOwner = pGhostWeapon ? pGhostWeapon->GetOwner() : nullptr;
+	if ( pGhostOwner && !me->InSameTeam( pGhostOwner ) )
+	{
+		return false;
+	}
+
+	NEOBotHearing::HeardNoise heard;
+	if ( !NEOBotHearing::HearLoudestEnemy( me, heard ) )
+	{
+		return false;
+	}
+
+	const bool bNewNoise = ( heard.flWhen != m_heard.flWhen || heard.iSource != m_heard.iSource );
+	m_heard = heard;
+	m_bHeardEnemy = true;
+
+	me->GetBodyInterface()->AimHeadTowards( heard.vecGuess + Vector( 0, 0, HumanEyeHeight ), IBody::IMPORTANT, HEARD_LOOK_TIME, nullptr, "Turning toward a heard enemy" );
+
+	if ( bNewNoise && NEOBotHearing::IsDebugEnabled() )
+	{
+		Msg( "NEO_LW_HEARD %s %.0f bot=%d src=%d act=%s\n", NEOBotHearing::GetNoiseName( heard.eType ), heard.flDist,
+			me->entindex(), heard.iSource, GetName() );
+	}
+
+	return true;
+}
+
 
 //---------------------------------------------------------------------------------------------
 Vector CNEOBotCtgLoneWolf::GetNearestEnemyCapPoint( CNEOBot *me ) const

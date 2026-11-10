@@ -75,6 +75,11 @@ ActionResult< CNEOBot >	CNEOBotCtgLoneWolfAmbush::Update( CNEOBot *me, float int
 		return Continue();
 	}
 
+	if ( UpdateHearing( me ) && !me->IsCarryingGhost() && Is1v1( me ) )
+	{
+		return ChangeTo( new CNEOBotCtgLoneWolfSeek(), "Hunting the enemy I heard" );
+	}
+
 	if ( m_1v1TransitionTimer.IsElapsed() && Is1v1( me ) )
 	{
 		return ChangeTo( new CNEOBotCtgLoneWolfSeek(), "Searching for other lone wolf" );
@@ -204,6 +209,12 @@ ActionResult< CNEOBot > CNEOBotCtgLoneWolfAmbush::UpdateLookAround( CNEOBot *me 
 		}
 
 		m_lookAroundTimer.Start( 0.2f );
+
+		if ( m_bHeardEnemy )
+		{
+			// UpdateHearing faces the noise, so hold the ambush toward it rather than scan
+			return Continue();
+		}
 
 		// Logic inspired from neo_bot.cpp UpdateLookingAroundForIncomingPlayers
 		// Update our view to watch where enemies might be coming from

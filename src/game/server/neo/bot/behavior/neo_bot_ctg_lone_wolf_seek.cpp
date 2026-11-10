@@ -110,6 +110,9 @@ ActionResult< CNEOBot >	CNEOBotCtgLoneWolfSeek::OnStart( CNEOBot *me, Action< CN
 	m_scavengeTimer.Invalidate();
 	m_pIgnoredWeapons->Reset();
 
+	m_flHeardWaypointWhen = -1.0f;
+	m_heardRetargetTimer.Invalidate();
+
 	return Continue();
 }
 
@@ -205,6 +208,12 @@ ActionResult< CNEOBot >	CNEOBotCtgLoneWolfSeek::Update( CNEOBot *me, float inter
 	}
 
 	CNavArea *ghostArea = m_pCachedGhostArea;
+
+	// A detpack hunt keeps to its hazard-free search areas
+	if ( UpdateHearing( me ) && !me->IsCarryingGhost() && !m_bDetpackHunt )
+	{
+		ConsiderHeardWaypoint( me );
+	}
 
 	const bool bReachedSearchTarget = ( m_vecSearchWaypoint != CNEO_Player::VECTOR_INVALID_WAYPOINT && me->GetAbsOrigin().DistToSqr( m_vecSearchWaypoint ) < Square( SEARCH_WAYPOINT_REACHED_DIST ) );
 
@@ -354,6 +363,29 @@ EventDesiredResult< CNEOBot > CNEOBotCtgLoneWolfSeek::OnMoveToFailure( CNEOBot *
 {
 	m_path.Invalidate();
 	return TryContinue();
+}
+
+//---------------------------------------------------------------------------------------------
+// Search where a new noise came from, unless the current search already goes about there
+void CNEOBotCtgLoneWolfSeek::ConsiderHeardWaypoint( CNEOBot *me )
+{
+	if ( m_heard.flWhen <= m_flHeardWaypointWhen || !m_heardRetargetTimer.IsElapsed() )
+	{
+		return;
+	}
+
+	if ( m_vecSearchWaypoint != CNEO_Player::VECTOR_INVALID_WAYPOINT
+		&& m_heard.vecGuess.DistToSqr( m_vecSearchWaypoint ) < Square( HEARD_RETARGET_DIST ) )
+	{
+		return;
+	}
+
+	m_flHeardWaypointWhen = m_heard.flWhen;
+	m_heardRetargetTimer.Start( HEARD_RETARGET_INTERVAL );
+
+	m_iExplorationTargetId = -1;
+	m_vecSearchWaypoint = m_heard.vecGuess;
+	m_path.Invalidate();
 }
 
 //---------------------------------------------------------------------------------------------

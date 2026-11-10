@@ -18,6 +18,10 @@
 #include "engine/IEngineSound.h"
 #include "SoundEmitterSystem/isoundemittersystembase.h"
 
+#if defined( NEO ) && defined( GAME_DLL )
+#include "bot/neo_bot_hearing.h"
+#endif
+
 extern ConVar sv_footsteps;
 
 const char *g_ppszPlayerSoundPrefixNames[PLAYER_SOUNDS_MAX] =
@@ -152,6 +156,10 @@ void CHL2MP_Player::PlayStepSound( Vector &vecOrigin, surfacedata_t *psurface, f
 	ep.m_pOrigin = &vecOrigin;
 
 	EmitSound( filter, entindex(), ep );
+
+#if defined( NEO ) && defined( GAME_DLL )
+	NEOBotHearing::OnFootstep( this, vecOrigin, fvol );
+#endif
 }
 
 

@@ -29,6 +29,10 @@ private:
 	static constexpr float ENEMY_LAST_KNOWN_DIST = 100.0f;
 	static constexpr float PATH_RECOMPUTE_DIST = 64.0f;
 	static constexpr float SEARCH_WAYPOINT_REACHED_DIST = 200.0f;
+	// Research hearing: a new noise moves the search only this far away from the current waypoint,
+	static constexpr float HEARD_RETARGET_DIST = 256.0f;
+	// and no more often than this
+	static constexpr float HEARD_RETARGET_INTERVAL = 1.0f;
 
 	Vector m_vecLastGhostPos{ CNEO_Player::VECTOR_INVALID_WAYPOINT };
 	CNavArea *m_pCachedGhostArea{ nullptr };
@@ -40,6 +44,11 @@ private:
 	std::unique_ptr<CNEOIgnoredWeaponsCache> m_pIgnoredWeapons;
 	CountdownTimer m_scavengeTimer;
 	bool m_bDetpackHunt;
+
+	float m_flHeardWaypointWhen{ -1.0f };
+	CountdownTimer m_heardRetargetTimer;
+
+	void ConsiderHeardWaypoint( CNEOBot *me );
 
 	void MarkVisibleAreasAsExplored( CNEOBot *me, CNavArea *currentArea, CNavArea *ghostArea = nullptr );
 };

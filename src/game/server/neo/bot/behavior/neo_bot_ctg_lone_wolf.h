@@ -1,6 +1,7 @@
 #pragma once
 
 #include "bot/neo_bot.h"
+#include "bot/neo_bot_hearing.h"
 
 //--------------------------------------------------------------------------------------------------------
 class CNEOBotCtgLoneWolf : public Action< CNEOBot >
@@ -25,5 +26,13 @@ protected:
 
 	Vector GetNearestEnemyCapPoint( CNEOBot *me ) const;
 
+	// Research: turn toward the loudest enemy noise; true while one is heard
+	bool UpdateHearing( CNEOBot *me );
+
+	static constexpr float HEARD_LOOK_TIME = 1.0f;
+
 	PathFollower m_path;
+
+	NEOBotHearing::HeardNoise m_heard;
+	bool m_bHeardEnemy{ false };
 };
