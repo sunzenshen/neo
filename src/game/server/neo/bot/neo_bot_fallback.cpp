@@ -14,7 +14,7 @@ ConVar neo_bot_research_fallback( "neo_bot_research_fallback", "0", FCVAR_CHEAT,
 	"1 = retreat to cover, 2 = fall back toward the nearest teammates, "
 	"3 = also a lone bot holds fire on an enemy that has not noticed it and falls back toward teammates." );
 ConVar neo_bot_research_fallback_log( "neo_bot_research_fallback_log", "0", FCVAR_CHEAT,
-	"Research: print NEO_FALLBACK lines when a bot falls back." );
+	"Research: print NEO_FALLBACK lines when a bot falls back; 2 also prints skipped fall backs." );
 
 extern ConVar neo_bot_research_team_arm;
 
@@ -40,6 +40,12 @@ namespace NEOBotFallback
 	// Enemies farther than this belong to another fight
 	static constexpr float FIGHT_RANGE = 2000.0f;
 
+	// An enemy carrier this close is the bot's fight whatever the numbers
+	static constexpr float CARRIER_GUARD_RANGE = 1200.0f;
+
+	// Skipped fall backs are logged at most this often per bot
+	static constexpr float SKIP_LOG_INTERVAL = 2.0f;
+
 	// The ghost carrier's escorts keep their place; a fall back would strip the carrier
 	static constexpr float ESCORT_RANGE = 800.0f;
 
@@ -60,6 +66,7 @@ namespace NEOBotFallback
 		float flCooldownUntil;
 		float flNextEval;
 		float flHoldFireUntil;
+		float flNextSkipLog;
 	};
 
 	static FallBackState_t s_state[ MAX_PLAYERS + 1 ];
@@ -123,14 +130,15 @@ namespace NEOBotFallback
 				return true;
 			}
 
-			if ( IsThreatGhostCarrier( &known ) )
-			{
-				m_bKnowsGhostCarrier = true;
-			}
-
 			if ( !known.IsVisibleRecently() )
 			{
 				return true;
+			}
+
+			if ( IsThreatGhostCarrier( &known )
+				&& ( known.GetLastKnownPosition() - m_me->GetAbsOrigin() ).IsLengthLessThan( CARRIER_GUARD_RANGE ) )
+			{
+				m_bKnowsGhostCarrier = true;
 			}
 
 			if ( ( known.GetLastKnownPosition() - m_me->GetAbsOrigin() ).IsLengthLessThan( FIGHT_RANGE ) )
@@ -326,18 +334,8 @@ namespace NEOBotFallback
 		CCountRecentEnemies count( me );
 		me->GetVisionInterface()->ForEachKnownEntity( count );
 
-		// the enemy carrier must be stopped whatever the numbers
-		if ( count.m_bKnowsGhostCarrier )
-		{
-			return NULL;
-		}
-
 		MateScan_t mates;
 		ScanMates( me, &mates );
-		if ( mates.bEscorting )
-		{
-			return NULL;
-		}
 
 		const int nEnemies = count.m_nEnemies;
 		ETrigger trigger;
@@ -352,6 +350,30 @@ namespace NEOBotFallback
 		}
 		else
 		{
+			return NULL;
+		}
+
+		// the enemy carrier must be stopped whatever the numbers, and the own carrier keeps its escorts
+		const char *pszSkip = NULL;
+		if ( count.m_bKnowsGhostCarrier )
+		{
+			pszSkip = "enemy_carrier";
+		}
+		else if ( mates.bEscorting )
+		{
+			pszSkip = "escort";
+		}
+
+		if ( pszSkip )
+		{
+			if ( neo_bot_research_fallback_log.GetInt() >= 2 && !IsTimeLeft( pState->flNextSkipLog, SKIP_LOG_INTERVAL ) )
+			{
+				pState->flNextSkipLog = gpGlobals->curtime + SKIP_LOG_INTERVAL;
+				Msg( "NEO_FALLBACK_SKIP t=%.2f team=%d bot=%d trigger=%s skip=%s enemies=%d mates=%d\n",
+					gpGlobals->curtime, me->GetTeamNumber(), me->entindex(), s_pszTriggerNames[ trigger ], pszSkip,
+					nEnemies, mates.nNear );
+			}
+
 			return NULL;
 		}
 
