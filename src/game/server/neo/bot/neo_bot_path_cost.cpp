@@ -51,6 +51,16 @@ CNEOBotPathCost::CNEOBotPathCost(CNEOBot* me, RouteType routeType)
 	m_vecDuckHullMins = VEC_DUCK_HULL_MIN_SCALED( me );
 	m_vecDuckHullMaxs = VEC_DUCK_HULL_MAX_SCALED( me );
 	m_bDucksAboveCrouchHeight = ( m_vecDuckHullMaxs.z - m_vecDuckHullMins.z ) > HumanCrouchHeight;
+
+	m_iRouteSeed = me->entindex();
+	m_iFreeClaimGroup = CNEOBotPathReservationSystem::NO_BUDDY_GROUP;
+	const int buddyGroup = CNEOBotPathReservations()->GetBuddyGroup( me );
+	if ( buddyGroup != CNEOBotPathReservationSystem::NO_BUDDY_GROUP )
+	{
+		// buddies plan the same lane, so a team spreads over fewer, stronger lanes
+		m_iRouteSeed = buddyGroup;
+		m_iFreeClaimGroup = NeoBotBuddyClaimsFree() ? buddyGroup : CNEOBotPathReservationSystem::NO_BUDDY_GROUP;
+	}
 }
 
 //-------------------------------------------------------------------------------------------------
@@ -339,7 +349,7 @@ float CNEOBotPathCost::operator()(CNavArea* baseArea, CNavArea* fromArea, const 
 		// this term causes the same bot to choose different routes over time,
 		// but keep the same route for a period in case of repaths
 		int timeMod = (int)(gpGlobals->curtime / 10.0f) + 1;
-		preference = 1.0f + 50.0f * (1.0f + FastCos((float)(m_me->GetEntity()->entindex() * area->GetID() * timeMod)));
+		preference = 1.0f + 50.0f * (1.0f + FastCos((float)(m_iRouteSeed * area->GetID() * timeMod)));
 	}
 
 	if (m_routeType == SAFEST_ROUTE)
@@ -366,7 +376,7 @@ float CNEOBotPathCost::operator()(CNavArea* baseArea, CNavArea* fromArea, const 
 
 		if ( NEORules()->IsTeamplay() )
 		{
-			const int nFriendly = CNEOBotPathReservations()->GetPredictedFriendlyPathCount(area->GetID(), m_me->GetTeamNumber(), m_me);
+			const int nFriendly = CNEOBotPathReservations()->GetPredictedFriendlyPathCount(area->GetID(), m_me->GetTeamNumber(), m_me, m_iFreeClaimGroup);
 			if (nFriendly > 0)
 			{
 				// Discourage team clustering: (n^2 * penalty)

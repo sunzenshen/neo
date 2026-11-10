@@ -97,7 +97,11 @@ public:
     void Clear();
     void ClearRound();
 
-    int GetPredictedFriendlyPathCount( int areaID, int teamID, const CNEOBot *excluding = NULL ) const;
+    int GetPredictedFriendlyPathCount( int areaID, int teamID, const CNEOBot *excluding = NULL, int excludingGroup = NO_BUDDY_GROUP ) const;
+
+    // Research: teammates split into small groups that plan one shared route each
+    static constexpr int NO_BUDDY_GROUP = 0;
+    int GetBuddyGroup( const CNEOBot *bot );
 
     void IncrementAreaAvoidPenalty(unsigned int navAreaID, float penaltyAmount);
     void IncrementAreaDeathPenalty(unsigned int navAreaID, float penaltyAmount);
@@ -130,7 +134,11 @@ private:
     CUtlVector<DeployedDetpack_t> m_DeployedDetpacks;
     CNavArea *m_pCachedGhostArea = nullptr;
 
-    int CountLiveClaims(const AreaReservation_t &res, const CNEOBot *excluding) const;
+    int CountLiveClaims(const AreaReservation_t &res, const CNEOBot *excluding, int excludingGroup) const;
+
+    void BuildBuddyGroups( int teamID, int groupSize );
+    int m_iBuddyGroup[MAX_PLAYERS + 1] = {};             // keyed by entindex; a group is named by its lowest member entindex
+    bool m_bBuddyGroupsBuilt[TEAM__TOTAL] = {};
 
     CUtlMap<int, AreaReservation_t> m_Reservations[TEAM__TOTAL];   // keyed by nav area ID
     CUtlMap<int, BotReservedAreas_t> m_BotReservedAreas;           // keyed by bot entindex
@@ -149,3 +157,6 @@ extern ConVar neo_bot_path_reservation_duration;
 extern ConVar neo_bot_path_reservation_distance;
 extern ConVar neo_bot_path_reservation_onstuck_penalty;
 extern ConVar neo_bot_path_reservation_killed_penalty;
+
+int NeoBotBuddyGroupSize( const CNEOBot *bot );
+bool NeoBotBuddyClaimsFree();

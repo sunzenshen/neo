@@ -37,4 +37,6 @@ private:
 	Vector m_vecDuckHullMins;
 	Vector m_vecDuckHullMaxs;
 	bool m_bDucksAboveCrouchHeight;	// Support and Juggernaut, whose ducked hull is taller than a crouch area promises
+	int m_iRouteSeed;		// picks this bot's random route preference; shared by a research buddy group
+	int m_iFreeClaimGroup;	// research buddy group whose path reservations cost this bot nothing
 };

@@ -33,6 +33,41 @@ ConVar neo_bot_path_reservation_killed_penalty("neo_bot_path_reservation_killed_
 ConVar neo_bot_path_reservation_onstuck_penalty("neo_bot_path_reservation_onstuck_penalty", "1000", FCVAR_NONE,
     "Path selection penalty added to a nav area each time a bot gets stuck moving through that area.", true, 0, false, 0);
 
+ConVar neo_bot_research_buddy("neo_bot_research_buddy", "0", FCVAR_CHEAT,
+    "Research: split each bot team into groups that share one route: 0 off, 1 pairs, 2 trios.", true, 0, true, 2);
+
+ConVar neo_bot_research_buddy_claims("neo_bot_research_buddy_claims", "1", FCVAR_CHEAT,
+    "Research: with neo_bot_research_buddy, a group member's path reservations cost the others nothing (0 shares the route preference only).", true, 0, true, 1);
+
+ConVar neo_bot_research_buddy_log("neo_bot_research_buddy_log", "0", FCVAR_CHEAT,
+    "Research: print a NEO_BUDDY line for each bot when its team's groups are formed.", true, 0, true, 1);
+
+extern ConVar neo_bot_research_team_arm;
+
+//-------------------------------------------------------------------------------------------------
+// Research: how many bots of this bot's team plan one shared route, 1 when the research is off for its team
+int NeoBotBuddyGroupSize( const CNEOBot *bot )
+{
+    const int buddyMode = neo_bot_research_buddy.GetInt();
+    if ( buddyMode <= 0 || !NEORules()->GetTeamPlayEnabled() )
+    {
+        return 1;
+    }
+
+    const int teamArm = neo_bot_research_team_arm.GetInt();
+    if ( teamArm != 0 && bot->GetTeamNumber() != teamArm )
+    {
+        return 1;
+    }
+
+    return buddyMode + 1;
+}
+
+bool NeoBotBuddyClaimsFree()
+{
+    return neo_bot_research_buddy_claims.GetBool();
+}
+
 
 
 CNEOBotPathReservationSystem* CNEOBotPathReservations()
@@ -50,7 +85,7 @@ static bool ClaimIsLive(const AreaClaim_t &claim)
 
 //-------------------------------------------------------------------------------------------------
 // Count live reservations on a nav area.
-int CNEOBotPathReservationSystem::CountLiveClaims(const AreaReservation_t &res, const CNEOBot *excluding) const
+int CNEOBotPathReservationSystem::CountLiveClaims(const AreaReservation_t &res, const CNEOBot *excluding, int excludingGroup) const
 {
     int count = 0;
     for (int i = 0; i < res.claims.Count(); ++i)
@@ -61,6 +96,10 @@ int CNEOBotPathReservationSystem::CountLiveClaims(const AreaReservation_t &res, 
             continue;
         }
         if (excluding != NULL && claim.hOwner.Get() == excluding)
+        {
+            continue;
+        }
+        if ( excludingGroup != NO_BUDDY_GROUP && m_iBuddyGroup[claim.hOwner->entindex()] == excludingGroup )
         {
             continue;
         }
@@ -207,8 +246,10 @@ void CNEOBotPathReservationSystem::ClearRound()
         m_Reservations[team].RemoveAll();
         m_HazardAreas[team].RemoveAll();
         m_DetpackMarks[team].RemoveAll();
+        m_bBuddyGroupsBuilt[team] = false;
     }
     m_BotReservedAreas.RemoveAll();
+    V_memset( m_iBuddyGroup, 0, sizeof( m_iBuddyGroup ) );
 	m_pCachedGhostArea = nullptr;
 	m_flNextDetpackScan = 0.0f;
 
@@ -220,7 +261,7 @@ void CNEOBotPathReservationSystem::ClearRound()
 }
 
 //-------------------------------------------------------------------------------------------------
-int CNEOBotPathReservationSystem::GetPredictedFriendlyPathCount( int areaID, int teamID, const CNEOBot *excluding ) const
+int CNEOBotPathReservationSystem::GetPredictedFriendlyPathCount( int areaID, int teamID, const CNEOBot *excluding, int excludingGroup ) const
 {
     if (!NEORules()->GetTeamPlayEnabled())
     {
@@ -239,7 +280,134 @@ int CNEOBotPathReservationSystem::GetPredictedFriendlyPathCount( int areaID, int
         return 0;
     }
 
-    return CountLiveClaims(m_Reservations[teamID][reservationIndex], excluding);
+    return CountLiveClaims(m_Reservations[teamID][reservationIndex], excluding, excludingGroup);
+}
+
+//-------------------------------------------------------------------------------------------------
+// Research: the group this bot plans its route with, formed for its team at the first ask of a round.
+// A group is kept for the whole round: a member who dies is not replaced, so the others' routes do not jump.
+int CNEOBotPathReservationSystem::GetBuddyGroup( const CNEOBot *bot )
+{
+    const int groupSize = NeoBotBuddyGroupSize( bot );
+    const int team = bot->GetTeamNumber();
+    if ( groupSize <= 1 || team < 0 || team >= TEAM__TOTAL )
+    {
+        return NO_BUDDY_GROUP;
+    }
+
+    if ( !m_bBuddyGroupsBuilt[team] )
+    {
+        BuildBuddyGroups( team, groupSize );
+    }
+
+    return m_iBuddyGroup[bot->entindex()];
+}
+
+//-------------------------------------------------------------------------------------------------
+// Greedy grouping by where teammates stand when the round's first route is planned (their spawns),
+// which any player can see. Each group starts at the lowest unassigned entindex and takes its nearest
+// unassigned teammates; bots left over join the group of their nearest teammate.
+void CNEOBotPathReservationSystem::BuildBuddyGroups( int teamID, int groupSize )
+{
+    m_bBuddyGroupsBuilt[teamID] = true;
+
+    CUtlVector<CNEOBot *> mates;
+    for ( int i = 1; i <= gpGlobals->maxClients; ++i )
+    {
+        CNEOBot *pMate = ToNEOBot( UTIL_PlayerByIndex( i ) );
+        if ( !pMate || !pMate->IsAlive() || pMate->GetTeamNumber() != teamID )
+        {
+            continue;
+        }
+
+        m_iBuddyGroup[i] = NO_BUDDY_GROUP;
+        mates.AddToTail( pMate );
+    }
+
+    // a team too small for one full group still forms one, so two bots in trio mode pair up
+    const int nGroups = ( mates.Count() < 2 ) ? 0 : Max( 1, mates.Count() / groupSize );
+    for ( int g = 0; g < nGroups; ++g )
+    {
+        CNEOBot *pSeed = nullptr;
+        for ( CNEOBot *pMate : mates )
+        {
+            if ( m_iBuddyGroup[pMate->entindex()] == NO_BUDDY_GROUP )
+            {
+                pSeed = pMate;
+                break;
+            }
+        }
+
+        const int group = pSeed->entindex();
+        m_iBuddyGroup[group] = group;
+        for ( int n = 1; n < groupSize; ++n )
+        {
+            CNEOBot *pNearest = nullptr;
+            float flNearestSq = FLT_MAX;
+            for ( CNEOBot *pMate : mates )
+            {
+                const float flDistSq = pMate->GetAbsOrigin().DistToSqr( pSeed->GetAbsOrigin() );
+                if ( m_iBuddyGroup[pMate->entindex()] == NO_BUDDY_GROUP && flDistSq < flNearestSq )
+                {
+                    pNearest = pMate;
+                    flNearestSq = flDistSq;
+                }
+            }
+
+            if ( !pNearest )
+            {
+                break;
+            }
+
+            m_iBuddyGroup[pNearest->entindex()] = group;
+        }
+    }
+
+    // Leftovers are found after every group is formed, so they join groups and never each other
+    CUtlVector<CNEOBot *> leftovers;
+    for ( CNEOBot *pMate : mates )
+    {
+        if ( m_iBuddyGroup[pMate->entindex()] == NO_BUDDY_GROUP )
+        {
+            leftovers.AddToTail( pMate );
+        }
+    }
+
+    for ( CNEOBot *pLeft : leftovers )
+    {
+        float flNearestSq = FLT_MAX;
+        for ( CNEOBot *pMate : mates )
+        {
+            const int mateGroup = m_iBuddyGroup[pMate->entindex()];
+            const float flDistSq = pMate->GetAbsOrigin().DistToSqr( pLeft->GetAbsOrigin() );
+            if ( pMate != pLeft && mateGroup != NO_BUDDY_GROUP && leftovers.Find( pMate ) == -1 && flDistSq < flNearestSq )
+            {
+                m_iBuddyGroup[pLeft->entindex()] = mateGroup;
+                flNearestSq = flDistSq;
+            }
+        }
+    }
+
+    if ( !neo_bot_research_buddy_log.GetBool() )
+    {
+        return;
+    }
+
+    for ( CNEOBot *pMate : mates )
+    {
+        const int group = m_iBuddyGroup[pMate->entindex()];
+        char szBuddies[128] = "-";
+        int len = 0;
+        for ( CNEOBot *pOther : mates )
+        {
+            if ( pOther != pMate && group != NO_BUDDY_GROUP && m_iBuddyGroup[pOther->entindex()] == group )
+            {
+                len += V_snprintf( szBuddies + len, sizeof( szBuddies ) - len, len ? ",%d" : "%d", pOther->entindex() );
+            }
+        }
+
+        Msg( "NEO_BUDDY t=%.2f team=%d bot=%d group=%d buddy=%s\n", gpGlobals->curtime, teamID, pMate->entindex(), group, szBuddies );
+    }
 }
 
 //-------------------------------------------------------------------------------------------------
