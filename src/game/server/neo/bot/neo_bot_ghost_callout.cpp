@@ -13,9 +13,9 @@
 ConVar sv_neo_bot_ghost_callout_interval( "sv_neo_bot_ghost_callout_interval", "1.5", FCVAR_CHEAT,
 	"How often bots learn the enemy at the center of their ghost carrier's aim.", true, 0.1f, false, 0 );
 
-// NEO TODO: research gates for the CTG team-play A/B, the PR carries the chosen behavior without them
-ConVar neo_bot_research_team_arm( "neo_bot_research_team_arm", "0", FCVAR_CHEAT,
-	"Research: 0 = the research cvars apply to every bot, 2 or 3 = only to that team's bots", true, 0, true, 3 );
+// NEO TODO: research gates for the CTG team-play A/B, the PR carries the chosen behavior without them.
+// The team arm cvar comes from the measuring build's harness patch (0062 recipes/team-arm.patch)
+extern ConVar neo_bot_research_team_arm;
 
 ConVar neo_bot_research_callouts( "neo_bot_research_callouts", "0", FCVAR_CHEAT,
 	"Research: 0 = off, 1 = a bot ghost carrier reports the nearest enemies its ghost shows and its team's CTG routes "
