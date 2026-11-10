@@ -490,6 +490,12 @@ ActionResult< CNEOBot >	CNEOBotTacticalMonitor::Update( CNEOBot *me, float inter
 		const CKnownEntity *threat = me->GetVisionInterface()->GetPrimaryKnownThreat( true );
 		QueryResultType shouldRetreat = IsThreatGhostCarrier( threat ) ? ANSWER_NO : me->GetIntentionInterface()->ShouldRetreat( me );
 
+		// outnumbered, the bot backs off toward support rather than to the nearest cover
+		if ( Action< CNEOBot > *pFallBack = NEOBotFallback::StartFallBack( me ) )
+		{
+			return SuspendFor( pFallBack, "Falling back to support" );
+		}
+
 		if ( shouldRetreat == ANSWER_YES )
 		{
 			return SuspendFor( new CNEOBotRetreatToCover, "Backing off" );
@@ -508,11 +514,6 @@ ActionResult< CNEOBot >	CNEOBotTacticalMonitor::Update( CNEOBot *me, float inter
 					}
 				}
 			}
-		}
-
-		if ( Action< CNEOBot > *pFallBack = NEOBotFallback::StartFallBack( me ) )
-		{
-			return SuspendFor( pFallBack, "Falling back to support" );
 		}
 
 		// Don't want to interfere with human squad leader's control just to ignore hazards
