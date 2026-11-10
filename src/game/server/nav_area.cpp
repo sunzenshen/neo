@@ -271,6 +271,10 @@ CNavArea::CNavArea( void )
 
 #ifdef NEO
 	m_visibleAreaCount = 0;
+	for ( int i = 0; i < NAV_VISIBLE_SECTOR_COUNT; ++i )
+	{
+		m_visibleSectorTally[ i ] = 0.0f;
+	}
 #endif
 }
 
@@ -280,10 +284,37 @@ CNavArea::CNavArea( void )
 struct CountPotentiallyVisibleAreas
 {
 	int count;
-	CountPotentiallyVisibleAreas() : count(0) {}
+	Vector2D from;
+	float sectorTally[ NAV_VISIBLE_SECTOR_COUNT ];
+
+	explicit CountPotentiallyVisibleAreas( const Vector &vecFrom ) : count( 0 ), from( vecFrom.x, vecFrom.y )
+	{
+		for ( int i = 0; i < NAV_VISIBLE_SECTOR_COUNT; ++i )
+		{
+			sectorTally[ i ] = 0.0f;
+		}
+	}
+
 	bool operator()( CNavArea* area )
 	{
 		count++;
+
+		const float dx = area->GetCenter().x - from.x;
+		const float dy = area->GetCenter().y - from.y;
+
+		// An area stacked straight above or below has no compass direction, so it is shared out evenly
+		constexpr float flStackedRangeSqr = 1.0f;
+		if ( dx * dx + dy * dy < flStackedRangeSqr )
+		{
+			for ( int i = 0; i < NAV_VISIBLE_SECTOR_COUNT; ++i )
+			{
+				sectorTally[ i ] += 1.0f / NAV_VISIBLE_SECTOR_COUNT;
+			}
+
+			return true;
+		}
+
+		sectorTally[ NavVisibleSector( dx, dy ) ] += 1.0f;
 		return true;
 	}
 };
@@ -292,9 +323,13 @@ struct CountPotentiallyVisibleAreas
 //--------------------------------------------------------------------------------------------------------------
 void CNavArea::ComputePotentiallyVisibleAreaCount()
 {
-	CountPotentiallyVisibleAreas counter;
+	CountPotentiallyVisibleAreas counter( GetCenter() );
 	const_cast<CNavArea*>(this)->ForAllPotentiallyVisibleAreas( counter );
 	m_visibleAreaCount = counter.count;
+	for ( int i = 0; i < NAV_VISIBLE_SECTOR_COUNT; ++i )
+	{
+		m_visibleSectorTally[ i ] = counter.sectorTally[ i ];
+	}
 }
 #endif
 

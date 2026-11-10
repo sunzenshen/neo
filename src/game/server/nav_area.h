@@ -24,6 +24,23 @@ enum { MAX_NAV_TEAMS = 2 };
 
 #define DebuggerBreakOnNaN_StagingOnly( _val )
 
+#ifdef NEO
+// Compass sectors for direction-aware visibility, sector 0 centered on +x and counting toward +y
+enum { NAV_VISIBLE_SECTOR_COUNT = 8 };
+
+inline int NavVisibleSector( float dx, float dy )
+{
+	const float flSectorWidth = 360.0f / NAV_VISIBLE_SECTOR_COUNT;
+	float flDegrees = RAD2DEG( atan2f( dy, dx ) ) + flSectorWidth / 2.0f;
+	if ( flDegrees < 0.0f )
+	{
+		flDegrees += 360.0f;
+	}
+
+	return (int)( flDegrees / flSectorWidth ) % NAV_VISIBLE_SECTOR_COUNT;
+}
+#endif // NEO
+
 class CFuncElevator;
 class CFuncNavPrerequisite;
 class CFuncNavCost;
@@ -536,6 +553,9 @@ public:
 #ifdef NEO
 	int GetPotentiallyVisibleAreaCount() const { return m_visibleAreaCount; }
 	void ComputePotentiallyVisibleAreaCount();
+
+	// Potentially visible areas tallied by the compass sector they lie in, seen from this area's center
+	float GetVisibleSectorTally( int sector ) const { return m_visibleSectorTally[ sector ]; }
 #endif
 
 	virtual bool IsCompletelyVisible( const CNavArea *area ) const;			// return true if given area is completely visible from somewhere in this area (very fast)
@@ -682,6 +702,7 @@ private:
 	unsigned int m_debugid;
 #ifdef NEO
 	unsigned int m_visibleAreaCount;                            // cached number of visible areas from this navarea
+	float m_visibleSectorTally[ NAV_VISIBLE_SECTOR_COUNT ];     // m_visibleAreaCount split by direction
 #endif
 
 	Place m_place;												// place descriptor

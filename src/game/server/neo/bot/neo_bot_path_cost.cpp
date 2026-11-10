@@ -33,8 +33,22 @@ ConVar neo_bot_path_penalty_exposure_inverse_base_scoped("neo_bot_path_penalty_e
 ConVar neo_bot_path_visibility_exposure_enable("neo_bot_path_visibility_exposure_enable", "1", FCVAR_NONE,
 	"Enable visibility-exposure pathing penalties", true, 0, true, 1);
 
+ConVar neo_bot_research_exposure_dir( "neo_bot_research_exposure_dir", "0", FCVAR_CHEAT,
+	"Research: count an area's exposure only from the directions a bot entering it faces. "
+	"0 = every direction, 1 = all but the 90 degrees behind, 2 = the half ahead, 3 = the 90 degrees ahead", true, 0, true, 3 );
+
+ConVar neo_bot_research_team_arm( "neo_bot_research_team_arm", "0", FCVAR_CHEAT,
+	"Research: 0 = research behaviors apply to every bot, 2 or 3 = only to that team's bots", true, 0, true, 3 );
+
 ConVar neo_bot_path_penalty_hurry_hazard_multiplier("neo_bot_path_penalty_hurry_hazard_multiplier", "20.0", FCVAR_CHEAT,
 	"Cost multiplier for a hurrying bot crossing a hazard area that is not deadly, such as smoke, which it takes only when no shorter detour exists", true, 1.0f, false, 0.0f);
+
+// Research behaviors run for every bot, or only for the bots of the team under test
+static bool NeoResearchArmApplies( const CNEOBot *me )
+{
+	const int teamArm = neo_bot_research_team_arm.GetInt();
+	return teamArm == 0 || me->GetTeamNumber() == teamArm;
+}
 
 //-------------------------------------------------------------------------------------------------
 CNEOBotPathCost::CNEOBotPathCost(CNEOBot* me, RouteType routeType)
@@ -47,6 +61,7 @@ CNEOBotPathCost::CNEOBotPathCost(CNEOBot* me, RouteType routeType)
 	m_bIgnoreReservations = !neo_bot_path_reservation_enable.GetBool();
 	m_bIgnoreHazards = (me->m_hCommandingPlayer.Get() != nullptr);
 	m_bIgnoreVisibilityExposure = !neo_bot_path_visibility_exposure_enable.GetBool();
+	m_exposureDirMode = NeoResearchArmApplies( me ) ? neo_bot_research_exposure_dir.GetInt() : 0;
 	m_bInAHurry = ( me->GetIntentionInterface()->ShouldHurry( me ) == ANSWER_YES );
 	m_vecDuckHullMins = VEC_DUCK_HULL_MIN_SCALED( me );
 	m_vecDuckHullMaxs = VEC_DUCK_HULL_MAX_SCALED( me );
@@ -234,6 +249,109 @@ static bool NeoDuckLaneOpen( const CNavArea *from, const CNavArea *to, const Vec
 }
 
 //-------------------------------------------------------------------------------------------------
+// Direction-aware exposure: a bot walking into an area faces the way it travels,
+// so the areas behind it are not where it expects to be shot from
+
+enum NeoExposureDirMode
+{
+	NEO_EXPOSURE_DIR_OFF = 0,
+	NEO_EXPOSURE_DIR_NOT_BEHIND,
+	NEO_EXPOSURE_DIR_HALF_AHEAD,
+	NEO_EXPOSURE_DIR_CONE_AHEAD,
+
+	NEO_EXPOSURE_DIR_MODE_COUNT
+};
+
+// Weight of each compass sector by its offset from the sector ahead (offset 4 is straight behind);
+// a half weight takes the half of a sector that lies inside the counted span
+static constexpr float NEO_EXPOSURE_SECTOR_WEIGHTS[NEO_EXPOSURE_DIR_MODE_COUNT][NAV_VISIBLE_SECTOR_COUNT] =
+{
+	{ 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f },
+	{ 1.0f, 1.0f, 1.0f, 0.5f, 0.0f, 0.5f, 1.0f, 1.0f },
+	{ 1.0f, 1.0f, 0.5f, 0.0f, 0.0f, 0.0f, 0.5f, 1.0f },
+	{ 1.0f, 0.5f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.5f },
+};
+
+// The visible-area count seen from the counted span around one sector, scaled up by the share of the
+// compass that span covers, so averaged over every direction of travel it matches the plain count
+static float NeoSectorExposure( const CNavArea *area, int aheadSector, int mode )
+{
+	const float *weights = NEO_EXPOSURE_SECTOR_WEIGHTS[mode];
+	float tally = 0.0f;
+	float weightSum = 0.0f;
+	for ( int offset = 0; offset < NAV_VISIBLE_SECTOR_COUNT; ++offset )
+	{
+		const int sector = ( aheadSector + offset ) % NAV_VISIBLE_SECTOR_COUNT;
+		tally += weights[offset] * area->GetVisibleSectorTally( sector );
+		weightSum += weights[offset];
+	}
+
+	// at least one area, as the plain count is, so the inverse penalties stay bounded
+	return Max( 1.0f, tally * NAV_VISIBLE_SECTOR_COUNT / weightSum );
+}
+
+// The exposure of a step from fromArea into area; a step with no sideways travel, such as a straight
+// drop or a ladder climb, keeps the plain count
+static float NeoDirectionalExposure( const CNavArea *area, const CNavArea *fromArea, int mode )
+{
+	const float dx = area->GetCenter().x - fromArea->GetCenter().x;
+	const float dy = area->GetCenter().y - fromArea->GetCenter().y;
+	constexpr float flMinTravelSqr = 1.0f;
+	if ( mode == NEO_EXPOSURE_DIR_OFF || dx * dx + dy * dy < flMinTravelSqr )
+	{
+		return (float)area->GetPotentiallyVisibleAreaCount();
+	}
+
+	return NeoSectorExposure( area, NavVisibleSector( dx, dy ), mode );
+}
+
+// Prints the direction tallies of one nav area, to check them against the map
+CON_COMMAND_F( neo_bot_research_exposure_dump, "Research: print the visible-area tallies by direction of the nav area "
+	"with the given ID, or nearest the given x y z, or nearest the calling player", FCVAR_GAMEDLL | FCVAR_CHEAT )
+{
+	if ( !UTIL_IsCommandIssuedByServerAdmin() )
+	{
+		return;
+	}
+
+	const CNavArea *area = nullptr;
+	if ( args.ArgC() == 2 )
+	{
+		area = TheNavMesh->GetNavAreaByID( V_atoi( args[1] ) );
+	}
+	else if ( args.ArgC() == 4 )
+	{
+		const Vector pos( V_atof( args[1] ), V_atof( args[2] ), V_atof( args[3] ) );
+		area = TheNavMesh->GetNearestNavArea( pos );
+	}
+	else if ( CBasePlayer *player = UTIL_GetCommandClient() )
+	{
+		area = TheNavMesh->GetNearestNavArea( player->GetAbsOrigin() );
+	}
+
+	if ( !area )
+	{
+		Msg( "neo_bot_research_exposure_dump: no nav area found\n" );
+		return;
+	}
+
+	// sector 0 is +x, counting toward +y
+	static const char *const sectorNames[NAV_VISIBLE_SECTOR_COUNT] = { "+x", "+x+y", "+y", "-x+y", "-x", "-x-y", "-y", "+x-y" };
+
+	const Vector &center = area->GetCenter();
+	Msg( "EXPOSURE_DUMP area %u at (%.0f %.0f %.0f) visible %d\n", area->GetID(), center.x, center.y, center.z,
+		area->GetPotentiallyVisibleAreaCount() );
+	for ( int sector = 0; sector < NAV_VISIBLE_SECTOR_COUNT; ++sector )
+	{
+		Msg( "EXPOSURE_DUMP  %-5s tally %7.1f | walking %-5s: not_behind %7.1f half_ahead %7.1f cone_ahead %7.1f\n",
+			sectorNames[sector], area->GetVisibleSectorTally( sector ), sectorNames[sector],
+			NeoSectorExposure( area, sector, NEO_EXPOSURE_DIR_NOT_BEHIND ),
+			NeoSectorExposure( area, sector, NEO_EXPOSURE_DIR_HALF_AHEAD ),
+			NeoSectorExposure( area, sector, NEO_EXPOSURE_DIR_CONE_AHEAD ) );
+	}
+}
+
+//-------------------------------------------------------------------------------------------------
 float CNEOBotPathCost::operator()(CNavArea* baseArea, CNavArea* fromArea, const CNavLadder* ladder, const CFuncElevator* elevator, float length) const
 {
 	VPROF_BUDGET("CNEOBotPathCost::operator()", "NextBot");
@@ -394,9 +512,10 @@ float CNEOBotPathCost::operator()(CNavArea* baseArea, CNavArea* fromArea, const 
 			const int nWeaponBits = myWeapon->GetNeoWepBits();
 			if (nWeaponBits & NEO_WEP_FIREARM)
 			{
-				const int visibleAreaCount = area->GetPotentiallyVisibleAreaCount();
-				if (visibleAreaCount > 0)
+				if (area->GetPotentiallyVisibleAreaCount() > 0)
 				{
+					const float visibleAreaCount = NeoDirectionalExposure( area, fromArea, m_exposureDirMode );
+
 					constexpr int nShotgunBits = NEO_WEP_AA13 | NEO_WEP_SUPA7;
 					constexpr int nBattleRifleBits = NEO_WEP_M41 | NEO_WEP_M41_S;
 					constexpr int nPistolCaliberBits = NEO_WEP_MILSO | NEO_WEP_TACHI | NEO_WEP_KYLA

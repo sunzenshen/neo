@@ -36,5 +36,6 @@ private:
 	float m_maxDropHeight;
 	Vector m_vecDuckHullMins;
 	Vector m_vecDuckHullMaxs;
+	int m_exposureDirMode;	// research: which directions an area's exposure counts from, 0 = all
 	bool m_bDucksAboveCrouchHeight;	// Support and Juggernaut, whose ducked hull is taller than a crouch area promises
 };

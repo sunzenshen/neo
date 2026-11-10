@@ -1654,11 +1654,15 @@ NavErrorType CNavMesh::PostLoad( unsigned int version )
 	}
 
 #ifdef NEO
+	const double visibleCountStart = Plat_FloatTime();
 	FOR_EACH_VEC( TheNavAreas, vit )
 	{
 		CNavArea *area = TheNavAreas[ vit ];
 		area->ComputePotentiallyVisibleAreaCount();
 	}
+
+	DevMsg( "Nav visibility tallies: %d areas in %.1f ms\n", TheNavAreas.Count(),
+		( Plat_FloatTime() - visibleCountStart ) * 1000.0 );
 #endif
 
 	// allow hiding spots to compute information
