@@ -4,6 +4,7 @@
 #include "neo_player.h"
 #include "neo_smokelineofsightblocker.h"
 #include "bot/neo_bot.h"
+#include "bot/neo_bot_commit.h"
 #include "bot/behavior/neo_bot_grenade_dispatch.h"
 #include "bot/behavior/neo_bot_retreat_from_grenade.h"
 #include "bot/behavior/neo_bot_retreat_to_cover.h"
@@ -273,6 +274,10 @@ ActionResult< CNEOBot >	CNEOBotRetreatToCover::Update( CNEOBot *me, float interv
 	else if ( IsThreatGhostCarrier( threat ) )
 	{
 		return Done( "Stopping retreat because my threat is the ghost carrier" );
+	}
+	else if ( NEOBotCommit::HoldsGround( me, NEOBotCommit::RETREAT_IN_PROGRESS ) )
+	{
+		return Done( "Stopping retreat to hold my ground in this fight" );
 	}
 
 	if ( ShouldRetreat( me ) == ANSWER_NO )

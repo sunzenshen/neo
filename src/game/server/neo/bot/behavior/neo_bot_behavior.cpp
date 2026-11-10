@@ -16,6 +16,7 @@
 #include "bot/behavior/nav_entities/neo_bot_nav_ent_move_to.h"
 #include "bot/behavior/nav_entities/neo_bot_nav_ent_wait.h"
 #include "bot/behavior/neo_bot_tactical_monitor.h"
+#include "bot/neo_bot_commit.h"
 #include "weapons/weapon_balc.h"
 
 ConVar neo_bot_path_lookahead_range( "neo_bot_path_lookahead_range", "300" );
@@ -285,6 +286,8 @@ EventDesiredResult< CNEOBot > CNEOBotMainAction::OnOtherKilled( CNEOBot *me, CBa
 {
 	// make sure we forget about this guy
 	me->GetVisionInterface()->ForgetEntity( victim );
+
+	NEOBotCommit::OnOtherKilled( me, victim, info );
 
 	return TryContinue();
 }

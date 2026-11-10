@@ -6,6 +6,7 @@
 #include "bot/behavior/neo_bot_attack.h"
 #include "bot/behavior/neo_bot_grenade_dispatch.h"
 #include "bot/behavior/neo_bot_retreat_to_cover.h"
+#include "bot/neo_bot_commit.h"
 #include "bot/neo_bot_path_compute.h"
 
 #include "nav_mesh.h"
@@ -322,11 +323,12 @@ ActionResult< CNEOBot >	CNEOBotAttack::Update( CNEOBot *me, float interval )
 
 		if (!m_attackCoverArea
 			&& me->IsRanged( myWeapon )
-			&& me->IsRangeLessThan( threatLastKnownPos, sv_neo_bot_attack_too_close_retreat_ratio.GetFloat() * me->GetDesiredAttackRange() ) )
+			&& me->IsRangeLessThan( threatLastKnownPos, sv_neo_bot_attack_too_close_retreat_ratio.GetFloat() * me->GetDesiredAttackRange() )
+			&& !NEOBotCommit::HoldsGround( me, NEOBotCommit::RETREAT_TOO_CLOSE ) )
 		{
 			return SuspendFor( new CNEOBotRetreatToCover(), "Retreating from excessively close enemy" );
 		}
-		else if ( me->GetLastKnownArea() == m_goalArea )
+		else if ( me->GetLastKnownArea() == m_goalArea && !NEOBotCommit::HoldsGround( me, NEOBotCommit::RETREAT_AT_GOAL ) )
 		{
 			return ChangeTo( new CNEOBotRetreatToCover(), "Taking cover as enemy is still present at my goal" );
 		}

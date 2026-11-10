@@ -5,6 +5,7 @@
 #include "team_train_watcher.h"
 #include "neo_bot.h"
 #include "neo_bot_manager.h"
+#include "neo_bot_commit.h"
 #include "neo_bot_path_reservation.h"
 #include "neo_bot_vision.h"
 #include "trigger_area_capture.h"
@@ -1727,7 +1728,7 @@ void CNEOBot::EquipBestWeaponForThreat(const CKnownEntity* threat, const bool bN
 	else if ( secondaryWeapon
 		&& primaryWeapon->Clip1() <= 0
 		&& secondaryWeapon->Clip1() > 0
-		&& IsRangeLessThan(threat->GetLastKnownPosition(), 250.0f) )
+		&& ( IsRangeLessThan(threat->GetLastKnownPosition(), 250.0f) || NEOBotCommit::PrefersSecondaryWhenEmpty( this ) ) )
 	{
 		// passthrough
 	}

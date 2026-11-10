@@ -11,6 +11,7 @@
 
 #include "bot/behavior/neo_bot_detpack_trigger.h"
 #include "bot/behavior/neo_bot_tactical_monitor.h"
+#include "bot/neo_bot_commit.h"
 #include "bot/behavior/neo_bot_scenario_monitor.h"
 
 #include "bot/behavior/neo_bot_seek_and_destroy.h"
@@ -491,7 +492,10 @@ ActionResult< CNEOBot >	CNEOBotTacticalMonitor::Update( CNEOBot *me, float inter
 
 		if ( shouldRetreat == ANSWER_YES )
 		{
-			return SuspendFor( new CNEOBotRetreatToCover, "Backing off" );
+			if ( !NEOBotCommit::HoldsGround( me, NEOBotCommit::RETREAT_BACK_OFF ) )
+			{
+				return SuspendFor( new CNEOBotRetreatToCover, "Backing off" );
+			}
 		}
 		else if ( shouldRetreat != ANSWER_NO )
 		{
@@ -501,7 +505,7 @@ ActionResult< CNEOBot >	CNEOBotTacticalMonitor::Update( CNEOBot *me, float inter
 				CNEOBaseCombatWeapon *weapon = (CNEOBaseCombatWeapon*) me->GetActiveWeapon();
 				if ( weapon && weapon->GetPrimaryAmmoCount() > 0 && me->IsBarrageAndReloadWeapon(weapon))
 				{
-					if ( weapon->Clip1() <= 1 )
+					if ( weapon->Clip1() <= 1 && !NEOBotCommit::HoldsGround( me, NEOBotCommit::RETREAT_RELOAD_COVER ) )
 					{
 						return SuspendFor( new CNEOBotRetreatToCover, "Moving to cover to reload" );
 					}
