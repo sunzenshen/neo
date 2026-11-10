@@ -11,6 +11,8 @@
 #include "bot/behavior/neo_bot_ctg_capture.h"
 #include "bot/neo_bot_path_compute.h"
 #include "bot/neo_bot_path_reservation.h"
+#include "bot/neo_bot_trade.h"
+#include "bot/behavior/neo_bot_trade_response.h"
 #include "nav_mesh.h"
 #include "weapon_ghost.h"
 
@@ -94,6 +96,11 @@ ActionResult< CNEOBot > CNEOBotCtgSeek::Update( CNEOBot *me, float interval )
 				return SuspendFor(new CNEOBotCtgCarrier, "I am the ghost carrier!");
 			}
 		}
+	}
+
+	if ( CNEOBotTradeResponse *pTrade = NEOBotTrade::TakeResponse( me ) )
+	{
+		return SuspendFor( pTrade, "Trading a teammate's death" );
 	}
 
 	// an enemy detpack waits at the loose ghost: hunt the enemy from outside its blast instead

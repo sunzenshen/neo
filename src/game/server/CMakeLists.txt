@@ -1521,6 +1521,7 @@ set(UNITY_SOURCE_NEO_BOT
     neo/bot/neo_bot_path_reservation.cpp
     neo/bot/neo_bot_body.cpp
     neo/bot/neo_bot_ghost_callout.cpp
+    neo/bot/neo_bot_trade.cpp
     neo/bot/neo_bot_locomotion.cpp
     neo/bot/neo_bot_manager.cpp
     neo/bot/neo_bot_memory_sound_combat.cpp
@@ -1554,6 +1555,7 @@ set(UNITY_SOURCE_NEO_BOT
     neo/bot/behavior/neo_bot_ladder_climb.cpp
     neo/bot/behavior/neo_bot_melee_attack.cpp
     neo/bot/behavior/neo_bot_move_to_vantage_point.cpp
+    neo/bot/behavior/neo_bot_trade_response.cpp
     neo/bot/behavior/neo_bot_path_clear_breakable.cpp
     neo/bot/behavior/neo_bot_pause.cpp
     neo/bot/behavior/neo_bot_retreat_to_cover.cpp
@@ -1589,6 +1591,7 @@ target_sources_grouped(
     neo/bot/neo_bot_path_reservation.h
     neo/bot/neo_bot_body.h
     neo/bot/neo_bot_ghost_callout.h
+    neo/bot/neo_bot_trade.h
     neo/bot/neo_bot_contextual_query_interface.h
     neo/bot/neo_bot_locomotion.h
     neo/bot/neo_bot_manager.h
@@ -1633,6 +1636,7 @@ target_sources_grouped(
     neo/bot/behavior/neo_bot_ladder_climb.h
     neo/bot/behavior/neo_bot_melee_attack.h
     neo/bot/behavior/neo_bot_move_to_vantage_point.h
+    neo/bot/behavior/neo_bot_trade_response.h
     neo/bot/behavior/neo_bot_path_clear_breakable.h
     neo/bot/behavior/neo_bot_pause.h
     neo/bot/behavior/neo_bot_retreat_to_cover.h

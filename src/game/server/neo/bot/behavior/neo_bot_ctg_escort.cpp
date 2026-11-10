@@ -4,6 +4,8 @@
 #include "bot/behavior/neo_bot_ctg_escort.h"
 #include "bot/behavior/neo_bot_attack.h"
 #include "bot/neo_bot_path_compute.h"
+#include "bot/neo_bot_trade.h"
+#include "bot/behavior/neo_bot_trade_response.h"
 #include "neo_gamerules.h"
 #include "weapons/weapon_ghost.h"
 
@@ -83,6 +85,15 @@ ActionResult< CNEOBot >	CNEOBotCtgEscort::Update( CNEOBot *me, float interval )
 		else
 		{
 			return SuspendFor( new CNEOBotAttack(), "Intercepting threat while protecting ghoster" );
+		}
+	}
+
+	// The bodyguard stays with the carrier
+	if ( m_role != ROLE_BODYGUARD )
+	{
+		if ( CNEOBotTradeResponse *pTrade = NEOBotTrade::TakeResponse( me ) )
+		{
+			return SuspendFor( pTrade, "Trading a teammate's death" );
 		}
 	}
 	
