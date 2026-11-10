@@ -26,7 +26,7 @@ enum { MAX_NAV_TEAMS = 2 };
 
 #ifdef NEO
 // Compass sectors for direction-aware visibility, sector 0 centered on +x and counting toward +y
-enum { NAV_VISIBLE_SECTOR_COUNT = 8 };
+constexpr int NAV_VISIBLE_SECTOR_COUNT = 8;
 
 inline int NavVisibleSector( float dx, float dy )
 {
