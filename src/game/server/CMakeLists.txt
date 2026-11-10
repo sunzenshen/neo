@@ -1518,6 +1518,7 @@ set(UNITY_SOURCE_NEO_BOT
     neo/bot/neo_bot_obstacle_props.cpp
     neo/bot/neo_bot_path_obstacles.cpp
     neo/bot/neo_bot_prop_detour.cpp
+    neo/bot/neo_bot_pacing.cpp
     neo/bot/neo_bot_path_reservation.cpp
     neo/bot/neo_bot_body.cpp
     neo/bot/neo_bot_ghost_callout.cpp
@@ -1586,6 +1587,7 @@ target_sources_grouped(
     neo/bot/neo_bot_obstacle_props.h
     neo/bot/neo_bot_path_obstacles.h
     neo/bot/neo_bot_prop_detour.h
+    neo/bot/neo_bot_pacing.h
     neo/bot/neo_bot_path_reservation.h
     neo/bot/neo_bot_body.h
     neo/bot/neo_bot_ghost_callout.h

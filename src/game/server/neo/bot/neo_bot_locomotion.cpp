@@ -2,6 +2,7 @@
 
 #include "neo_bot.h"
 #include "neo_bot_locomotion.h"
+#include "neo_bot_pacing.h"
 #include "particle_parse.h"
 
 extern ConVar falldamage;
@@ -59,6 +60,12 @@ void CNEOBotLocomotion::Update( void )
 // Move directly towards the given position
 void CNEOBotLocomotion::Approach( const Vector& pos, float goalWeight )
 {
+	// A bot holding for a teammate keeps its path and facing but presses no move buttons
+	if ( NeoBotIsPacingHold( ToNEOBot( GetBot()->GetEntity() ) ) )
+	{
+		return;
+	}
+
 	BaseClass::Approach( pos, goalWeight );
 }
 

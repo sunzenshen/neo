@@ -9,6 +9,7 @@
 #include "bot/neo_bot_manager.h"
 #include "bot/neo_bot_path_compute.h"
 #include "bot/neo_bot_path_cost.h"
+#include "bot/neo_bot_pacing.h"
 #include "bot/behavior/neo_bot_behavior.h"
 #include "bot/behavior/neo_bot_dead.h"
 #include "NextBot/NavMeshEntities/func_nav_prerequisite.h"
@@ -166,6 +167,8 @@ ActionResult< CNEOBot >	CNEOBotMainAction::Update( CNEOBot *me, float interval )
 	{
 		me->GetLocomotionInterface()->Run();
 	}
+
+	NeoBotUpdatePacing(me);
 
 	if (pNeoWep)
 	{
