@@ -37,8 +37,8 @@ ConVar neo_bot_research_exposure_dir( "neo_bot_research_exposure_dir", "0", FCVA
 	"Research: count an area's exposure only from the directions a bot entering it faces. "
 	"0 = every direction, 1 = all but the 90 degrees behind, 2 = the half ahead, 3 = the 90 degrees ahead", true, 0, true, 3 );
 
-ConVar neo_bot_research_team_arm( "neo_bot_research_team_arm", "0", FCVAR_CHEAT,
-	"Research: 0 = research behaviors apply to every bot, 2 or 3 = only to that team's bots", true, 0, true, 3 );
+// Defined by the harness team-split patch (proposals/0062-ctg-team-play/recipes/team-arm.patch)
+extern ConVar neo_bot_research_team_arm;
 
 ConVar neo_bot_path_penalty_hurry_hazard_multiplier("neo_bot_path_penalty_hurry_hazard_multiplier", "20.0", FCVAR_CHEAT,
 	"Cost multiplier for a hurrying bot crossing a hazard area that is not deadly, such as smoke, which it takes only when no shorter detour exists", true, 1.0f, false, 0.0f);
