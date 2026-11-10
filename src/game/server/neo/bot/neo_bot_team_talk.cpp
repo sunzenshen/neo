@@ -11,8 +11,10 @@
 
 ConVar neo_bot_research_death_callout( "neo_bot_research_death_callout", "0", FCVAR_CHEAT,
 	"Research: a dying bot calls out its killer to its team, and the team avoids where it fell for a while." );
+ConVar neo_bot_research_spot_callout( "neo_bot_research_spot_callout", "0", FCVAR_CHEAT,
+	"Research: a bot calls out to its team where it saw an enemy come into view." );
 ConVar neo_bot_research_teamtalk_log( "neo_bot_research_teamtalk_log", "0", FCVAR_CHEAT,
-	"Research: print NEO_DEATHCALL lines for team callouts." );
+	"Research: print NEO_DEATHCALL and NEO_SPOTCALL lines for team callouts." );
 
 extern ConVar neo_bot_research_team_arm;
 
@@ -34,12 +36,22 @@ namespace NEOBotTeamTalk
 	// Travel distance around the death spot that the mark covers, so a neighboring area is not a free bypass
 	static constexpr float FRESH_DEATH_RADIUS = 250.0f;
 
+	// Time from a sighting to the team acting on the callout
+	static constexpr float SPOT_CALLOUT_DELAY = 0.75f;
+
+	// One spoken callout per bot this often, as a player cannot name every enemy at once
+	static constexpr float SPOT_CALLER_INTERVAL = 1.0f;
+
+	// The team calls out the same enemy at most this often, as players do not repeat a fresh callout
+	static constexpr float SPOT_ENEMY_INTERVAL = 2.0f;
+
 	// Bounds the queue if many callouts are spoken at once
 	static constexpr int MAX_PENDING_CALLOUTS = 64;
 
 	enum CalloutKind_t
 	{
 		CALLOUT_DEATH,
+		CALLOUT_SPOT,
 	};
 
 	struct PendingCallout_t
@@ -70,6 +82,10 @@ namespace NEOBotTeamTalk
 	static int s_freshDeathCostHits[ TEAM__TOTAL ];
 	static int s_iRoundNumber = -1;
 
+	static float s_flNextCallerTime[ MAX_PLAYERS + 1 ];
+	static float s_flNextEnemyTime[ TEAM__TOTAL ][ MAX_PLAYERS + 1 ];
+	static int s_spotRateLimited[ TEAM__TOTAL ];
+
 	static bool IsTeamArmed( const ConVar &research, int iTeam )
 	{
 		if ( !research.GetBool() )
@@ -98,7 +114,11 @@ namespace NEOBotTeamTalk
 		{
 			s_freshDeaths[ i ].marks.RemoveAll();
 			s_freshDeathCostHits[ i ] = 0;
+			s_spotRateLimited[ i ] = 0;
 		}
+
+		V_memset( s_flNextCallerTime, 0, sizeof( s_flNextCallerTime ) );
+		V_memset( s_flNextEnemyTime, 0, sizeof( s_flNextEnemyTime ) );
 	}
 
 	// Teammates see on the HUD where a teammate fell, so the whole team marks the spot
@@ -185,6 +205,47 @@ namespace NEOBotTeamTalk
 			flKnownTime, DEATH_CALLOUT_DELAY );
 	}
 
+	void OnBotSighted( CNEOBot *pCaller, CBaseEntity *pSubject )
+	{
+		if ( !pCaller || !NEORules()->IsTeamplay() )
+		{
+			return;
+		}
+
+		const int iTeam = pCaller->GetTeamNumber();
+		if ( !IsValidTeam( iTeam ) || !IsTeamArmed( neo_bot_research_spot_callout, iTeam ) )
+		{
+			return;
+		}
+
+		CNEO_Player *pEnemy = ToNEOPlayer( pSubject );
+		if ( !pEnemy || !pEnemy->IsAlive() || !pCaller->IsEnemy( pEnemy ) )
+		{
+			return;
+		}
+
+		// An enemy the ghost shows through a wall reaches the team by the ghost callout, not by sight
+		if ( pCaller->IsRevealedByMyGhost( pEnemy )
+			&& !pCaller->GetVisionInterface()->IsLineOfSightClear( pEnemy->WorldSpaceCenter() ) )
+		{
+			return;
+		}
+
+		const int iCaller = pCaller->entindex();
+		const int iEnemy = pEnemy->entindex();
+		if ( gpGlobals->curtime < s_flNextCallerTime[ iCaller ] || gpGlobals->curtime < s_flNextEnemyTime[ iTeam ][ iEnemy ] )
+		{
+			++s_spotRateLimited[ iTeam ];
+			return;
+		}
+
+		s_flNextCallerTime[ iCaller ] = gpGlobals->curtime + SPOT_CALLER_INTERVAL;
+		s_flNextEnemyTime[ iTeam ][ iEnemy ] = gpGlobals->curtime + SPOT_ENEMY_INTERVAL;
+
+		// The position where the caller sees the enemy now, never where the enemy is when the team hears it
+		QueueCallout( CALLOUT_SPOT, iTeam, iCaller, pEnemy, pEnemy->GetAbsOrigin(), gpGlobals->curtime, SPOT_CALLOUT_DELAY );
+	}
+
 	float GetFreshDeathPathCost( const CNEOBot *me, const CNavArea *area )
 	{
 		const int iTeam = me->GetTeamNumber();
@@ -242,7 +303,19 @@ namespace NEOBotTeamTalk
 			}
 		}
 
-		if ( IsLogging() )
+		if ( !IsLogging() )
+		{
+			return;
+		}
+
+		if ( callout.eKind == CALLOUT_SPOT )
+		{
+			Msg( "NEO_SPOTCALL deliver t=%.2f team=%d caller=%d enemy=%d mates=%d updated=%d ratelimited=%d\n",
+				gpGlobals->curtime, callout.iTeam, callout.iSpeaker, pEnemy->entindex(), nMates, nUpdated,
+				s_spotRateLimited[ callout.iTeam ] );
+			s_spotRateLimited[ callout.iTeam ] = 0;
+		}
+		else
 		{
 			Msg( "NEO_DEATHCALL deliver t=%.2f team=%d victim=%d killer=%d age=%.2f mates=%d updated=%d costhits=%d\n",
 				gpGlobals->curtime, callout.iTeam, callout.iSpeaker, pEnemy->entindex(),

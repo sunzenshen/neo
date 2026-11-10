@@ -120,6 +120,7 @@ public:
 	virtual bool IsDormantWhenDead(void) const;			// should this player-bot continue to update itself when dead (respawn logic, etc)
 
 	virtual void OnWeaponFired(CBaseCombatCharacter* whoFired, CBaseCombatWeapon* weapon);		// when someone fires their weapon
+	virtual void OnSight(CBaseEntity* subject);		// when subject initially enters my visual awareness
 
 	// search outwards from startSearchArea and collect all reachable objects from the given list that pass the given filter
 	void SelectReachableObjects(const CUtlVector< CHandle< CBaseEntity > >& candidateObjectVector, CUtlVector< CHandle< CBaseEntity > >* selectedObjectVector, const INextBotFilter& filter, CNavArea* startSearchArea, float maxRange = 2000.0f) const;

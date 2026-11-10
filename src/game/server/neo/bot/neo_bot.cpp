@@ -23,6 +23,7 @@
 #include "behavior/neo_bot_behavior.h"
 #include "neo_crosshair.h"
 #include "neo/weapons/weapon_ghost.h"
+#include "neo_bot_team_talk.h"
 
 ConVar neo_bot_notice_gunfire_range("neo_bot_notice_gunfire_range", "3000", FCVAR_GAMEDLL);
 ConVar neo_bot_notice_quiet_gunfire_range("neo_bot_notice_quiet_gunfire_range", "500", FCVAR_GAMEDLL);
@@ -1132,6 +1133,15 @@ bool CNEOBot::IsDormantWhenDead(void) const
 	// This stops the NextBot update loop (INextBot::Update), preventing it from trying to run behaviors 
 	// on a non-existent or spectator body, which causes crashes (use-after-free/dangling pointers).
 	return IsObserver();
+}
+
+
+//-----------------------------------------------------------------------------------------------------
+void CNEOBot::OnSight(CBaseEntity* subject)
+{
+	BaseClass::OnSight(subject);
+
+	NEOBotTeamTalk::OnBotSighted(this, subject);
 }
 
 
