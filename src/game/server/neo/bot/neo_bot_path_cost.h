@@ -29,6 +29,7 @@ public:
 private:
 	bool m_bIgnoreHazards;
 	bool m_bInAHurry;
+	bool m_bSpawnNoDisperse;	// research: dispersal costs are skipped in areas visible from the team's spawn
 	CNEOBot* m_me;
 	RouteType m_routeType;
 	float m_stepHeight;

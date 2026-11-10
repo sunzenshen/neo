@@ -207,6 +207,8 @@ void CNEOBotPathReservationSystem::ClearRound()
         m_Reservations[team].RemoveAll();
         m_HazardAreas[team].RemoveAll();
         m_DetpackMarks[team].RemoveAll();
+        m_SpawnViewAreas[team].RemoveAll();
+        m_SpawnViewSources[team].RemoveAll();
     }
     m_BotReservedAreas.RemoveAll();
 	m_pCachedGhostArea = nullptr;
@@ -217,6 +219,50 @@ void CNEOBotPathReservationSystem::ClearRound()
     {
         m_AreaPenalties[i].flStuck = 0.0f;
     }
+}
+
+//-------------------------------------------------------------------------------------------------
+// Adds every area potentially visible from one spawn area to a set
+class CSpawnViewCollector
+{
+public:
+    CSpawnViewCollector(CUtlMap<int, bool> &set) : m_set(set) {}
+
+    bool operator()(CNavArea *area)
+    {
+        m_set.InsertOrReplace(area->GetID(), true);
+        return true;
+    }
+
+private:
+    CUtlMap<int, bool> &m_set;
+};
+
+//-------------------------------------------------------------------------------------------------
+bool CNEOBotPathReservationSystem::IsAreaInTeamSpawnView(const CNEOBot *bot, const CNavArea *area)
+{
+    if (!bot || !area)
+    {
+        return false;
+    }
+
+    const int team = bot->GetTeamNumber();
+    CNavArea *pSpawnArea = bot->GetSpawnArea();
+    if (team < 0 || team >= TEAM__TOTAL || !pSpawnArea)
+    {
+        return false;
+    }
+
+    if (m_SpawnViewSources[team].Find(pSpawnArea->GetID()) == m_SpawnViewSources[team].InvalidIndex())
+    {
+        m_SpawnViewSources[team].Insert(pSpawnArea->GetID(), true);
+        m_SpawnViewAreas[team].InsertOrReplace(pSpawnArea->GetID(), true);
+
+        CSpawnViewCollector collector(m_SpawnViewAreas[team]);
+        pSpawnArea->ForAllPotentiallyVisibleAreas(collector);
+    }
+
+    return m_SpawnViewAreas[team].Find(area->GetID()) != m_SpawnViewAreas[team].InvalidIndex();
 }
 
 //-------------------------------------------------------------------------------------------------

@@ -23,6 +23,10 @@ ConVar neo_bot_sniper_aim_error( "neo_bot_sniper_aim_error", "0.01", FCVAR_CHEAT
 ConVar neo_bot_sniper_aim_steady_rate( "neo_bot_sniper_aim_steady_rate", "10", FCVAR_CHEAT );
 ConVar neo_bot_debug_sniper( "neo_bot_debug_sniper", "0", FCVAR_CHEAT );
 
+// NEO TODO: research gates for the CTG team-play A/B, the PR carries the chosen behavior without them
+ConVar neo_bot_research_team_arm( "neo_bot_research_team_arm", "0", FCVAR_CHEAT,
+	"Research: 0 = the research cvars apply to every bot, 2 or 3 = only to that team's bots", true, 0, true, 3 );
+
 ConVar neo_bot_notice_backstab_chance( "neo_bot_notice_backstab_chance", "25", FCVAR_CHEAT );
 ConVar neo_bot_notice_backstab_min_range( "neo_bot_notice_backstab_min_range", "100", FCVAR_CHEAT );
 ConVar neo_bot_notice_backstab_max_range( "neo_bot_notice_backstab_max_range", "750", FCVAR_CHEAT );

@@ -89,6 +89,8 @@ public:
         {
             m_Reservations[i].SetLessFunc(AreaIDLessFunc);
             m_HazardAreas[i].SetLessFunc(AreaIDLessFunc);
+            m_SpawnViewAreas[i].SetLessFunc(AreaIDLessFunc);
+            m_SpawnViewSources[i].SetLessFunc(AreaIDLessFunc);
         }
     }
 
@@ -96,6 +98,10 @@ public:
     void ReleaseAllAreas(CNEOBot *bot);
     void Clear();
     void ClearRound();
+
+    // Research: is the area potentially visible from where this bot's team spawned? The set grows by one
+    // spawn area's view the first time a bot of that team asks from that spawn area.
+    bool IsAreaInTeamSpawnView( const CNEOBot *bot, const CNavArea *area );
 
     int GetPredictedFriendlyPathCount( int areaID, int teamID, const CNEOBot *excluding = NULL ) const;
 
@@ -136,6 +142,8 @@ private:
     CUtlMap<int, BotReservedAreas_t> m_BotReservedAreas;           // keyed by bot entindex
     AreaPenalty_t *FindOrAddAreaPenalty(unsigned int navAreaID);
 
+    CUtlMap<int, bool> m_SpawnViewAreas[TEAM__TOTAL];              // nav area IDs visible from the team's spawn areas
+    CUtlMap<int, bool> m_SpawnViewSources[TEAM__TOTAL];            // spawn area IDs already added to the set
     CUtlMap<unsigned int, AreaPenalty_t> m_AreaPenalties;          // keyed by nav area ID
     CUtlMap<int, HazardInfo> m_HazardAreas[TEAM__TOTAL];
 };

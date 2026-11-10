@@ -36,6 +36,34 @@ ConVar neo_bot_path_visibility_exposure_enable("neo_bot_path_visibility_exposure
 ConVar neo_bot_path_penalty_hurry_hazard_multiplier("neo_bot_path_penalty_hurry_hazard_multiplier", "20.0", FCVAR_CHEAT,
 	"Cost multiplier for a hurrying bot crossing a hazard area that is not deadly, such as smoke, which it takes only when no shorter detour exists", true, 1.0f, false, 0.0f);
 
+// NEO TODO: research gate for the CTG team-play A/B, the PR carries the chosen behavior without it
+ConVar neo_bot_research_spawn_nodisperse("neo_bot_research_spawn_nodisperse", "0", FCVAR_CHEAT,
+	"Research: for the first seconds of a round, teammates' path reservations add no cost in areas visible from the team's spawn (0 off, 1 on)", true, 0, true, 1);
+
+ConVar neo_bot_research_spawn_nodisperse_secs("neo_bot_research_spawn_nodisperse_secs", "8.0", FCVAR_CHEAT,
+	"Research: seconds after the freeze time ends during which the spawn-view dispersal exemption applies", true, 0.0f, false, 0.0f);
+
+extern ConVar neo_bot_research_team_arm;
+
+//-------------------------------------------------------------------------------------------------
+// Is the research exemption from dispersal costs near the spawn on for this bot, right now?
+static bool NeoSpawnNoDisperseActive(const CNEOBot* me)
+{
+	if (!neo_bot_research_spawn_nodisperse.GetBool())
+	{
+		return false;
+	}
+
+	const int teamArm = neo_bot_research_team_arm.GetInt();
+	if (teamArm != 0 && me->GetTeamNumber() != teamArm)
+	{
+		return false;
+	}
+
+	// The accumulated round time is negative during the freeze time
+	return NEORules()->GetRoundAccumulatedTime() < neo_bot_research_spawn_nodisperse_secs.GetFloat();
+}
+
 //-------------------------------------------------------------------------------------------------
 CNEOBotPathCost::CNEOBotPathCost(CNEOBot* me, RouteType routeType)
 {
@@ -47,6 +75,7 @@ CNEOBotPathCost::CNEOBotPathCost(CNEOBot* me, RouteType routeType)
 	m_bIgnoreReservations = !neo_bot_path_reservation_enable.GetBool();
 	m_bIgnoreHazards = (me->m_hCommandingPlayer.Get() != nullptr);
 	m_bIgnoreVisibilityExposure = !neo_bot_path_visibility_exposure_enable.GetBool();
+	m_bSpawnNoDisperse = NeoSpawnNoDisperseActive(me);
 	m_bInAHurry = ( me->GetIntentionInterface()->ShouldHurry( me ) == ANSWER_YES );
 	m_vecDuckHullMins = VEC_DUCK_HULL_MIN_SCALED( me );
 	m_vecDuckHullMaxs = VEC_DUCK_HULL_MAX_SCALED( me );
@@ -364,7 +393,10 @@ float CNEOBotPathCost::operator()(CNavArea* baseArea, CNavArea* fromArea, const 
 	{
 		cost += CNEOBotPathReservations()->GetAreaPenalty(area->GetID()).GetPathCost();
 
-		if ( NEORules()->IsTeamplay() )
+		// Leaving the spawn is never a detour worth a teammate's path: the team spreads out beyond its view
+		const bool bSpawnExempt = m_bSpawnNoDisperse && CNEOBotPathReservations()->IsAreaInTeamSpawnView(m_me, area);
+
+		if ( NEORules()->IsTeamplay() && !bSpawnExempt )
 		{
 			const int nFriendly = CNEOBotPathReservations()->GetPredictedFriendlyPathCount(area->GetID(), m_me->GetTeamNumber(), m_me);
 			if (nFriendly > 0)
