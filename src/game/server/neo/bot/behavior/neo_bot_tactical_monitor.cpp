@@ -16,6 +16,7 @@
 #include "bot/behavior/neo_bot_seek_and_destroy.h"
 #include "bot/behavior/neo_bot_seek_weapon.h"
 #include "bot/behavior/neo_bot_retreat_to_cover.h"
+#include "bot/neo_bot_fallback.h"
 #include "bot/behavior/neo_bot_retreat_from_grenade.h"
 #include "bot/behavior/neo_bot_retreat_from_hazard_area.h"
 #include "bot/behavior/neo_bot_ladder_approach.h"
@@ -507,6 +508,11 @@ ActionResult< CNEOBot >	CNEOBotTacticalMonitor::Update( CNEOBot *me, float inter
 					}
 				}
 			}
+		}
+
+		if ( Action< CNEOBot > *pFallBack = NEOBotFallback::StartFallBack( me ) )
+		{
+			return SuspendFor( pFallBack, "Falling back to support" );
 		}
 
 		// Don't want to interfere with human squad leader's control just to ignore hazards

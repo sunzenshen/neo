@@ -9,6 +9,7 @@
 #include "bot/neo_bot_manager.h"
 #include "bot/neo_bot_path_compute.h"
 #include "bot/neo_bot_path_cost.h"
+#include "bot/neo_bot_fallback.h"
 #include "bot/behavior/neo_bot_behavior.h"
 #include "bot/behavior/neo_bot_dead.h"
 #include "NextBot/NavMeshEntities/func_nav_prerequisite.h"
@@ -859,6 +860,11 @@ void CNEOBotMainAction::FireWeaponAtEnemy( CNEOBot *me )
 
 	if ( me->HasAttribute( CNEOBot::IGNORE_ENEMIES ) )
 		return;
+
+	if ( NEOBotFallback::HoldsFire( me ) )
+	{
+		return;
+	}
 
 	if ( !neo_bot_fire_weapon_allowed.GetBool() )
 	{

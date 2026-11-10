@@ -1521,6 +1521,7 @@ set(UNITY_SOURCE_NEO_BOT
     neo/bot/neo_bot_path_reservation.cpp
     neo/bot/neo_bot_body.cpp
     neo/bot/neo_bot_ghost_callout.cpp
+    neo/bot/neo_bot_fallback.cpp
     neo/bot/neo_bot_locomotion.cpp
     neo/bot/neo_bot_manager.cpp
     neo/bot/neo_bot_memory_sound_combat.cpp
@@ -1557,6 +1558,7 @@ set(UNITY_SOURCE_NEO_BOT
     neo/bot/behavior/neo_bot_path_clear_breakable.cpp
     neo/bot/behavior/neo_bot_pause.cpp
     neo/bot/behavior/neo_bot_retreat_to_cover.cpp
+    neo/bot/behavior/neo_bot_fall_back.cpp
     neo/bot/behavior/neo_bot_retreat_from_grenade.cpp
     neo/bot/behavior/neo_bot_retreat_from_hazard_area.cpp
     neo/bot/behavior/neo_bot_scenario_monitor.cpp
@@ -1589,6 +1591,7 @@ target_sources_grouped(
     neo/bot/neo_bot_path_reservation.h
     neo/bot/neo_bot_body.h
     neo/bot/neo_bot_ghost_callout.h
+    neo/bot/neo_bot_fallback.h
     neo/bot/neo_bot_contextual_query_interface.h
     neo/bot/neo_bot_locomotion.h
     neo/bot/neo_bot_manager.h
@@ -1636,6 +1639,7 @@ target_sources_grouped(
     neo/bot/behavior/neo_bot_path_clear_breakable.h
     neo/bot/behavior/neo_bot_pause.h
     neo/bot/behavior/neo_bot_retreat_to_cover.h
+    neo/bot/behavior/neo_bot_fall_back.h
     neo/bot/behavior/neo_bot_retreat_from_grenade.h
     neo/bot/behavior/neo_bot_scenario_monitor.h
     neo/bot/behavior/neo_bot_seek_and_destroy.h
