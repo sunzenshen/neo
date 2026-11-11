@@ -68,7 +68,7 @@ static constexpr float NEO_VOLSMOKE_CELL_VARIATION = 0.15f;
 static constexpr float NEO_VOLSMOKE_EXTINCTION = 0.06f;
 
 // Until the fill finishes, the front grows as if toward the open-floor radius.
-static constexpr float NEO_VOLSMOKE_NOMINAL_RADIUS = 165.0f;
+static constexpr float NEO_VOLSMOKE_NOMINAL_RADIUS = CNeoSmokeFill::DOME_RADIUS;
 
 // Look (cosmetic, may differ between clients).
 // The legacy particle color: a 0.5-0.6 grey times the light, desaturated
@@ -85,7 +85,7 @@ static constexpr float NEO_VOLSMOKE_SWEEP_HZ = 15.0f;
 
 // Light-grid samples: the grenade and four points at half the dome radius.
 static constexpr float NEO_VOLSMOKE_LIGHT_SAMPLE_UP = 32.0f;
-static constexpr float NEO_VOLSMOKE_LIGHT_SAMPLE_OUT = 82.0f;
+static constexpr float NEO_VOLSMOKE_LIGHT_SAMPLE_OUT = 0.5f * CNeoSmokeFill::DOME_RADIUS;
 
 // World-only: no props or entities, so every client sees the same walls.
 static constexpr int NEO_VOLSMOKE_FILL_MASK = CONTENTS_SOLID | CONTENTS_WINDOW;
