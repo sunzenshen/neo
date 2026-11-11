@@ -81,7 +81,7 @@ static int NeoSmokeISqrt( int v )
 CNeoSmokeFill::CNeoSmokeFill()
 	: m_pWorld( NULL ), m_pOcc( NULL ), m_pMoveMemo( NULL ), m_pState( NULL ), m_pDist( NULL ), m_pAnchor( NULL ),
 	  m_pHeap( NULL ), m_pHeapPos( NULL ), m_pOrder( NULL ), m_pFinalBits( NULL ), m_pWordRank( NULL ), m_pFinalDist( NULL ),
-	  m_nHeapCount( 0 ), m_nFinalized( 0 ), m_nFrontDist( 0 ), m_nQueries( 0 ), m_bDone( true )
+	  m_nHeapCount( 0 ), m_nFinalized( 0 ), m_nFrontDist( 0 ), m_nQueries( 0 ), m_bDone( true ), m_bBegun( false )
 {
 }
 
@@ -201,11 +201,10 @@ void CNeoSmokeFill::Start( INeoSmokeFillWorld *pWorld )
 	delete[] m_pFinalBits;
 	delete[] m_pWordRank;
 	delete[] m_pFinalDist;
+	m_pOrder = NULL;
 	m_pFinalBits = NULL;
 	m_pWordRank = NULL;
 	m_pFinalDist = NULL;
-	AllocWork();
-	m_pOrder = new int[NEO_SMOKE_FILL_BUDGET];
 
 	m_pWorld = pWorld;
 	m_nHeapCount = 0;
@@ -213,6 +212,16 @@ void CNeoSmokeFill::Start( INeoSmokeFillWorld *pWorld )
 	m_nFrontDist = 0;
 	m_nQueries = 0;
 	m_bDone = false;
+	m_bBegun = false;
+}
+
+// The work arrays are allocated by the first step, not by Start: fills run
+// one at a time, so many waiting fills then hold one work set, not one each.
+void CNeoSmokeFill::Begin()
+{
+	m_bBegun = true;
+	AllocWork();
+	m_pOrder = new int[NEO_SMOKE_FILL_BUDGET];
 
 	for ( int i = 0; i < CELLS; ++i )
 	{
@@ -284,6 +293,11 @@ int CNeoSmokeFill::FindSeed()
 
 bool CNeoSmokeFill::Step( int maxCells, int maxQueries )
 {
+	if ( !m_bBegun && !m_bDone )
+	{
+		Begin();
+	}
+
 	const int queryLimit = m_nQueries + maxQueries;
 	for ( int processed = 0; processed < maxCells && m_nQueries < queryLimit; ++processed )
 	{
