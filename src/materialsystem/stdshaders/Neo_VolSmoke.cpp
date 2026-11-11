@@ -22,6 +22,7 @@ BEGIN_SHADER_PARAMS
 	SHADER_PARAM( VOLMAX,     SHADER_PARAM_TYPE_VEC3,    "[1 1 1]",       "World-space AABB max" )
 	SHADER_PARAM( SMOKEMIN,   SHADER_PARAM_TYPE_VEC3,    "[0 0 0]",       "World-space min of the box around the cells that hold smoke" )
 	SHADER_PARAM( SMOKEMAX,   SHADER_PARAM_TYPE_VEC3,    "[1 1 1]",       "World-space max of that box" )
+	SHADER_PARAM( SMOKESPHERE, SHADER_PARAM_TYPE_VEC4,   "[0 0 0 100000]", "xyz = gas seed, w = radius of the sphere that holds all smoke" )
 	SHADER_PARAM( GRIDPARAMS, SHADER_PARAM_TYPE_VEC4,    "[32 8 4 0.03125]", "x = N, y = atlas cols, z = atlas rows, w = 1/N" )
 	SHADER_PARAM( AMBIENT,    SHADER_PARAM_TYPE_VEC3,    "[0.6 0.6 0.6]", "Ambient light reaching the smoke (linear)" )
 	SHADER_PARAM( LIGHTCOLOR, SHADER_PARAM_TYPE_VEC3,    "[0.8 0.8 0.8]", "Directional light colour (linear), scaled by baked per-voxel light" )
@@ -166,6 +167,10 @@ SHADER_DRAW
 		params[SMOKEMAX]->GetVecValue( c, 3 );
 		c[3] = 0.0f;
 		pShaderAPI->SetPixelShaderConstant( 9, c );
+
+		// c10: the sphere about the seed that holds all smoke
+		params[SMOKESPHERE]->GetVecValue( c, 4 );
+		pShaderAPI->SetPixelShaderConstant( 10, c );
 
 		DECLARE_DYNAMIC_VERTEX_SHADER( neo_volsmoke_vs30 );
 		SET_DYNAMIC_VERTEX_SHADER( neo_volsmoke_vs30 );

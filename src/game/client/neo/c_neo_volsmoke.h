@@ -90,6 +90,7 @@ private:
 
 	// Rendering
 	float DrawExtinction() const;
+	float SmokeSphere( Vector &center ) const;
 	void SetDrawParams( IMaterial *pMat ) const;
 	void SampleAtlas( const Vector &pos, float &dist, float &weight ) const;
 	float DensityLowerBound( const Vector &pos, float front, float bite ) const;
