@@ -852,6 +852,7 @@ C_NeoVolSmoke::C_NeoVolSmoke()
 	for ( int a = 0; a < 3; ++a )
 	{
 		m_nBox[a] = 0;
+		m_nSeedCorner[a] = 0;
 	}
 
 	SetDefLessFunc( m_CarveByCell );
@@ -957,7 +958,7 @@ void C_NeoVolSmoke::Init( const Vector &origin, float spawnTime )
 	m_flSpawnTime = spawnTime;
 
 	// The box hangs from the cell corner the grenade sits on.
-	int seedCorner[3];
+	int *seedCorner = m_nSeedCorner;
 	m_Fill.BoxSize( m_nBox );
 	m_Fill.BoxSeedCorner( seedCorner );
 	const float cell = CNeoSmokeFill::CELL_SIZE;
@@ -1779,6 +1780,82 @@ void C_NeoVolSmoke::Carve( const Vector &start, const Vector &end, float radius 
 }
 
 // ---------------------------------------------------------------------------
+// Field and atlas hashes for neo_volsmoke_stats. Each is a sum over cells of a
+// mix of the cell's place relative to the grenade and its value, so it does
+// not depend on the box or the atlas layout: equal fields give equal hashes
+// across builds. The key is the offline fill prototype's.
+static unsigned long long VolSmokeCellKey( int x, int y, int z, unsigned long long value )
+{
+	const int bias = 512;
+	unsigned long long k = ( (unsigned long long)( x + bias ) << 40 ) ^ ( (unsigned long long)( y + bias ) << 28 )
+		^ ( (unsigned long long)( z + bias ) << 16 ) ^ value;
+	k *= 0x9E3779B97F4A7C15ull;
+	k ^= k >> 29;
+	k *= 0xBF58476D1CE4E5B9ull;
+	k ^= k >> 32;
+	return k;
+}
+
+unsigned long long C_NeoVolSmoke::ClientFieldHash() const
+{
+	unsigned long long hash = 0;
+	for ( int i = 0; i < m_Fill.FinalizedCount(); ++i )
+	{
+		const int cell = m_Fill.FinalizedCell( i );
+		int c[3];
+		CellCoords( cell, c[0], c[1], c[2] );
+		hash += VolSmokeCellKey( c[0] - m_nSeedCorner[0], c[1] - m_nSeedCorner[1], c[2] - m_nSeedCorner[2], (unsigned int)m_Fill.Dist( cell ) );
+	}
+
+	return hash;
+}
+
+unsigned long long C_NeoVolSmoke::LatticeFieldHash() const
+{
+	unsigned long long hash = 0;
+	for ( int i = 0; i < m_Fill.LatticeCount(); ++i )
+	{
+		int c[3];
+		m_Fill.LatticeCell( i, c[0], c[1], c[2] );
+		hash += VolSmokeCellKey( c[0] - m_nSeedCorner[0], c[1] - m_nSeedCorner[1], c[2] - m_nSeedCorner[2], (unsigned int)m_Fill.LatticeDist( i ) );
+	}
+
+	return hash;
+}
+
+// Over the texels that differ from a cleared one.
+unsigned long long C_NeoVolSmoke::AtlasHash() const
+{
+	if ( !m_pRegen )
+	{
+		return 0;
+	}
+
+	const unsigned char *bits = m_pRegen->Bits();
+	unsigned long long hash = 0;
+	for ( int z = 0; z < m_nBox[2]; ++z )
+	{
+		for ( int y = 0; y < m_nBox[1]; ++y )
+		{
+			for ( int x = 0; x < m_nBox[0]; ++x )
+			{
+				const unsigned char *t = bits + AtlasOffset( x, y, z );
+				const unsigned int texel = (unsigned int)t[0] | ( (unsigned int)t[1] << 8 ) | ( (unsigned int)t[2] << 16 ) | ( (unsigned int)t[3] << 24 );
+				const bool cleared = t[VOLSMOKE_BYTE_DIST] == 255 && t[VOLSMOKE_BYTE_LIGHT] == 255 && t[VOLSMOKE_BYTE_WEIGHT] == 0 && t[VOLSMOKE_BYTE_ALPHA] == 255;
+				if ( cleared )
+				{
+					continue;
+				}
+
+				hash += VolSmokeCellKey( x - m_nSeedCorner[0], y - m_nSeedCorner[1], z - m_nSeedCorner[2], texel );
+			}
+		}
+	}
+
+	return hash;
+}
+
+// ---------------------------------------------------------------------------
 void C_NeoVolSmoke::PrintStats() const
 {
 	// FNV-1a over the finalized cells and their path lengths: equal hashes mean
@@ -1804,6 +1881,9 @@ void C_NeoVolSmoke::PrintStats() const
 	const int carveBytes = m_CarveTime.Count() * (int)sizeof( float ) + m_CarveByCell.Count() * ( (int)sizeof( int ) + (int)sizeof( float ) );
 	const int worldBytes = m_pWorld ? m_pWorld->MemoryBytes() : 0;
 	const int atlasBytes = m_pRegen ? m_pRegen->MemoryBytes() : 0;
+	Msg( "neo_volsmoke_stats: volume %d field %016llx lattice %016llx (%d cells, front %.1f, dropped %d) atlas %016llx\n",
+		m_nId, ClientFieldHash(), LatticeFieldHash(), m_Fill.LatticeCount(), CNeoSmokeFill::DistToUnits( m_Fill.LatticeFrontDist() ),
+		m_Fill.DroppedCount(), AtlasHash() );
 	Msg( "neo_volsmoke_stats: volume %d memory %d KB (fill %d KB, carve times %d KB, world cache %d KB, atlas copy %d KB)\n",
 		m_nId, ( fillBytes + carveBytes + worldBytes + atlasBytes ) / 1024, fillBytes / 1024, carveBytes / 1024,
 		worldBytes / 1024, atlasBytes / 1024 );
