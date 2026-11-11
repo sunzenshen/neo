@@ -49,6 +49,8 @@ void TermSmokeFogOverlay();
 void DrawSmokeFogOverlay();
 #ifdef NEO
 void UpdateThermalOverride();
+// True when the overlay this frame will be fully opaque over the whole view.
+bool SmokeFogOverlayCoversView();
 #endif
 
 // Set these before calling DrawSmokeFogOverlay.
