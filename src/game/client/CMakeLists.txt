@@ -1599,6 +1599,7 @@ set(UNITY_SOURCE_NEO_SRC_CLIENT
     neo/c_neo_player.cpp
     neo/c_neo_te_tocflash.cpp
     neo/c_neo_volsmoke.cpp
+    neo/neo_smoke_fill.cpp
     neo/neo_fixup_glshaders.cpp
     neo/c_neo_bloom_controller.cpp
     neo/c_neo_killer_damage_infos.cpp
@@ -1619,6 +1620,7 @@ target_sources_grouped(
     neo/c_neo_player.h
     neo/c_neo_te_tocflash.h
     neo/c_neo_volsmoke.h
+    neo/neo_smoke_fill.h
     neo/neo_fixup_glshaders.h
     neo/c_neo_killer_damage_infos.h
     ${UNITY_SOURCE_NEO_SRC_CLIENT}

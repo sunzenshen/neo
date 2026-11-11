@@ -19,8 +19,10 @@
 #include "materialsystem/itexture.h"
 #include "materialsystem/MaterialSystemUtil.h"
 #include "utlvector.h"
+#include "neo_smoke_fill.h"
 
 class CNeoVolSmokeRegenerator;
+class CNeoVolSmokeWorld;
 
 class C_NeoVolSmoke : public C_BaseEntity
 {
@@ -30,14 +32,15 @@ public:
 	C_NeoVolSmoke();
 	virtual ~C_NeoVolSmoke();
 
-	// Spawns a client-only volume centred on `origin`. `extent` is the half
-	// size of the AABB in world units; `lifetime` seconds until dissipation.
-	static C_NeoVolSmoke *Create( const Vector &origin, float extent, float lifetime );
+	// Spawns a client-only volume for a grenade resting at `origin` that
+	// detonated at `spawnTime` (server time). Bloom and fade follow that time.
+	static C_NeoVolSmoke *Create( const Vector &origin, float spawnTime );
 
 	// Carves a capsule out of every live volume (bullet trace / explosion).
 	static void CarveAll( const Vector &start, const Vector &end, float radius );
 
 	static void RemoveAll();
+	static void PrintAllStats();
 	static int  LiveCount() { return s_Volumes.Count(); }
 	static int  NextId() { return s_nNextId; }
 
@@ -50,65 +53,42 @@ public:
 	virtual int  DrawModel( int flags ) override;
 
 	// Fills the slice atlas; called by the texture regenerator.
-	void FillAtlas( unsigned char *pDst, int pitch, int width, int height ) const;
+	void FillAtlas( unsigned char *pDst, int pitch ) const;
 
-	int  GridN() const { return m_nN; }
-	int  AtlasCols() const { return m_nAtlasCols; }
-	int  AtlasRows() const { return m_nAtlasRows; }
+	void PrintStats() const;
 
 private:
-	void Init( const Vector &origin, float extent, float lifetime );
+	void Init( const Vector &origin, float spawnTime );
 	void Shutdown();
 
 	// Simulation
-	void StepFloodFill( int maxCells );
+	void StepFill();
+	float FrontRadius( float age ) const;
 	void UpdateDensities();
 	void SweepLight();
 	void Carve( const Vector &start, const Vector &end, float radius );
-
-	// Grid helpers
-	inline int    Idx( int x, int y, int z ) const { return ( z * m_nN + y ) * m_nN + x; }
-	inline bool   InGrid( int x, int y, int z ) const { return x >= 0 && y >= 0 && z >= 0 && x < m_nN && y < m_nN && z < m_nN; }
-	inline Vector CellCenter( int x, int y, int z ) const
-	{
-		return m_vecGridMin + Vector( ( x + 0.5f ) * m_flCellSize, ( y + 0.5f ) * m_flCellSize, ( z + 0.5f ) * m_flCellSize );
-	}
-	static bool WorldSolidAt( const Vector &pos );
-	bool CellOpen( const Vector &from, const Vector &to ) const;
-
-	float SampleLight( float fx, float fy, int zSlab, int axis ) const;
 
 private:
 	static CUtlVector< C_NeoVolSmoke * > s_Volumes;
 	static int s_nNextId;
 
 	int    m_nId;
-	int    m_nN;            // cells per axis
-	int    m_nAtlasCols;
-	int    m_nAtlasRows;
-	float  m_flCellSize;
 	Vector m_vecGridMin;
 	Vector m_vecGridMax;
 	Vector m_vecSpawn;
 
 	float  m_flSpawnTime;
-	float  m_flLifetime;
+
+	// Gas fill and the world it queries
+	CNeoSmokeFill      m_Fill;
+	CNeoVolSmokeWorld *m_pWorld;
+	double m_flFillSeconds;    // CPU time spent in the fill
+	double m_flFillPeakFrame;  // longest single fill slice
 
 	// Per-cell state
-	CUtlVector< unsigned char > m_Reach;      // BFS depth from spawn, 255 = unreached
-	CUtlVector< float >         m_FillTime;   // curtime when the cell was reached
 	CUtlVector< float >         m_CarveTime;  // curtime of last carve, <0 = never
-	CUtlVector< unsigned char > m_Noise;      // static per-cell variation
 	CUtlVector< float >         m_Density;    // 0..1 current density
 	CUtlVector< float >         m_Light;      // 0..1 transmittance toward light
-
-	// Flood fill frontier (ring buffer of cell indices)
-	CUtlVector< int > m_Frontier;
-	int   m_nFrontierHead;
-	int   m_nFilledCells;
-	int   m_nMaxCells;
-	int   m_nMaxDepth;
-	bool  m_bFillDone;
 
 	// GPU side
 	CTextureReference        m_Atlas;
