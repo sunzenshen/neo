@@ -64,7 +64,7 @@ enum VolSmokeAtlasByte_t
 static constexpr float NEO_VOLSMOKE_DIST_RANGE = 0.5f * CNeoSmokeFill::GRID_XY * CNeoSmokeFill::CELL_SIZE;
 
 // The atlas changes only while the fill, the bloom light or a regrow runs;
-// it is uploaded at most this often.
+// it is uploaded then, at most this often, and never after.
 static constexpr float NEO_VOLSMOKE_UPLOAD_HZ = 15.0f;
 
 // Fill work per frame. A slow machine blooms later, never differently.
@@ -328,7 +328,7 @@ int C_NeoVolSmoke::s_nNextId = 0;
 // ---------------------------------------------------------------------------
 C_NeoVolSmoke::C_NeoVolSmoke()
 	: m_nId( s_nNextId++ ), m_flSpawnTime( 0 ), m_pWorld( NULL ), m_flFillSeconds( 0 ), m_flFillPeakFrame( 0 ),
-	  m_nBounded( 0 ), m_pRegen( NULL ), m_nPacked( 0 ), m_flNextUpload( 0 ), m_flRegrowEnd( -1.0f )
+	  m_nBounded( 0 ), m_pRegen( NULL ), m_nPacked( 0 ), m_flNextUpload( 0 ), m_flRegrowEnd( -1.0f ), m_flSweptFront( -1.0f )
 {
 }
 
@@ -858,18 +858,29 @@ void C_NeoVolSmoke::ClientThink()
 		return;
 	}
 
+	// A grown volume with no carve refilling changes nothing.
+	bool changed = false;
 	{
 		CVolSmokePerfScope perf( VOLSMOKE_PERF_PACK );
-		PackNewCells( now );
+		changed = PackNewCells( now );
 		if ( now < m_flRegrowEnd + 1.0f / NEO_VOLSMOKE_UPLOAD_HZ )
 		{
 			PackWeights( now );
+			changed = true;
 		}
 	}
 
+	if ( changed || front != m_flSweptFront )
 	{
 		CVolSmokePerfScope perf( VOLSMOKE_PERF_SWEEP );
 		SweepLight( front, now );
+		m_flSweptFront = front;
+		changed = true;
+	}
+
+	if ( !changed )
+	{
+		return;
 	}
 
 	CVolSmokePerfScope perf( VOLSMOKE_PERF_DOWNLOAD );
