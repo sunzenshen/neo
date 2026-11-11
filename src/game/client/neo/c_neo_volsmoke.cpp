@@ -1093,9 +1093,11 @@ void C_NeoVolSmoke::ClientThink()
 {
 	const float now = gpGlobals->curtime;
 
+	// The think list may still use this entity after ClientThink returns, so
+	// it releases the entity after all thinks instead.
 	if ( now - m_flSpawnTime > NEO_VOLSMOKE_FADE_END )
 	{
-		Release();
+		ClientThinkList()->AddToDeleteList( GetClientHandle() );
 		return;
 	}
 
