@@ -197,7 +197,9 @@ static constexpr float NEO_VOLSMOKE_OVERLAY_FULL = 0.5f;
 extern ConVar r_neo_thermal_smoke_alpha;
 
 // World-only: no props or entities, so every client sees the same walls.
-static constexpr int NEO_VOLSMOKE_FILL_MASK = CONTENTS_SOLID | CONTENTS_WINDOW;
+// Gas does not enter water; it spreads over the surface as over a floor.
+static constexpr int NEO_VOLSMOKE_WATER_MASK = CONTENTS_WATER | CONTENTS_SLIME;
+static constexpr int NEO_VOLSMOKE_FILL_MASK = CONTENTS_SOLID | CONTENTS_WINDOW | NEO_VOLSMOKE_WATER_MASK;
 
 static float VolSmokeBloom( float age )
 {
@@ -335,15 +337,17 @@ public:
 		}
 	}
 
-	static bool PointSolid( const Vector &pos )
+	static bool PointIn( const Vector &pos, int mask )
 	{
 		Ray_t ray;
 		ray.Init( pos, pos );
 		CTraceFilterWorldOnly filter;
 		trace_t tr;
-		enginetrace->TraceRay( ray, NEO_VOLSMOKE_FILL_MASK, &filter, &tr );
+		enginetrace->TraceRay( ray, mask, &filter, &tr );
 		return tr.startsolid;
 	}
+
+	static bool PointSolid( const Vector &pos ) { return PointIn( pos, NEO_VOLSMOKE_FILL_MASK ); }
 
 	virtual bool CellSolid( int x, int y, int z ) override
 	{
@@ -420,8 +424,10 @@ public:
 			return false;
 		}
 
-		// Smoke shows through glass and grates, so they do not end it.
-		if ( ( tr.contents & ( CONTENTS_WINDOW | CONTENTS_GRATE ) ) || ( tr.surface.flags & SURF_TRANS ) )
+		// Smoke shows through glass and grates, so they do not end it. A water
+		// surface does, though it may be translucent: no gas is under it.
+		const bool water = ( tr.contents & NEO_VOLSMOKE_WATER_MASK ) != 0;
+		if ( !water && ( ( tr.contents & ( CONTENTS_WINDOW | CONTENTS_GRATE ) ) || ( tr.surface.flags & SURF_TRANS ) ) )
 		{
 			return false;
 		}
@@ -435,15 +441,25 @@ public:
 	{
 		const double start = Plat_FloatTime();
 		++m_nTraces;
-		const float c = CNeoSmokeFill::CELL_SIZE;
-		const Vector grenade = m_vecGridMin + Vector( CNeoSmokeFill::GRID_XY / 2 * c, CNeoSmokeFill::GRID_XY / 2 * c, CNeoSmokeFill::SEED_CELL_Z * c );
 		Ray_t ray;
-		ray.Init( grenade, Center( x, y, z ) );
+		ray.Init( Grenade(), Center( x, y, z ) );
 		CTraceFilterWorldOnly filter;
 		trace_t tr;
 		enginetrace->TraceRay( ray, NEO_VOLSMOKE_FILL_MASK, &filter, &tr );
 		m_flQuerySeconds += Plat_FloatTime() - start;
 		return tr.startsolid || tr.fraction < 1.0f;
+	}
+
+	virtual bool SeedInWater() override
+	{
+		++m_nTraces;
+		return PointIn( Grenade(), NEO_VOLSMOKE_WATER_MASK );
+	}
+
+	virtual bool CellWater( int x, int y, int z ) override
+	{
+		++m_nTraces;
+		return PointIn( Center( x, y, z ), NEO_VOLSMOKE_WATER_MASK );
 	}
 
 	// For neo_volsmoke_stats.
@@ -523,6 +539,12 @@ private:
 		trace_t tr;
 		enginetrace->TraceRay( ray, NEO_VOLSMOKE_FILL_MASK, &filter, &tr );
 		return tr.startsolid || tr.allsolid;
+	}
+
+	Vector Grenade() const
+	{
+		const float c = CNeoSmokeFill::CELL_SIZE;
+		return m_vecGridMin + Vector( CNeoSmokeFill::GRID_XY / 2 * c, CNeoSmokeFill::GRID_XY / 2 * c, CNeoSmokeFill::SEED_CELL_Z * c );
 	}
 
 	Vector Center( int x, int y, int z ) const
