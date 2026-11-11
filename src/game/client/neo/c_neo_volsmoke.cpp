@@ -31,6 +31,7 @@ static ConVar neo_volsmoke_jitter( "neo_volsmoke_jitter", "1", FCVAR_CHEAT, "Per
 static ConVar neo_volsmoke_debug( "neo_volsmoke_debug", "0", FCVAR_CHEAT, "0 off, 1 coverage, 2 scene depth as read by the shader, 3 box hit." );
 static ConVar neo_volsmoke_slabs( "neo_volsmoke_slabs", "1", FCVAR_CHEAT, "Test: 0 one march clipped by dest-alpha depth only, 1 far slabs depth-tested at their middle, 2 at their far end." );
 static ConVar neo_volsmoke_draw( "neo_volsmoke_draw", "1", FCVAR_CHEAT, "Draw smoke volumes." );
+static ConVar neo_volsmoke_fill_audit( "neo_volsmoke_fill_audit", "0", FCVAR_CHEAT, "Test: also ask the point and segment queries where a block query answered, keep their answer and count disagreements." );
 
 // ---------------------------------------------------------------------------
 // Fixed gameplay values: they decide where the smoke blocks sight, so they are
@@ -224,11 +225,40 @@ private:
 
 // ---------------------------------------------------------------------------
 // World queries for the fill: cell centers and the segments between them.
+//
+// One box query answers a whole block of cells: when the block is empty,
+// every cell center in it is open, and so is every link inside it or into
+// another empty block, since the segment stays inside the two boxes. A block
+// that touches the world falls to the next smaller size, then to the point
+// and segment queries.
 // ---------------------------------------------------------------------------
+static constexpr int NEO_VOLSMOKE_BLOCK_SIZES[] = { 8, 2 }; // cells, coarse to fine
+static constexpr int NEO_VOLSMOKE_BLOCK_LEVELS = ARRAYSIZE( NEO_VOLSMOKE_BLOCK_SIZES );
+
+static constexpr int NEO_VOLSMOKE_AUDIT_MAX_WARNINGS = 10; // per volume
+
+enum VolSmokeBlockState_t
+{
+	VOLSMOKE_BLOCK_UNKNOWN = 0,
+	VOLSMOKE_BLOCK_EMPTY,
+	VOLSMOKE_BLOCK_TOUCHED,
+};
+
 class CNeoVolSmokeWorld final : public INeoSmokeFillWorld
 {
 public:
-	explicit CNeoVolSmokeWorld( const Vector &gridMin ) : m_vecGridMin( gridMin ), m_flQuerySeconds( 0.0 ) {}
+	explicit CNeoVolSmokeWorld( const Vector &gridMin )
+		: m_vecGridMin( gridMin ), m_flQuerySeconds( 0.0 ), m_nTraces( 0 ), m_nAuditChecks( 0 ), m_nAuditDisagree( 0 )
+	{
+		for ( int level = 0; level < NEO_VOLSMOKE_BLOCK_LEVELS; ++level )
+		{
+			const int b = NEO_VOLSMOKE_BLOCK_SIZES[level];
+			m_nBlocksXY[level] = ( CNeoSmokeFill::GRID_XY + b - 1 ) / b;
+			const int nz = ( CNeoSmokeFill::GRID_Z + b - 1 ) / b;
+			m_Blocks[level].SetCount( m_nBlocksXY[level] * m_nBlocksXY[level] * nz );
+			Q_memset( m_Blocks[level].Base(), VOLSMOKE_BLOCK_UNKNOWN, m_Blocks[level].Count() );
+		}
+	}
 
 	static bool PointSolid( const Vector &pos )
 	{
@@ -243,7 +273,19 @@ public:
 	virtual bool CellSolid( int x, int y, int z ) override
 	{
 		const double start = Plat_FloatTime();
-		const bool solid = PointSolid( Center( x, y, z ) );
+		bool solid = false;
+		const bool inEmpty = InEmptyBlock( x, y, z );
+		if ( !inEmpty || Auditing() )
+		{
+			++m_nTraces;
+			solid = PointSolid( Center( x, y, z ) );
+		}
+
+		if ( inEmpty && Auditing() )
+		{
+			Audit( solid, x, y, z, -1 );
+		}
+
 		m_flQuerySeconds += Plat_FloatTime() - start;
 		return solid;
 	}
@@ -254,19 +296,98 @@ public:
 		int n[3] = { x, y, z };
 		++n[axis];
 
+		const bool inEmpty = CNeoSmokeFill::InGrid( n[0], n[1], n[2] ) && InEmptyBlock( x, y, z ) && InEmptyBlock( n[0], n[1], n[2] );
+		bool blocked = false;
+		if ( !inEmpty || Auditing() )
+		{
+			++m_nTraces;
+			Ray_t ray;
+			ray.Init( Center( x, y, z ), Center( n[0], n[1], n[2] ) );
+			CTraceFilterWorldOnly filter;
+			trace_t tr;
+			enginetrace->TraceRay( ray, NEO_VOLSMOKE_FILL_MASK, &filter, &tr );
+			blocked = tr.startsolid || tr.fraction < 1.0f;
+		}
+
+		if ( inEmpty && Auditing() )
+		{
+			Audit( blocked, x, y, z, axis );
+		}
+
+		m_flQuerySeconds += Plat_FloatTime() - start;
+		return blocked;
+	}
+
+	// For neo_volsmoke_stats.
+	double QuerySeconds() const { return m_flQuerySeconds; }
+	int Traces() const { return m_nTraces; }
+	int AuditChecks() const { return m_nAuditChecks; }
+	int AuditDisagreements() const { return m_nAuditDisagree; }
+
+private:
+	static bool Auditing() { return neo_volsmoke_fill_audit.GetBool(); }
+
+	// The block answered "open"; the direct query said otherwise. The direct
+	// answer is the one returned, so an audited fill grows the old field.
+	void Audit( bool directSolid, int x, int y, int z, int axis )
+	{
+		++m_nAuditChecks;
+		if ( !directSolid )
+		{
+			return;
+		}
+
+		++m_nAuditDisagree;
+		if ( m_nAuditDisagree > NEO_VOLSMOKE_AUDIT_MAX_WARNINGS )
+		{
+			return;
+		}
+
+		const Vector pos = Center( x, y, z );
+		Warning( "neo_volsmoke_fill_audit: block says open, %s says solid at cell (%d %d %d) axis %d, world (%.1f %.1f %.1f)\n",
+			axis < 0 ? "point" : "segment", x, y, z, axis, pos.x, pos.y, pos.z );
+	}
+
+	bool InEmptyBlock( int x, int y, int z )
+	{
+		for ( int level = 0; level < NEO_VOLSMOKE_BLOCK_LEVELS; ++level )
+		{
+			const int b = NEO_VOLSMOKE_BLOCK_SIZES[level];
+			const int bx = x / b;
+			const int by = y / b;
+			const int bz = z / b;
+			const int nxy = m_nBlocksXY[level];
+			unsigned char &state = m_Blocks[level][( bz * nxy + by ) * nxy + bx];
+			if ( state == VOLSMOKE_BLOCK_UNKNOWN )
+			{
+				state = BoxTouchesWorld( bx, by, bz, b ) ? VOLSMOKE_BLOCK_TOUCHED : VOLSMOKE_BLOCK_EMPTY;
+			}
+
+			if ( state == VOLSMOKE_BLOCK_EMPTY )
+			{
+				return true;
+			}
+		}
+
+		return false;
+	}
+
+	bool BoxTouchesWorld( int bx, int by, int bz, int b )
+	{
+		++m_nTraces;
+		const float size = b * CNeoSmokeFill::CELL_SIZE;
+		const Vector lo = m_vecGridMin + Vector( bx * size, by * size, bz * size );
+		const Vector half( 0.5f * size, 0.5f * size, 0.5f * size );
+		const Vector center = lo + half;
+
 		Ray_t ray;
-		ray.Init( Center( x, y, z ), Center( n[0], n[1], n[2] ) );
+		ray.Init( center, center, -half, half );
 		CTraceFilterWorldOnly filter;
 		trace_t tr;
 		enginetrace->TraceRay( ray, NEO_VOLSMOKE_FILL_MASK, &filter, &tr );
-		m_flQuerySeconds += Plat_FloatTime() - start;
-		return tr.startsolid || tr.fraction < 1.0f;
+		return tr.startsolid || tr.allsolid;
 	}
 
-	// Time spent answering queries, for neo_volsmoke_stats.
-	double QuerySeconds() const { return m_flQuerySeconds; }
-
-private:
 	Vector Center( int x, int y, int z ) const
 	{
 		const float c = CNeoSmokeFill::CELL_SIZE;
@@ -274,7 +395,12 @@ private:
 	}
 
 	Vector m_vecGridMin;
+	CUtlVector<unsigned char> m_Blocks[NEO_VOLSMOKE_BLOCK_LEVELS]; // VolSmokeBlockState_t
+	int m_nBlocksXY[NEO_VOLSMOKE_BLOCK_LEVELS];
 	double m_flQuerySeconds;
+	int m_nTraces;
+	int m_nAuditChecks;
+	int m_nAuditDisagree;
 };
 
 // ---------------------------------------------------------------------------
@@ -867,10 +993,16 @@ void C_NeoVolSmoke::PrintStats() const
 	}
 
 	const double queryMs = m_pWorld ? m_pWorld->QuerySeconds() * 1000.0 : 0.0;
-	Msg( "neo_volsmoke_stats: volume %d age %.2f done %d (at age %.2f) cells %d radius %.1f queries %d fill %.1f ms (world %.1f ms, peak frame %.2f ms), hash %08x, front ahead of the fill in %d frames\n",
+	const int traces = m_pWorld ? m_pWorld->Traces() : 0;
+	Msg( "neo_volsmoke_stats: volume %d age %.2f done %d (at age %.2f) cells %d radius %.1f queries %d traces %d fill %.1f ms (world %.1f ms, peak frame %.2f ms), hash %08x, front ahead of the fill in %d frames\n",
 		m_nId, gpGlobals->curtime - m_flSpawnTime, m_Fill.IsDone() ? 1 : 0, m_flFillDoneAge, m_Fill.FinalizedCount(),
-		CNeoSmokeFill::DistToUnits( m_Fill.FrontDist() ), m_Fill.WorldQueries(),
+		CNeoSmokeFill::DistToUnits( m_Fill.FrontDist() ), m_Fill.WorldQueries(), traces,
 		m_flFillSeconds * 1000.0, queryMs, m_flFillPeakFrame * 1000.0, hash, m_nLagFrames );
+	if ( m_pWorld && m_pWorld->AuditChecks() > 0 )
+	{
+		Msg( "neo_volsmoke_stats: volume %d audit: %d block answers checked, %d disagreements\n",
+			m_nId, m_pWorld->AuditChecks(), m_pWorld->AuditDisagreements() );
+	}
 }
 
 void C_NeoVolSmoke::ClientThink()
