@@ -30,7 +30,7 @@ static ConVar neo_volsmoke_explode_radius( "neo_volsmoke_explode_radius", "110",
 static ConVar neo_volsmoke_noise_amp( "neo_volsmoke_noise_amp", "1", FCVAR_CHEAT, "Test: look noise strength, 0 (smooth) to 1.", true, 0.0f, true, 1.0f );
 static ConVar neo_volsmoke_jitter( "neo_volsmoke_jitter", "1", FCVAR_CHEAT, "Per-pixel step jitter (grain) instead of banding." );
 static ConVar neo_volsmoke_debug( "neo_volsmoke_debug", "0", FCVAR_CHEAT, "0 off, 1 coverage, 2 scene depth as read by the shader, 3 box hit." );
-static ConVar neo_volsmoke_slabs( "neo_volsmoke_slabs", "1", FCVAR_CHEAT, "Test: 0 one march clipped by dest-alpha depth only, 1 far slabs depth-tested at their middle, 2 at their far end." );
+static ConVar neo_volsmoke_slabs( "neo_volsmoke_slabs", "1", FCVAR_CHEAT, "Test: 0 one march clipped by dest-alpha depth only, 1 far slabs depth-tested at their middle, 2 at their far end, 3 as 1 without the opaque-depth cull." );
 static ConVar neo_volsmoke_draw( "neo_volsmoke_draw", "1", FCVAR_CHEAT, "Draw smoke volumes." );
 static ConVar neo_volsmoke_fill_audit( "neo_volsmoke_fill_audit", "0", FCVAR_CHEAT, "Test: also ask the point and segment queries where a block query answered, keep their answer and count disagreements." );
 
@@ -96,6 +96,29 @@ static constexpr float NEO_VOLSMOKE_NEAR_RANGE = 172.0f;
 static constexpr float NEO_VOLSMOKE_SLAB_MIN = 24.0f;
 static constexpr float NEO_VOLSMOKE_SLAB_GROWTH = 0.08f; // of the slab's view depth
 static constexpr int NEO_VOLSMOKE_MAX_SLABS = 32;
+
+// Far slab cull: a coarse grid of eye rays finds the view depth past which
+// the smoke is certainly opaque, and slab parts behind it are not drawn.
+static constexpr float NEO_VOLSMOKE_CULL_TILE_PX = 64.0f;
+static constexpr int NEO_VOLSMOKE_CULL_MAX_COLS = 24;
+static constexpr int NEO_VOLSMOKE_CULL_MAX_ROWS = 14;
+
+// Coarser than the shader's step to keep the CPU cost low; the opaque
+// margin below covers the difference in sampling.
+static constexpr float NEO_VOLSMOKE_CULL_STEP = 16.0f;
+
+// Optical depth taken as opaque: transmittance 0.001, below the shader's
+// cutoff, so its different step phase cannot let hidden smoke show.
+static constexpr float NEO_VOLSMOKE_CULL_OPAQUE = 6.9f;
+
+// The shader's look noise moves the front in by up to this, times its
+// strength; the cull assumes the most.
+static constexpr float NEO_VOLSMOKE_PUFF_BITE = 28.0f;
+
+// The grid covers the view frustum with this margin, and starts this far in
+// front of the eye so a box around the camera keeps a finite screen size.
+static constexpr float NEO_VOLSMOKE_CULL_FRUSTUM_MARGIN = 1.02f;
+static constexpr float NEO_VOLSMOKE_CULL_MIN_DEPTH = 1.0f;
 
 // View depth range of a whole-volume march; farther than any volume is drawn.
 static constexpr float NEO_VOLSMOKE_MAX_DEPTH = 65536.0f;
@@ -176,10 +199,11 @@ enum VolSmokePerfStage_t
 	VOLSMOKE_PERF_SWEEP,
 	VOLSMOKE_PERF_PACK,
 	VOLSMOKE_PERF_DOWNLOAD,
+	VOLSMOKE_PERF_CULL,
 	VOLSMOKE_PERF_STAGES,
 };
 
-static const char *const s_VolSmokePerfNames[VOLSMOKE_PERF_STAGES] = { "fill", "density", "sweep", "pack", "download" };
+static const char *const s_VolSmokePerfNames[VOLSMOKE_PERF_STAGES] = { "fill", "density", "sweep", "pack", "download", "cull" };
 
 struct VolSmokePerf_t
 {
@@ -569,7 +593,7 @@ int C_NeoVolSmoke::s_nNextId = 0;
 // ---------------------------------------------------------------------------
 C_NeoVolSmoke::C_NeoVolSmoke()
 	: m_nId( s_nNextId++ ), m_flSpawnTime( 0 ), m_pWorld( NULL ), m_flFillSeconds( 0 ), m_flFillPeakFrame( 0 ), m_flFillDoneAge( -1.0f ), m_nLagFrames( 0 ),
-	  m_nBounded( 0 ), m_pRegen( NULL ), m_nPacked( 0 ), m_flNextUpload( 0 ), m_flRegrowEnd( -1.0f ), m_flSweptFront( -1.0f ), m_bUploadPending( false ), m_bCarveCompact( false )
+	  m_nBounded( 0 ), m_pRegen( NULL ), m_nPacked( 0 ), m_flNextUpload( 0 ), m_flRegrowEnd( -1.0f ), m_flSweptFront( -1.0f ), m_bUploadPending( false ), m_bShapePending( false ), m_nSlabTiles( 0 ), m_nSlabTilesCulled( 0 ), m_bCarveCompact( false )
 {
 }
 
@@ -974,13 +998,18 @@ static unsigned char VolSmokeByte( float v )
 }
 
 // Byte offset of a cell's texel: slice z lives in tile ( z % cols, z / cols ).
+static int VolSmokeAtlasOffset( int x, int y, int z )
+{
+	const int tileX = ( z % NEO_VOLSMOKE_ATLAS_COLS ) * CNeoSmokeFill::GRID_XY;
+	const int tileY = ( z / NEO_VOLSMOKE_ATLAS_COLS ) * CNeoSmokeFill::GRID_XY;
+	return ( ( tileY + y ) * NEO_VOLSMOKE_ATLAS_W + tileX + x ) * 4;
+}
+
 static int VolSmokeAtlasOffset( int idx )
 {
 	int x, y, z;
 	CNeoSmokeFill::Coords( idx, x, y, z );
-	const int tileX = ( z % NEO_VOLSMOKE_ATLAS_COLS ) * CNeoSmokeFill::GRID_XY;
-	const int tileY = ( z / NEO_VOLSMOKE_ATLAS_COLS ) * CNeoSmokeFill::GRID_XY;
-	return ( ( tileY + y ) * NEO_VOLSMOKE_ATLAS_W + tileX + x ) * 4;
+	return VolSmokeAtlasOffset( x, y, z );
 }
 
 void C_NeoVolSmoke::ClearAtlas()
@@ -1224,6 +1253,7 @@ void C_NeoVolSmoke::PrintStats() const
 	Msg( "neo_volsmoke_stats: volume %d memory %d KB (fill %d KB, carve times %d KB, world cache %d KB, atlas copy %d KB)\n",
 		m_nId, ( fillBytes + carveBytes + worldBytes + atlasBytes ) / 1024, fillBytes / 1024, carveBytes / 1024,
 		worldBytes / 1024, atlasBytes / 1024 );
+	Msg( "neo_volsmoke_stats: volume %d far slab tiles last frame %d, behind opaque smoke %d\n", m_nId, m_nSlabTiles, m_nSlabTilesCulled );
 	if ( m_pWorld && m_pWorld->AuditChecks() > 0 )
 	{
 		Msg( "neo_volsmoke_stats: volume %d audit: %d block answers checked, %d disagreements\n",
@@ -1275,6 +1305,7 @@ void C_NeoVolSmoke::ClientThink()
 			PackWeights( now );
 			changed = true;
 		}
+		m_bShapePending = m_bShapePending || changed;
 	}
 
 	if ( changed || front != m_flSweptFront )
@@ -1299,6 +1330,7 @@ void C_NeoVolSmoke::ClientThink()
 	++s_VolSmokePerf.uploads;
 	s_nUploadFrame = gpGlobals->framecount;
 	m_bUploadPending = false;
+	m_bShapePending = false;
 	m_flNextUpload = now + 1.0f / NEO_VOLSMOKE_UPLOAD_HZ;
 }
 
@@ -1339,6 +1371,19 @@ static void SetIntVar( IMaterial *pMat, const char *name, int i )
 	if ( found ) pVar->SetIntValue( i );
 }
 
+// The legacy smoke scales its alpha by the bloom and the fade the same way.
+float C_NeoVolSmoke::DrawExtinction() const
+{
+	const float age = gpGlobals->curtime - m_flSpawnTime;
+	float extinction = NEO_VOLSMOKE_EXTINCTION * VolSmokeBloom( age ) * VolSmokeFade( age );
+	if ( g_SmokeFogOverlayThermalOverride )
+	{
+		extinction *= r_neo_thermal_smoke_alpha.GetFloat();
+	}
+
+	return extinction;
+}
+
 void C_NeoVolSmoke::SetDrawParams( IMaterial *pMat ) const
 {
 	const Vector amb = m_vecColor * NEO_VOLSMOKE_AMBIENT_SHARE;
@@ -1351,14 +1396,8 @@ void C_NeoVolSmoke::SetDrawParams( IMaterial *pMat ) const
 		1.0f / (float)CNeoSmokeFill::GRID_XY );
 	SetVec3Var( pMat, "$ambient", amb );
 	SetVec3Var( pMat, "$lightcolor", lightCol );
-	// The legacy smoke scales its alpha by the bloom and the fade the same way.
 	const float age = gpGlobals->curtime - m_flSpawnTime;
-	float extinction = NEO_VOLSMOKE_EXTINCTION * VolSmokeBloom( age ) * VolSmokeFade( age );
-	if ( g_SmokeFogOverlayThermalOverride )
-	{
-		extinction *= r_neo_thermal_smoke_alpha.GetFloat();
-	}
-	SetFloatVar( pMat, "$extinction", extinction );
+	SetFloatVar( pMat, "$extinction", DrawExtinction() );
 	SetVec3Var( pMat, "$front", Vector( FrontRadius( age ), NEO_VOLSMOKE_DIST_RANGE, 1.0f / NEO_VOLSMOKE_EDGE ) );
 	SetFloatVar( pMat, "$noiseamp", neo_volsmoke_noise_amp.GetFloat() );
 	SetFloatVar( pMat, "$age", age );
@@ -1458,10 +1497,211 @@ static void SlabScreenRect( const Vector view[8], float lo, float hi, float &xMi
 	}
 }
 
+// The atlas's path length (0..1 of DIST_RANGE) and weight at a point,
+// filtered like the shader's lookup: clamped to the grid, trilinear.
+void C_NeoVolSmoke::SampleAtlas( const Vector &pos, float &dist, float &weight ) const
+{
+	const int size[3] = { CNeoSmokeFill::GRID_XY, CNeoSmokeFill::GRID_XY, CNeoSmokeFill::GRID_Z };
+	int base[3];
+	float frac[3];
+	for ( int a = 0; a < 3; ++a )
+	{
+		const float g = clamp( ( pos[a] - m_vecGridMin[a] ) / CNeoSmokeFill::CELL_SIZE - 0.5f, 0.0f, (float)( size[a] - 1 ) );
+		base[a] = MIN( (int)g, size[a] - 2 );
+		frac[a] = g - base[a];
+	}
+
+	// Neighbors in x and y are one texel and one atlas row apart within a slice.
+	const unsigned char *bits = m_pRegen->Bits();
+	const int dx = 4;
+	const int dy = 4 * NEO_VOLSMOKE_ATLAS_W;
+	dist = 0.0f;
+	weight = 0.0f;
+	for ( int bz = 0; bz < 2; ++bz )
+	{
+		const unsigned char *t = bits + VolSmokeAtlasOffset( base[0], base[1], base[2] + bz );
+		const float wz = bz ? frac[2] : 1.0f - frac[2];
+		const float w00 = wz * ( 1.0f - frac[0] ) * ( 1.0f - frac[1] );
+		const float w10 = wz * frac[0] * ( 1.0f - frac[1] );
+		const float w01 = wz * ( 1.0f - frac[0] ) * frac[1];
+		const float w11 = wz * frac[0] * frac[1];
+		dist += w00 * t[VOLSMOKE_BYTE_DIST] + w10 * t[dx + VOLSMOKE_BYTE_DIST]
+			+ w01 * t[dy + VOLSMOKE_BYTE_DIST] + w11 * t[dx + dy + VOLSMOKE_BYTE_DIST];
+		weight += w00 * t[VOLSMOKE_BYTE_WEIGHT] + w10 * t[dx + VOLSMOKE_BYTE_WEIGHT]
+			+ w01 * t[dy + VOLSMOKE_BYTE_WEIGHT] + w11 * t[dx + dy + VOLSMOKE_BYTE_WEIGHT];
+	}
+
+	dist /= 255.0f;
+	weight /= 255.0f;
+}
+
+// The shader's density at a point with the front moved in by the most the
+// look noise can bite: never more than what the shader draws.
+float C_NeoVolSmoke::DensityLowerBound( const Vector &pos, float front, float bite ) const
+{
+	float dist, weight;
+	SampleAtlas( pos, dist, weight );
+
+	const float depth = front - dist * NEO_VOLSMOKE_DIST_RANGE - bite;
+	if ( weight <= 0.001f || depth <= 0.0f )
+	{
+		return 0.0f;
+	}
+
+	const float edge = MIN( depth / NEO_VOLSMOKE_EDGE, 1.0f );
+	return weight * edge * edge * ( 3.0f - 2.0f * edge );
+}
+
+// View depth at which the lower-bound smoke along an eye ray becomes opaque,
+// or FLT_MAX if the ray leaves the smoke first. The ray ignores the world:
+// a wall in front of that depth hides everything behind it anyway.
+float C_NeoVolSmoke::OpaqueDepth( const Vector &eye, const Vector &dir, float front, float bite, float extinction ) const
+{
+	const float len = dir.Length();
+	const Vector unit = dir / len;
+
+	float t0 = 0.0f;
+	float t1 = FLT_MAX;
+	for ( int a = 0; a < 3; ++a )
+	{
+		if ( fabsf( unit[a] ) < 1.0e-6f )
+		{
+			if ( eye[a] < m_vecSmokeMin[a] || eye[a] > m_vecSmokeMax[a] )
+			{
+				return FLT_MAX;
+			}
+			continue;
+		}
+
+		const float ta = ( m_vecSmokeMin[a] - eye[a] ) / unit[a];
+		const float tb = ( m_vecSmokeMax[a] - eye[a] ) / unit[a];
+		t0 = MAX( t0, MIN( ta, tb ) );
+		t1 = MIN( t1, MAX( ta, tb ) );
+	}
+
+	// Cell weights are at most 1, which bounds what the rest of the ray can add.
+	float sigma = 0.0f;
+	for ( float t = t0; t < t1; t += NEO_VOLSMOKE_CULL_STEP )
+	{
+		if ( sigma + extinction * ( t1 - t ) < NEO_VOLSMOKE_CULL_OPAQUE )
+		{
+			return FLT_MAX;
+		}
+
+		const float step = MIN( NEO_VOLSMOKE_CULL_STEP, t1 - t );
+		sigma += DensityLowerBound( eye + unit * ( t + 0.5f * step ), front, bite ) * extinction * step;
+		if ( sigma >= NEO_VOLSMOKE_CULL_OPAQUE )
+		{
+			// The ray direction has view depth 1 per len along it.
+			return ( t + step ) / len;
+		}
+	}
+
+	return FLT_MAX;
+}
+
+// Screen tiles over the smoke, as view-space x / z and y / z, each with the
+// view depth past which all of it is opaque.
+struct VolSmokeCullGrid_t
+{
+	int cols;
+	int rows;
+	float xs[NEO_VOLSMOKE_CULL_MAX_COLS + 1];
+	float ys[NEO_VOLSMOKE_CULL_MAX_ROWS + 1];
+	float depth[NEO_VOLSMOKE_CULL_MAX_ROWS][NEO_VOLSMOKE_CULL_MAX_COLS];
+};
+
+// False when every slab is to be drawn whole.
+bool C_NeoVolSmoke::BuildCullGrid( IMatRenderContext *pRenderContext, const Vector view[8], float zMin, float zMax, VolSmokeCullGrid_t &grid ) const
+{
+	if ( neo_volsmoke_slabs.GetInt() == 3 || !m_pRegen || m_bShapePending )
+	{
+		return false;
+	}
+
+	// A carved hole is narrower than a tile: its corner rays can be opaque
+	// while the hole is not.
+	if ( gpGlobals->curtime < m_flRegrowEnd )
+	{
+		return false;
+	}
+
+	// Thin smoke (bloom, fade, thermal vision) never reaches the opaque depth.
+	const float extinction = DrawExtinction();
+	if ( extinction * ( m_vecSmokeMax - m_vecSmokeMin ).Length() < NEO_VOLSMOKE_CULL_OPAQUE )
+	{
+		return false;
+	}
+
+	VMatrix proj;
+	pRenderContext->GetMatrix( MATERIAL_PROJECTION, &proj );
+	int vx, vy, width, height;
+	pRenderContext->GetViewport( vx, vy, width, height );
+	if ( proj[0][0] <= 0.0f || proj[1][1] <= 0.0f || width <= 0 || height <= 0 )
+	{
+		return false;
+	}
+
+	const float tanX = NEO_VOLSMOKE_CULL_FRUSTUM_MARGIN / proj[0][0];
+	const float tanY = NEO_VOLSMOKE_CULL_FRUSTUM_MARGIN / proj[1][1];
+	float x0, x1, y0, y1;
+	SlabScreenRect( view, MAX( zMin, NEO_VOLSMOKE_CULL_MIN_DEPTH ), zMax, x0, x1, y0, y1 );
+	x0 = MAX( x0, -tanX );
+	x1 = MIN( x1, tanX );
+	y0 = MAX( y0, -tanY );
+	y1 = MIN( y1, tanY );
+	if ( x0 >= x1 || y0 >= y1 )
+	{
+		return false;
+	}
+
+	const float pxX = ( x1 - x0 ) / ( 2.0f * tanX ) * width;
+	const float pxY = ( y1 - y0 ) / ( 2.0f * tanY ) * height;
+	grid.cols = clamp( (int)ceilf( pxX / NEO_VOLSMOKE_CULL_TILE_PX ), 1, NEO_VOLSMOKE_CULL_MAX_COLS );
+	grid.rows = clamp( (int)ceilf( pxY / NEO_VOLSMOKE_CULL_TILE_PX ), 1, NEO_VOLSMOKE_CULL_MAX_ROWS );
+	for ( int i = 0; i <= grid.cols; ++i )
+	{
+		grid.xs[i] = ( i == grid.cols ) ? x1 : x0 + ( x1 - x0 ) * i / grid.cols;
+	}
+	for ( int j = 0; j <= grid.rows; ++j )
+	{
+		grid.ys[j] = ( j == grid.rows ) ? y1 : y0 + ( y1 - y0 ) * j / grid.rows;
+	}
+
+	const Vector &eye = CurrentViewOrigin();
+	const Vector &fwd = CurrentViewForward();
+	const Vector &right = CurrentViewRight();
+	const Vector &up = CurrentViewUp();
+	const float age = gpGlobals->curtime - m_flSpawnTime;
+	const float front = FrontRadius( age );
+	const float bite = NEO_VOLSMOKE_PUFF_BITE * neo_volsmoke_noise_amp.GetFloat();
+
+	float corner[NEO_VOLSMOKE_CULL_MAX_ROWS + 1][NEO_VOLSMOKE_CULL_MAX_COLS + 1];
+	for ( int j = 0; j <= grid.rows; ++j )
+	{
+		for ( int i = 0; i <= grid.cols; ++i )
+		{
+			const Vector dir = fwd + right * grid.xs[i] + up * grid.ys[j];
+			corner[j][i] = OpaqueDepth( eye, dir, front, bite, extinction );
+		}
+	}
+
+	// Chord length through a convex cloud is smallest at a tile's corners.
+	for ( int j = 0; j < grid.rows; ++j )
+	{
+		for ( int i = 0; i < grid.cols; ++i )
+		{
+			grid.depth[j][i] = MAX( MAX( corner[j][i], corner[j][i + 1] ), MAX( corner[j + 1][i], corner[j + 1][i + 1] ) );
+		}
+	}
+
+	return true;
+}
+
 // The part of the volume beyond NEAR_RANGE, as view-parallel quads at the
 // middle depth of each slab. The depth test hides a slab behind geometry, so
 // smoke behind a surface the dest-alpha depth cannot see is wrong by at most
-// half a slab along the ray.
+// half a slab along the ray. A slab's tiles behind opaque smoke are left out.
 void C_NeoVolSmoke::DrawFarSlabs( IMatRenderContext *pRenderContext )
 {
 	const Vector &eye = CurrentViewOrigin();
@@ -1485,6 +1725,8 @@ void C_NeoVolSmoke::DrawFarSlabs( IMatRenderContext *pRenderContext )
 		zMax = MAX( zMax, view[i].z );
 	}
 
+	m_nSlabTiles = 0;
+	m_nSlabTilesCulled = 0;
 	if ( zMax <= NEO_VOLSMOKE_NEAR_RANGE || neo_volsmoke_slabs.GetInt() == 0 )
 	{
 		return;
@@ -1509,34 +1751,111 @@ void C_NeoVolSmoke::DrawFarSlabs( IMatRenderContext *pRenderContext )
 		bounds[++nSlabs] = next;
 	}
 
+	VolSmokeCullGrid_t grid;
+	bool cull;
+	{
+		CVolSmokePerfScope perf( VOLSMOKE_PERF_CULL );
+		cull = BuildCullGrid( pRenderContext, view, zMin, zMax, grid );
+	}
+
+	struct SlabQuad_t
+	{
+		float xMin, xMax, yMin, yMax;
+		int slab;
+	};
+	CUtlVectorFixedGrowable< SlabQuad_t, 64 > quads;
+	const auto addQuad = [&]( float x0, float x1, float y0, float y1, int slab )
+	{
+		if ( x0 < x1 && y0 < y1 )
+		{
+			const SlabQuad_t q = { x0, x1, y0, y1, slab };
+			quads.AddToTail( q );
+		}
+	};
+
+	const auto collect = [&]( bool useCull )
+	{
+		quads.RemoveAll();
+		m_nSlabTiles = 0;
+		m_nSlabTilesCulled = 0;
+		for ( int s = nSlabs - 1; s >= 0; --s )
+		{
+			const float lo = bounds[s];
+			float xMin, xMax, yMin, yMax;
+			SlabScreenRect( view, lo, bounds[s + 1], xMin, xMax, yMin, yMax );
+			xMin = MAX( xMin, -NEO_VOLSMOKE_SLAB_MAX_TAN );
+			yMin = MAX( yMin, -NEO_VOLSMOKE_SLAB_MAX_TAN );
+			xMax = MIN( xMax, NEO_VOLSMOKE_SLAB_MAX_TAN );
+			yMax = MIN( yMax, NEO_VOLSMOKE_SLAB_MAX_TAN );
+			if ( !useCull )
+			{
+				addQuad( xMin, xMax, yMin, yMax, s );
+				continue;
+			}
+
+			// Each run of kept tiles in a row becomes one quad. The grid covers
+			// the visible part of every slab rectangle; the rest is off screen.
+			for ( int j = 0; j < grid.rows; ++j )
+			{
+				const float y0 = MAX( grid.ys[j], yMin );
+				const float y1 = MIN( grid.ys[j + 1], yMax );
+				if ( y0 >= y1 )
+				{
+					continue;
+				}
+
+				int runStart = -1;
+				for ( int i = 0; i <= grid.cols; ++i )
+				{
+					const bool keep = i < grid.cols && lo < grid.depth[j][i];
+					if ( i < grid.cols && grid.xs[i + 1] > xMin && grid.xs[i] < xMax )
+					{
+						++m_nSlabTiles;
+						m_nSlabTilesCulled += keep ? 0 : 1;
+					}
+
+					if ( keep && runStart < 0 )
+					{
+						runStart = i;
+					}
+					else if ( !keep && runStart >= 0 )
+					{
+						addQuad( MAX( grid.xs[runStart], xMin ), MIN( grid.xs[i], xMax ), y0, y1, s );
+						runStart = -1;
+					}
+				}
+			}
+		}
+	};
+
 	pRenderContext->Bind( m_SlabMaterial, (IClientRenderable *)this );
 	IMesh *pMesh = pRenderContext->GetDynamicMesh( true, NULL, NULL, m_SlabMaterial );
 
-	CMeshBuilder meshBuilder;
-	meshBuilder.Begin( pMesh, MATERIAL_TRIANGLES, 4 * nSlabs, 6 * nSlabs );
-	int nVert = 0;
-	for ( int s = nSlabs - 1; s >= 0; --s )
+	collect( cull );
+	int maxVerts, maxIndices;
+	pRenderContext->GetMaxToRender( pMesh, false, &maxVerts, &maxIndices );
+	if ( 4 * quads.Count() > maxVerts || 6 * quads.Count() > maxIndices )
 	{
-		const float lo = bounds[s];
-		const float hi = bounds[s + 1];
+		collect( false );
+	}
+
+	if ( quads.Count() == 0 )
+	{
+		return;
+	}
+
+	CMeshBuilder meshBuilder;
+	meshBuilder.Begin( pMesh, MATERIAL_TRIANGLES, 4 * quads.Count(), 6 * quads.Count() );
+	int nVert = 0;
+	for ( const SlabQuad_t &q : quads )
+	{
+		const float lo = bounds[q.slab];
+		const float hi = bounds[q.slab + 1];
 		const float zc = lo + testAt * ( hi - lo );
 		const Vector center = eye + fwd * zc;
 
-		float xMin, xMax, yMin, yMax;
-		SlabScreenRect( view, lo, hi, xMin, xMax, yMin, yMax );
-		if ( xMin > xMax )
-		{
-			// The vertex count is already set: a quad of no area draws nothing.
-			xMin = xMax = yMin = yMax = 0.0f;
-		}
-
-		xMin = MAX( xMin, -NEO_VOLSMOKE_SLAB_MAX_TAN );
-		yMin = MAX( yMin, -NEO_VOLSMOKE_SLAB_MAX_TAN );
-		xMax = MIN( xMax, NEO_VOLSMOKE_SLAB_MAX_TAN );
-		yMax = MIN( yMax, NEO_VOLSMOKE_SLAB_MAX_TAN );
-
-		const float xs[4] = { xMin, xMax, xMax, xMin };
-		const float ys[4] = { yMin, yMin, yMax, yMax };
+		const float xs[4] = { q.xMin, q.xMax, q.xMax, q.xMin };
+		const float ys[4] = { q.yMin, q.yMin, q.yMax, q.yMax };
 		for ( int i = 0; i < 4; ++i )
 		{
 			const Vector pos = center + right * ( xs[i] * zc ) + up * ( ys[i] * zc );

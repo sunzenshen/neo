@@ -26,6 +26,7 @@ class CNeoVolSmokeRegenerator;
 class IMatRenderContext;
 class IMaterial;
 class CNeoVolSmokeWorld;
+struct VolSmokeCullGrid_t;
 
 class C_NeoVolSmoke : public C_BaseEntity
 {
@@ -88,7 +89,12 @@ private:
 	void Carve( const Vector &start, const Vector &end, float radius );
 
 	// Rendering
+	float DrawExtinction() const;
 	void SetDrawParams( IMaterial *pMat ) const;
+	void SampleAtlas( const Vector &pos, float &dist, float &weight ) const;
+	float DensityLowerBound( const Vector &pos, float front, float bite ) const;
+	float OpaqueDepth( const Vector &eye, const Vector &dir, float front, float bite, float extinction ) const;
+	bool BuildCullGrid( IMatRenderContext *pRenderContext, const Vector view[8], float zMin, float zMax, VolSmokeCullGrid_t &grid ) const;
 	void DrawFarSlabs( IMatRenderContext *pRenderContext );
 	void DrawNearPass( IMatRenderContext *pRenderContext );
 
@@ -131,6 +137,9 @@ private:
 	float m_flRegrowEnd;       // curtime when the last carved cell has refilled
 	float m_flSweptFront;      // bloom front of the last light sweep
 	bool  m_bUploadPending;    // atlas changed, upload waits for a free frame
+	bool  m_bShapePending;     // path lengths or weights changed since the last upload
+	int   m_nSlabTiles;        // far slab tiles last frame, and those behind opaque smoke
+	int   m_nSlabTilesCulled;
 };
 
 #endif // C_NEO_VOLSMOKE_H
