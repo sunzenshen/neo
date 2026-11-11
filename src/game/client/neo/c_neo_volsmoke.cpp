@@ -71,7 +71,17 @@ static constexpr float NEO_VOLSMOKE_UPLOAD_HZ = 15.0f;
 // Fill work per frame, shared by all volumes, in small chunks so a frame
 // overruns the budget by at most one chunk. A slow machine blooms later,
 // never differently.
-static constexpr double NEO_VOLSMOKE_FILL_BUDGET = 0.0015; // seconds
+static constexpr double NEO_VOLSMOKE_FILL_BUDGET = 0.0015; // seconds, the least a frame gets
+
+// With many fills waiting a fixed slice per frame starves the last ones, and
+// more so at a low frame rate. The frame then gets a share of the frame
+// time instead, sized to finish the waiting fills by the time the oldest
+// reaches the target age.
+static constexpr double NEO_VOLSMOKE_FILL_TARGET_AGE = 2.0; // seconds
+static constexpr double NEO_VOLSMOKE_FILL_MAX_SHARE = 0.7;
+static constexpr double NEO_VOLSMOKE_FILL_MAX_BUDGET = 0.016; // seconds a frame
+static constexpr double NEO_VOLSMOKE_FILL_FIRST_GUESS = 0.05; // seconds per fill, until one is measured
+static constexpr float NEO_VOLSMOKE_FILL_SAME_AGE = 0.25f; // seconds apart that count as one age
 static constexpr int NEO_VOLSMOKE_FILL_CHUNK_CELLS = 64;
 static constexpr int NEO_VOLSMOKE_FILL_CHUNK_QUERIES = 128;
 
@@ -771,7 +781,7 @@ int C_NeoVolSmoke::s_nNextId = 0;
 // ---------------------------------------------------------------------------
 C_NeoVolSmoke::C_NeoVolSmoke()
 	: m_nId( s_nNextId++ ), m_flSpawnTime( 0 ), m_pWorld( NULL ), m_flFillSeconds( 0 ), m_flFillPeakFrame( 0 ), m_flFillDoneAge( -1.0f ), m_nLagFrames( 0 ),
-	  m_nBounded( 0 ), m_pRegen( NULL ), m_nPacked( 0 ), m_flNextUpload( 0 ), m_flRegrowEnd( -1.0f ), m_flSweptFront( -1.0f ), m_bUploadPending( false ), m_bShapePending( false ), m_nSlabTiles( 0 ), m_nSlabTilesCulled( 0 ), m_bCarveCompact( false )
+	  m_nBounded( 0 ), m_pRegen( NULL ), m_nPacked( 0 ), m_flNextUpload( 0 ), m_flRegrowEnd( -1.0f ), m_flSweptFront( -1.0f ), m_flUploadedFront( 0 ), m_bUploadPending( false ), m_nSlabTiles( 0 ), m_nSlabTilesCulled( 0 ), m_bCarveCompact( false )
 {
 }
 
@@ -1026,38 +1036,164 @@ Vector C_NeoVolSmoke::SampleColor( const Vector &origin )
 	return color;
 }
 
-void C_NeoVolSmoke::StepFill()
+// Runs the frame's fill work for all volumes, once a frame. One fill at a
+// time, the oldest first so no volume waits without bound, and among
+// volumes of one age the nearest to the camera first.
+void C_NeoVolSmoke::StepFills()
 {
-	if ( m_Fill.IsDone() )
+	static int s_nFillFrame = -1;
+	static double s_flFillEstimate = NEO_VOLSMOKE_FILL_FIRST_GUESS;
+	static double s_flLastSpent = 0.0;
+	if ( s_nFillFrame == gpGlobals->framecount )
 	{
-		CompactCarveTimes();
 		return;
 	}
 
-	static int s_nBudgetFrame = -1;
-	static double s_flBudgetSpent = 0.0;
-	if ( s_nBudgetFrame != gpGlobals->framecount )
+	s_nFillFrame = gpGlobals->framecount;
+
+	// The last frame's time without its fill work, so a long fill slice
+	// does not earn the next frame a longer one.
+	const double frame = MAX( 0.0, (double)gpGlobals->absoluteframetime - s_flLastSpent );
+	s_flLastSpent = 0.0;
+
+	int waiting = 0;
+	float oldest = gpGlobals->curtime;
+	for ( int i = 0; i < s_Volumes.Count(); ++i )
 	{
-		s_nBudgetFrame = gpGlobals->framecount;
-		s_flBudgetSpent = 0.0;
+		if ( !s_Volumes[i]->m_Fill.IsDone() )
+		{
+			++waiting;
+			oldest = MIN( oldest, s_Volumes[i]->m_flSpawnTime );
+		}
 	}
 
+	if ( waiting == 0 )
+	{
+		return;
+	}
+
+	const double work = waiting * s_flFillEstimate;
+	const double timeLeft = NEO_VOLSMOKE_FILL_TARGET_AGE - ( gpGlobals->curtime - oldest );
+	double share = NEO_VOLSMOKE_FILL_MAX_SHARE;
+	if ( work < share * timeLeft )
+	{
+		share = work / timeLeft;
+	}
+
+	const double budget = clamp( frame * share / ( 1.0 - share ), NEO_VOLSMOKE_FILL_BUDGET, NEO_VOLSMOKE_FILL_MAX_BUDGET );
+	const Vector eye = MainViewOrigin();
+
+	double spent = 0.0;
+	while ( spent < budget )
+	{
+		oldest = gpGlobals->curtime;
+		for ( int i = 0; i < s_Volumes.Count(); ++i )
+		{
+			if ( !s_Volumes[i]->m_Fill.IsDone() )
+			{
+				oldest = MIN( oldest, s_Volumes[i]->m_flSpawnTime );
+			}
+		}
+
+		C_NeoVolSmoke *pNearest = NULL;
+		float nearestSqr = 0.0f;
+		for ( int i = 0; i < s_Volumes.Count(); ++i )
+		{
+			C_NeoVolSmoke *pVol = s_Volumes[i];
+			if ( pVol->m_Fill.IsDone() || pVol->m_flSpawnTime > oldest + NEO_VOLSMOKE_FILL_SAME_AGE )
+			{
+				continue;
+			}
+
+			const float distSqr = pVol->m_vecSpawn.DistToSqr( eye );
+			if ( !pNearest || distSqr < nearestSqr )
+			{
+				pNearest = pVol;
+				nearestSqr = distSqr;
+			}
+		}
+
+		if ( !pNearest )
+		{
+			break;
+		}
+
+		spent += pNearest->StepFill( budget - spent );
+		if ( pNearest->m_Fill.IsDone() )
+		{
+			s_flFillEstimate = pNearest->m_flFillSeconds;
+		}
+	}
+
+	s_flLastSpent = spent;
+}
+
+// Works on this volume's fill for up to `budget` seconds. Returns the time spent.
+double C_NeoVolSmoke::StepFill( double budget )
+{
 	const double start = Plat_FloatTime();
 	double spent = 0.0;
-	while ( !m_Fill.IsDone() && s_flBudgetSpent + spent < NEO_VOLSMOKE_FILL_BUDGET )
+	while ( !m_Fill.IsDone() && spent < budget )
 	{
 		m_Fill.Step( NEO_VOLSMOKE_FILL_CHUNK_CELLS, NEO_VOLSMOKE_FILL_CHUNK_QUERIES );
 		spent = Plat_FloatTime() - start;
 	}
 
-	s_flBudgetSpent += spent;
 	m_flFillSeconds += spent;
 	m_flFillPeakFrame = MAX( m_flFillPeakFrame, spent );
 	if ( m_Fill.IsDone() )
 	{
 		m_flFillDoneAge = gpGlobals->curtime - m_flSpawnTime;
-		CompactCarveTimes();
 	}
+
+	return spent;
+}
+
+bool C_NeoVolSmoke::IsRegrowing( float now ) const
+{
+	return now < m_flRegrowEnd + 1.0f / NEO_VOLSMOKE_UPLOAD_HZ;
+}
+
+// Has the atlas new cells or carve weights to take, not only new light?
+bool C_NeoVolSmoke::ShapeChanged( float now ) const
+{
+	return m_nPacked < m_Fill.FinalizedCount() || IsRegrowing( now );
+}
+
+// The volume whose atlas upload has waited longest, a changed shape before a
+// light change. NULL when none waited at the start of the frame.
+C_NeoVolSmoke *C_NeoVolSmoke::UploadTurn()
+{
+	static int s_nTurnFrame = -1;
+	static C_NeoVolSmoke *s_pTurn = NULL;
+	if ( s_nTurnFrame == gpGlobals->framecount )
+	{
+		return s_pTurn;
+	}
+
+	s_nTurnFrame = gpGlobals->framecount;
+	s_pTurn = NULL;
+	for ( int i = 0; i < s_Volumes.Count(); ++i )
+	{
+		C_NeoVolSmoke *pVol = s_Volumes[i];
+		if ( !pVol->m_bUploadPending )
+		{
+			continue;
+		}
+
+		const float now = gpGlobals->curtime;
+		if ( s_pTurn && s_pTurn->ShapeChanged( now ) && !pVol->ShapeChanged( now ) )
+		{
+			continue;
+		}
+
+		if ( !s_pTurn || ( pVol->ShapeChanged( now ) && !s_pTurn->ShapeChanged( now ) ) || pVol->m_flNextUpload < s_pTurn->m_flNextUpload )
+		{
+			s_pTurn = pVol;
+		}
+	}
+
+	return s_pTurn;
 }
 
 // Once the fill is done only finalized cells can be carved, so the carve
@@ -1082,7 +1218,15 @@ void C_NeoVolSmoke::CompactCarveTimes()
 }
 
 // Distance of the expanding front from the grenade, along the gas path.
+// Never past the cells the shader has: a volume whose fill or upload is late
+// grows as far as it has filled instead of showing a cut-off shape.
 float C_NeoVolSmoke::FrontRadius( float age ) const
+{
+	return MIN( BloomRadius( age ), m_flUploadedFront );
+}
+
+// The front by the bloom curve alone.
+float C_NeoVolSmoke::BloomRadius( float age ) const
 {
 	const float bloom = VolSmokeBloom( age );
 	if ( m_Fill.IsDone() )
@@ -1561,11 +1705,15 @@ void C_NeoVolSmoke::ClientThink()
 
 	{
 		CVolSmokePerfScope perf( VOLSMOKE_PERF_FILL );
-		StepFill();
+		StepFills();
+		if ( m_Fill.IsDone() )
+		{
+			CompactCarveTimes();
+		}
 	}
 
 	const float front = FrontRadius( now - m_flSpawnTime );
-	if ( !m_Fill.IsDone() && CNeoSmokeFill::DistToUnits( m_Fill.FrontDist() ) < front )
+	if ( front < BloomRadius( now - m_flSpawnTime ) )
 	{
 		++m_nLagFrames;
 	}
@@ -1582,33 +1730,32 @@ void C_NeoVolSmoke::ClientThink()
 	}
 
 	// A grown volume with no carve refilling changes nothing.
-	bool changed = false;
+	const bool regrow = IsRegrowing( now );
+	m_bUploadPending = m_bUploadPending || ShapeChanged( now ) || front != m_flSweptFront;
+
+	// One upload a frame across all volumes: an upload can stall the frame.
+	// A volume packs and sweeps on its turn only, or many volumes would
+	// each redo that work every frame while they wait.
+	static int s_nUploadFrame = -1;
+	C_NeoVolSmoke *pTurn = UploadTurn();
+	if ( !m_bUploadPending || s_nUploadFrame == gpGlobals->framecount || ( pTurn && pTurn != this ) )
 	{
-		CVolSmokePerfScope perf( VOLSMOKE_PERF_PACK );
-		changed = PackNewCells( now );
-		if ( now < m_flRegrowEnd + 1.0f / NEO_VOLSMOKE_UPLOAD_HZ )
-		{
-			PackWeights( now );
-			changed = true;
-		}
-		m_bShapePending = m_bShapePending || changed;
+		return;
 	}
 
-	if ( changed || front != m_flSweptFront )
+	{
+		CVolSmokePerfScope perf( VOLSMOKE_PERF_PACK );
+		PackNewCells( now );
+		if ( regrow )
+		{
+			PackWeights( now );
+		}
+	}
+
 	{
 		CVolSmokePerfScope perf( VOLSMOKE_PERF_SWEEP );
 		SweepLight( front, now );
 		m_flSweptFront = front;
-		changed = true;
-	}
-
-	m_bUploadPending = m_bUploadPending || changed;
-
-	// One upload a frame across all volumes: an upload can stall the frame.
-	static int s_nUploadFrame = -1;
-	if ( !m_bUploadPending || s_nUploadFrame == gpGlobals->framecount )
-	{
-		return;
 	}
 
 	CVolSmokePerfScope perf( VOLSMOKE_PERF_DOWNLOAD );
@@ -1616,8 +1763,11 @@ void C_NeoVolSmoke::ClientThink()
 	++s_VolSmokePerf.uploads;
 	s_nUploadFrame = gpGlobals->framecount;
 	m_bUploadPending = false;
-	m_bShapePending = false;
 	m_flNextUpload = now + 1.0f / NEO_VOLSMOKE_UPLOAD_HZ;
+	if ( m_nPacked > 0 )
+	{
+		m_flUploadedFront = CNeoSmokeFill::DistToUnits( m_Fill.Dist( m_Fill.FinalizedCell( m_nPacked - 1 ) ) );
+	}
 }
 
 // ---------------------------------------------------------------------------
@@ -1962,7 +2112,7 @@ struct VolSmokeCullGrid_t
 // False when every slab is to be drawn whole.
 bool C_NeoVolSmoke::BuildCullGrid( IMatRenderContext *pRenderContext, const Vector view[8], float zMin, float zMax, VolSmokeCullGrid_t &grid ) const
 {
-	if ( neo_volsmoke_slabs.GetInt() == 3 || !m_pRegen || m_bShapePending )
+	if ( neo_volsmoke_slabs.GetInt() == 3 || !m_pRegen )
 	{
 		return false;
 	}
