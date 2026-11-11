@@ -71,6 +71,9 @@ public:
 	virtual int  DrawModel( int flags ) override;
 
 	void PrintStats() const;
+	unsigned long long ClientFieldHash() const;
+	unsigned long long LatticeFieldHash() const;
+	unsigned long long AtlasHash() const;
 
 private:
 	void Init( const Vector &origin, float spawnTime );
@@ -132,6 +135,7 @@ private:
 
 	int    m_nId;
 	int    m_nBox[3];          // the volume's box of cells, from the fill
+	int    m_nSeedCorner[3];   // the cell corner the grenade sits on, in the box
 	Vector m_vecGridMin;
 	Vector m_vecGridMax;
 	Vector m_vecSpawn;
