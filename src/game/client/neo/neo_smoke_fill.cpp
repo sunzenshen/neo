@@ -74,7 +74,22 @@ static int NeoSmokeISqrt( int v )
 }
 
 CNeoSmokeFill::CNeoSmokeFill()
-	: m_pWorld( NULL ), m_nHeapCount( 0 ), m_nFinalized( 0 ), m_nFrontDist( 0 ), m_nQueries( 0 ), m_bDone( true )
+	: m_pWorld( NULL ), m_pOcc( NULL ), m_pMoveMemo( NULL ), m_pState( NULL ), m_pDist( NULL ), m_pAnchor( NULL ),
+	  m_pHeap( NULL ), m_pHeapPos( NULL ), m_pOrder( NULL ), m_pFinalBits( NULL ), m_pWordRank( NULL ), m_pFinalDist( NULL ),
+	  m_nHeapCount( 0 ), m_nFinalized( 0 ), m_nFrontDist( 0 ), m_nQueries( 0 ), m_bDone( true )
+{
+}
+
+CNeoSmokeFill::~CNeoSmokeFill()
+{
+	FreeWork();
+	delete[] m_pOrder;
+	delete[] m_pFinalBits;
+	delete[] m_pWordRank;
+	delete[] m_pFinalDist;
+}
+
+void CNeoSmokeFill::AllocWork()
 {
 	m_pOcc = new unsigned char[CELLS];
 	m_pMoveMemo = new unsigned int[CELLS];
@@ -83,10 +98,9 @@ CNeoSmokeFill::CNeoSmokeFill()
 	m_pAnchor = new int[CELLS];
 	m_pHeap = new int[CELLS];
 	m_pHeapPos = new int[CELLS];
-	m_pOrder = new int[NEO_SMOKE_FILL_BUDGET];
 }
 
-CNeoSmokeFill::~CNeoSmokeFill()
+void CNeoSmokeFill::FreeWork()
 {
 	delete[] m_pOcc;
 	delete[] m_pMoveMemo;
@@ -95,11 +109,99 @@ CNeoSmokeFill::~CNeoSmokeFill()
 	delete[] m_pAnchor;
 	delete[] m_pHeap;
 	delete[] m_pHeapPos;
+	m_pOcc = NULL;
+	m_pMoveMemo = NULL;
+	m_pState = NULL;
+	m_pDist = NULL;
+	m_pAnchor = NULL;
+	m_pHeap = NULL;
+	m_pHeapPos = NULL;
+}
+
+static int NeoSmokePopCount( unsigned long long v )
+{
+	v = v - ( ( v >> 1 ) & 0x5555555555555555ull );
+	v = ( v & 0x3333333333333333ull ) + ( ( v >> 2 ) & 0x3333333333333333ull );
+	v = ( v + ( v >> 4 ) ) & 0x0f0f0f0f0f0f0f0full;
+	return (int)( ( v * 0x0101010101010101ull ) >> 56 );
+}
+
+static constexpr int NEO_SMOKE_FILL_WORDS = CNeoSmokeFill::CELLS / 64;
+static_assert( CNeoSmokeFill::CELLS % 64 == 0, "the finished field packs 64 cells a word" );
+static_assert( NEO_SMOKE_FILL_REACH_CAP < 0xffff, "finished path lengths are 16 bits" );
+
+// Keeps what the finished field needs and frees the work arrays.
+void CNeoSmokeFill::Finish()
+{
+	m_pFinalBits = new unsigned long long[NEO_SMOKE_FILL_WORDS];
+	m_pWordRank = new int[NEO_SMOKE_FILL_WORDS];
+	m_pFinalDist = new unsigned short[MAX( m_nFinalized, 1 )];
+
+	int rank = 0;
+	for ( int w = 0; w < NEO_SMOKE_FILL_WORDS; ++w )
+	{
+		m_pWordRank[w] = rank;
+		unsigned long long bits = 0;
+		for ( int b = 0; b < 64; ++b )
+		{
+			const int idx = w * 64 + b;
+			if ( m_pState[idx] != STATE_FINAL )
+			{
+				continue;
+			}
+
+			bits |= 1ull << b;
+			m_pFinalDist[rank++] = (unsigned short)m_pDist[idx];
+		}
+		m_pFinalBits[w] = bits;
+	}
+
+	int *pOrder = new int[MAX( m_nFinalized, 1 )];
+	memcpy( pOrder, m_pOrder, m_nFinalized * sizeof( int ) );
 	delete[] m_pOrder;
+	m_pOrder = pOrder;
+
+	FreeWork();
+}
+
+int CNeoSmokeFill::FinalRank( int idx ) const
+{
+	const int w = idx >> 6;
+	const unsigned long long below = ( 1ull << ( idx & 63 ) ) - 1;
+	return m_pWordRank[w] + NeoSmokePopCount( m_pFinalBits[w] & below );
+}
+
+int CNeoSmokeFill::MemoryBytes() const
+{
+	int bytes = 0;
+	if ( m_pState )
+	{
+		const int perCell = sizeof( *m_pOcc ) + sizeof( *m_pMoveMemo ) + sizeof( *m_pState ) + sizeof( *m_pDist )
+			+ sizeof( *m_pAnchor ) + sizeof( *m_pHeap ) + sizeof( *m_pHeapPos );
+		bytes += CELLS * perCell + NEO_SMOKE_FILL_BUDGET * (int)sizeof( int );
+	}
+	else if ( m_pFinalBits )
+	{
+		bytes += NEO_SMOKE_FILL_WORDS * (int)( sizeof( *m_pFinalBits ) + sizeof( *m_pWordRank ) );
+		bytes += m_nFinalized * (int)( sizeof( *m_pFinalDist ) + sizeof( *m_pOrder ) );
+	}
+
+	return bytes;
 }
 
 void CNeoSmokeFill::Start( INeoSmokeFillWorld *pWorld )
 {
+	FreeWork();
+	delete[] m_pOrder;
+	delete[] m_pFinalBits;
+	delete[] m_pWordRank;
+	delete[] m_pFinalDist;
+	m_pFinalBits = NULL;
+	m_pWordRank = NULL;
+	m_pFinalDist = NULL;
+	AllocWork();
+	m_pOrder = new int[NEO_SMOKE_FILL_BUDGET];
+
 	m_pWorld = pWorld;
 	m_nHeapCount = 0;
 	m_nFinalized = 0;
@@ -128,6 +230,7 @@ void CNeoSmokeFill::Start( INeoSmokeFillWorld *pWorld )
 	if ( !CellOpen( sx, sy, sz ) )
 	{
 		m_bDone = true;
+		Finish();
 		return;
 	}
 
@@ -171,6 +274,11 @@ bool CNeoSmokeFill::Step( int maxCells, int maxQueries )
 	if ( m_nFinalized >= NEO_SMOKE_FILL_BUDGET )
 	{
 		m_bDone = true;
+	}
+
+	if ( m_bDone && m_pState )
+	{
+		Finish();
 	}
 
 	return m_bDone;

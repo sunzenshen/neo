@@ -321,6 +321,15 @@ public:
 	// For neo_volsmoke_stats.
 	double QuerySeconds() const { return m_flQuerySeconds; }
 	int Traces() const { return m_nTraces; }
+	int MemoryBytes() const
+	{
+		int bytes = 0;
+		for ( const CUtlVector<unsigned char> &blocks : m_Blocks )
+		{
+			bytes += blocks.Count();
+		}
+		return bytes;
+	}
 	int AuditChecks() const { return m_nAuditChecks; }
 	int AuditDisagreements() const { return m_nAuditDisagree; }
 
@@ -418,6 +427,7 @@ public:
 	}
 
 	unsigned char *Bits() { return m_Bits.Base(); }
+	int MemoryBytes() const { return m_Bits.Count(); }
 	int Pitch() const { return m_nWidth * 4; }
 
 	virtual void RegenerateTextureBits( ITexture *pTexture, IVTFTexture *pVTFTexture, Rect_t *pRect ) override
@@ -540,7 +550,7 @@ int C_NeoVolSmoke::s_nNextId = 0;
 // ---------------------------------------------------------------------------
 C_NeoVolSmoke::C_NeoVolSmoke()
 	: m_nId( s_nNextId++ ), m_flSpawnTime( 0 ), m_pWorld( NULL ), m_flFillSeconds( 0 ), m_flFillPeakFrame( 0 ), m_flFillDoneAge( -1.0f ), m_nLagFrames( 0 ),
-	  m_nBounded( 0 ), m_pRegen( NULL ), m_nPacked( 0 ), m_flNextUpload( 0 ), m_flRegrowEnd( -1.0f ), m_flSweptFront( -1.0f ), m_bUploadPending( false )
+	  m_nBounded( 0 ), m_pRegen( NULL ), m_nPacked( 0 ), m_flNextUpload( 0 ), m_flRegrowEnd( -1.0f ), m_flSweptFront( -1.0f ), m_bUploadPending( false ), m_bCarveCompact( false )
 {
 }
 
@@ -779,6 +789,7 @@ void C_NeoVolSmoke::StepFill()
 {
 	if ( m_Fill.IsDone() )
 	{
+		CompactCarveTimes();
 		return;
 	}
 
@@ -804,7 +815,29 @@ void C_NeoVolSmoke::StepFill()
 	if ( m_Fill.IsDone() )
 	{
 		m_flFillDoneAge = gpGlobals->curtime - m_flSpawnTime;
+		CompactCarveTimes();
 	}
+}
+
+// Once the fill is done only finalized cells can be carved, so the carve
+// times shrink from one per grid cell to one per finalized cell.
+void C_NeoVolSmoke::CompactCarveTimes()
+{
+	if ( m_bCarveCompact )
+	{
+		return;
+	}
+
+	CUtlVector< float > compact;
+	compact.SetCount( m_Fill.FinalizedCount() );
+	for ( int k = 0; k < m_Fill.FinalizedCount(); ++k )
+	{
+		const int cell = m_Fill.FinalizedCell( k );
+		compact[m_Fill.FinalRank( cell )] = m_CarveTime[cell];
+	}
+
+	m_CarveTime.Swap( compact );
+	m_bCarveCompact = true;
 }
 
 // Distance of the expanding front from the grenade, along the gas path.
@@ -824,9 +857,10 @@ float C_NeoVolSmoke::FrontRadius( float age ) const
 float C_NeoVolSmoke::CellWeight( int idx, float now ) const
 {
 	float hole = 1.0f;
-	if ( m_CarveTime[idx] >= 0.0f )
+	const float carveTime = m_CarveTime[CarveSlot( idx )];
+	if ( carveTime >= 0.0f )
 	{
-		hole = clamp( ( now - m_CarveTime[idx] ) / neo_volsmoke_regrow.GetFloat(), 0.0f, 1.0f );
+		hole = clamp( ( now - carveTime ) / neo_volsmoke_regrow.GetFloat(), 0.0f, 1.0f );
 		hole = hole * hole; // slow start, then refill
 	}
 
@@ -1047,7 +1081,7 @@ void C_NeoVolSmoke::Carve( const Vector &start, const Vector &end, float radius 
 				const Vector closest = start + seg * t;
 				if ( ( c - closest ).LengthSqr() <= r2 )
 				{
-					m_CarveTime[i] = now;
+					m_CarveTime[CarveSlot( i )] = now;
 					touched = true;
 				}
 			}
@@ -1082,6 +1116,13 @@ void C_NeoVolSmoke::PrintStats() const
 		m_nId, gpGlobals->curtime - m_flSpawnTime, m_Fill.IsDone() ? 1 : 0, m_flFillDoneAge, m_Fill.FinalizedCount(),
 		CNeoSmokeFill::DistToUnits( m_Fill.FrontDist() ), m_Fill.WorldQueries(), traces,
 		m_flFillSeconds * 1000.0, queryMs, m_flFillPeakFrame * 1000.0, hash, m_nLagFrames );
+	const int fillBytes = m_Fill.MemoryBytes();
+	const int carveBytes = m_CarveTime.Count() * (int)sizeof( float );
+	const int worldBytes = m_pWorld ? m_pWorld->MemoryBytes() : 0;
+	const int atlasBytes = m_pRegen ? m_pRegen->MemoryBytes() : 0;
+	Msg( "neo_volsmoke_stats: volume %d memory %d KB (fill %d KB, carve times %d KB, world cache %d KB, atlas copy %d KB)\n",
+		m_nId, ( fillBytes + carveBytes + worldBytes + atlasBytes ) / 1024, fillBytes / 1024, carveBytes / 1024,
+		worldBytes / 1024, atlasBytes / 1024 );
 	if ( m_pWorld && m_pWorld->AuditChecks() > 0 )
 	{
 		Msg( "neo_volsmoke_stats: volume %d audit: %d block answers checked, %d disagreements\n",
