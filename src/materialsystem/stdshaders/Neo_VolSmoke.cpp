@@ -1,9 +1,11 @@
 // NEO volumetric smoke shader.
 //
 // Draws the AABB of a voxel smoke volume (see client/neo/c_neo_volsmoke.cpp)
-// and raymarches the slice atlas in $basetexture. Depth test is done in the
+// and raymarches the slice atlas in $basetexture. The near pass clips in the
 // pixel shader against the engine's depth-in-dest-alpha frame buffer copy, so
-// hardware depth test is off and the box can be drawn with its far faces only.
+// hardware depth test is off and the box is drawn with its far faces only.
+// That copy saturates a short way from the eye, so $slab materials draw the
+// rest of the volume as view-parallel quads that use the hardware depth test.
 
 #include "BaseVSShader.h"
 
@@ -26,6 +28,7 @@ BEGIN_SHADER_PARAMS
 	SHADER_PARAM( NOISESCALE, SHADER_PARAM_TYPE_FLOAT,   "0.045",         "Noise frequency (1/world units)" )
 	SHADER_PARAM( JITTER,     SHADER_PARAM_TYPE_INTEGER, "1",             "Per-pixel step jitter (grain instead of banding)" )
 	SHADER_PARAM( DEBUGMODE,  SHADER_PARAM_TYPE_INTEGER, "0",             "0 off, 1 coverage, 2 scene depth, 3 box hit" )
+	SHADER_PARAM( SLAB,       SHADER_PARAM_TYPE_INTEGER, "0",             "1 = far slabs: hardware depth test, no culling" )
 END_SHADER_PARAMS
 
 SHADER_INIT_PARAMS()
@@ -63,9 +66,11 @@ SHADER_DRAW
 		int texCoordDims[1] = { 2 };
 		pShaderShadow->VertexShaderVertexFormat( VERTEX_POSITION, 1, texCoordDims, 0 );
 
-		// Manual depth test in the PS; never touch hardware depth.
+		// The near pass clips in the PS; slabs sit at their own depth and use
+		// the depth buffer. Neither writes depth.
+		const bool bSlab = params[SLAB]->GetIntValue() != 0;
 		pShaderShadow->EnableDepthWrites( false );
-		pShaderShadow->EnableDepthTest( false );
+		pShaderShadow->EnableDepthTest( bSlab );
 
 		// Dest alpha holds scene depth for later translucents - don't clobber it.
 		pShaderShadow->EnableAlphaWrites( false );
@@ -74,14 +79,16 @@ SHADER_DRAW
 		pShaderShadow->EnableBlending( true );
 		pShaderShadow->BlendFunc( SHADER_BLEND_ONE, SHADER_BLEND_ONE_MINUS_SRC_ALPHA );
 
-		// Culling is driven by the caller (far faces only, see client code).
-		pShaderShadow->EnableCulling( true );
+		// The near pass culls by the caller's cull mode (far faces only, see
+		// client code); a slab quad is one face and may wind either way.
+		pShaderShadow->EnableCulling( !bSlab );
 
 		pShaderShadow->EnableTexture( SHADER_SAMPLER0, true ); // atlas (data, not sRGB)
 		pShaderShadow->EnableTexture( SHADER_SAMPLER1, true ); // frame buffer / depth
 		pShaderShadow->EnableSRGBRead( SHADER_SAMPLER0, false );
 		pShaderShadow->EnableSRGBRead( SHADER_SAMPLER1, false );
-		pShaderShadow->EnableSRGBWrite( true );
+		// The pixel shader writes gamma itself (see BlendOutput).
+		pShaderShadow->EnableSRGBWrite( false );
 
 		DECLARE_STATIC_VERTEX_SHADER( neo_volsmoke_vs30 );
 		SET_STATIC_VERTEX_SHADER( neo_volsmoke_vs30 );
