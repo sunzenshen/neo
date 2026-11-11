@@ -26,7 +26,7 @@ public:
 class CNeoSmokeFill
 {
 public:
-	static constexpr int GRID_XY = 64;
+	static constexpr int GRID_XY = 128;
 	static constexpr int GRID_Z = 32;
 	static constexpr int CELLS = GRID_XY * GRID_XY * GRID_Z;
 	static constexpr float CELL_SIZE = 9.0f;

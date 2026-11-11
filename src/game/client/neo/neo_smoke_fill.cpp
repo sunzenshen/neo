@@ -12,8 +12,9 @@ static constexpr int NEO_SMOKE_FILL_BUDGET = (int)( ( 2.0 / 3.0 ) * NEO_SMOKE_FI
 	* NEO_SMOKE_FILL_DOME_RADIUS * NEO_SMOKE_FILL_DOME_RADIUS * NEO_SMOKE_FILL_DOME_RADIUS
 	/ ( (double)CNeoSmokeFill::CELL_SIZE * CNeoSmokeFill::CELL_SIZE * CNeoSmokeFill::CELL_SIZE ) + 0.5 );
 
-// Longest path the gas may take. Keeps a narrow hall inside the grid.
-static constexpr int NEO_SMOKE_FILL_REACH_CAP = (int)( 270.0 * CNeoSmokeFill::DIST_SCALE / CNeoSmokeFill::CELL_SIZE );
+// Longest path the gas may take. Keeps a narrow hall inside the grid; a
+// 126 u hall then holds about four fifths of the gas.
+static constexpr int NEO_SMOKE_FILL_REACH_CAP = (int)( 560.0 * CNeoSmokeFill::DIST_SCALE / CNeoSmokeFill::CELL_SIZE );
 
 // A grenade resting in a corner can put the first cell inside the floor.
 static constexpr int NEO_SMOKE_FILL_SEED_LIFT = 4;
