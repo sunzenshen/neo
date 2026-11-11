@@ -67,9 +67,12 @@ static constexpr float NEO_VOLSMOKE_DIST_RANGE = 0.5f * CNeoSmokeFill::GRID_XY *
 // it is uploaded then, at most this often, and never after.
 static constexpr float NEO_VOLSMOKE_UPLOAD_HZ = 15.0f;
 
-// Fill work per frame. A slow machine blooms later, never differently.
-static constexpr int NEO_VOLSMOKE_FILL_CELLS_PER_FRAME = 1024;
-static constexpr int NEO_VOLSMOKE_FILL_QUERIES_PER_FRAME = 4096;
+// Fill work per frame, shared by all volumes, in small chunks so a frame
+// overruns the budget by at most one chunk. A slow machine blooms later,
+// never differently.
+static constexpr double NEO_VOLSMOKE_FILL_BUDGET = 0.0015; // seconds
+static constexpr int NEO_VOLSMOKE_FILL_CHUNK_CELLS = 64;
+static constexpr int NEO_VOLSMOKE_FILL_CHUNK_QUERIES = 128;
 
 // The legacy smoke's time curves: sine ease-out bloom, cosine fade.
 static constexpr float NEO_VOLSMOKE_BLOOM_TIME = 5.5f;
@@ -327,7 +330,7 @@ int C_NeoVolSmoke::s_nNextId = 0;
 
 // ---------------------------------------------------------------------------
 C_NeoVolSmoke::C_NeoVolSmoke()
-	: m_nId( s_nNextId++ ), m_flSpawnTime( 0 ), m_pWorld( NULL ), m_flFillSeconds( 0 ), m_flFillPeakFrame( 0 ),
+	: m_nId( s_nNextId++ ), m_flSpawnTime( 0 ), m_pWorld( NULL ), m_flFillSeconds( 0 ), m_flFillPeakFrame( 0 ), m_flFillDoneAge( -1.0f ), m_nLagFrames( 0 ),
 	  m_nBounded( 0 ), m_pRegen( NULL ), m_nPacked( 0 ), m_flNextUpload( 0 ), m_flRegrowEnd( -1.0f ), m_flSweptFront( -1.0f )
 {
 }
@@ -560,12 +563,29 @@ void C_NeoVolSmoke::StepFill()
 		return;
 	}
 
-	const double start = Plat_FloatTime();
-	m_Fill.Step( NEO_VOLSMOKE_FILL_CELLS_PER_FRAME, NEO_VOLSMOKE_FILL_QUERIES_PER_FRAME );
-	const double spent = Plat_FloatTime() - start;
+	static int s_nBudgetFrame = -1;
+	static double s_flBudgetSpent = 0.0;
+	if ( s_nBudgetFrame != gpGlobals->framecount )
+	{
+		s_nBudgetFrame = gpGlobals->framecount;
+		s_flBudgetSpent = 0.0;
+	}
 
+	const double start = Plat_FloatTime();
+	double spent = 0.0;
+	while ( !m_Fill.IsDone() && s_flBudgetSpent + spent < NEO_VOLSMOKE_FILL_BUDGET )
+	{
+		m_Fill.Step( NEO_VOLSMOKE_FILL_CHUNK_CELLS, NEO_VOLSMOKE_FILL_CHUNK_QUERIES );
+		spent = Plat_FloatTime() - start;
+	}
+
+	s_flBudgetSpent += spent;
 	m_flFillSeconds += spent;
 	m_flFillPeakFrame = MAX( m_flFillPeakFrame, spent );
+	if ( m_Fill.IsDone() )
+	{
+		m_flFillDoneAge = gpGlobals->curtime - m_flSpawnTime;
+	}
 }
 
 // Distance of the expanding front from the grenade, along the gas path.
@@ -824,10 +844,10 @@ void C_NeoVolSmoke::Carve( const Vector &start, const Vector &end, float radius 
 // ---------------------------------------------------------------------------
 void C_NeoVolSmoke::PrintStats() const
 {
-	Msg( "neo_volsmoke_stats: volume %d age %.2f done %d cells %d radius %.1f queries %d fill %.1f ms (peak frame %.2f ms)\n",
-		m_nId, gpGlobals->curtime - m_flSpawnTime, m_Fill.IsDone() ? 1 : 0, m_Fill.FinalizedCount(),
+	Msg( "neo_volsmoke_stats: volume %d age %.2f done %d (at age %.2f) cells %d radius %.1f queries %d fill %.1f ms (peak frame %.2f ms), front ahead of the fill in %d frames\n",
+		m_nId, gpGlobals->curtime - m_flSpawnTime, m_Fill.IsDone() ? 1 : 0, m_flFillDoneAge, m_Fill.FinalizedCount(),
 		CNeoSmokeFill::DistToUnits( m_Fill.FrontDist() ), m_Fill.WorldQueries(),
-		m_flFillSeconds * 1000.0, m_flFillPeakFrame * 1000.0 );
+		m_flFillSeconds * 1000.0, m_flFillPeakFrame * 1000.0, m_nLagFrames );
 }
 
 void C_NeoVolSmoke::ClientThink()
@@ -848,6 +868,11 @@ void C_NeoVolSmoke::ClientThink()
 	}
 
 	const float front = FrontRadius( now - m_flSpawnTime );
+	if ( !m_Fill.IsDone() && CNeoSmokeFill::DistToUnits( m_Fill.FrontDist() ) < front )
+	{
+		++m_nLagFrames;
+	}
+
 	{
 		CVolSmokePerfScope perf( VOLSMOKE_PERF_DENSITY );
 		UpdateBounds( front );
