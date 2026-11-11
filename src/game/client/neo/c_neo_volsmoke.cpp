@@ -364,6 +364,21 @@ public:
 		return blocked;
 	}
 
+	virtual bool SeedBlocked( int x, int y, int z ) override
+	{
+		const double start = Plat_FloatTime();
+		++m_nTraces;
+		const float c = CNeoSmokeFill::CELL_SIZE;
+		const Vector grenade = m_vecGridMin + Vector( CNeoSmokeFill::GRID_XY / 2 * c, CNeoSmokeFill::GRID_XY / 2 * c, CNeoSmokeFill::SEED_CELL_Z * c );
+		Ray_t ray;
+		ray.Init( grenade, Center( x, y, z ) );
+		CTraceFilterWorldOnly filter;
+		trace_t tr;
+		enginetrace->TraceRay( ray, NEO_VOLSMOKE_FILL_MASK, &filter, &tr );
+		m_flQuerySeconds += Plat_FloatTime() - start;
+		return tr.startsolid || tr.fraction < 1.0f;
+	}
+
 	// For neo_volsmoke_stats.
 	double QuerySeconds() const { return m_flQuerySeconds; }
 	int Traces() const { return m_nTraces; }
