@@ -32,8 +32,6 @@
 // Prototype: replace the legacy billboard smoke with a raymarched voxel volume.
 static ConVar neo_volsmoke_hook_grenade( "neo_volsmoke_hook_grenade", "0", FCVAR_CHEAT,
 	"1 = smoke grenades spawn a volumetric smoke (C_NeoVolSmoke) instead of the legacy particle smoke." );
-static ConVar neo_volsmoke_hook_extent( "neo_volsmoke_hook_extent", "192", FCVAR_CHEAT,
-	"AABB half-size used for grenade-spawned volumetric smoke." );
 #endif
 
 // ------------------------------------------------------------------------- //
@@ -356,9 +354,7 @@ void C_ParticleSmokeGrenade::OnDataChanged( DataUpdateType_t updateType )
 #ifdef NEO
 		if ( neo_volsmoke_hook_grenade.GetBool() )
 		{
-			// Lifetime: the server's fade-end if it has one, else the volsmoke default.
-			const float lifetime = ( m_FadeEndTime > 0.0f ) ? m_FadeEndTime : 25.0f;
-			C_NeoVolSmoke::Create( GetAbsOrigin(), neo_volsmoke_hook_extent.GetFloat(), lifetime );
+			C_NeoVolSmoke::Create( GetAbsOrigin(), gpGlobals->curtime );
 			return; // skip the legacy particle system entirely
 		}
 #endif
