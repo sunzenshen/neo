@@ -130,9 +130,9 @@ SHADER_DRAW
 		c[3] = params[EXTINCTION]->GetFloatValue();
 		pShaderAPI->SetPixelShaderConstant( 1, c );
 
-		// c2: volume max
+		// c2: volume max + far slab flag
 		params[VOLMAX]->GetVecValue( c, 3 );
-		c[3] = 0.0f;
+		c[3] = params[SLAB]->GetIntValue() != 0 ? 1.0f : 0.0f;
 		pShaderAPI->SetPixelShaderConstant( 2, c );
 
 		// c3: grid layout
