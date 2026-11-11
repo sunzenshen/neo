@@ -542,7 +542,12 @@ class CNeoVolSmokeRetireSystem final : public CAutoGameSystemPerFrame
 public:
 	CNeoVolSmokeRetireSystem() : CAutoGameSystemPerFrame( "CNeoVolSmokeRetireSystem" ) {}
 
-	virtual void Update( float frametime ) override { VolSmokeDeleteRetired( VOLSMOKE_RETIRE_AFTER_FRAMES ); }
+	virtual void Update( float frametime ) override
+	{
+		C_NeoVolSmoke::RemoveExpired();
+		VolSmokeDeleteRetired( VOLSMOKE_RETIRE_AFTER_FRAMES );
+	}
+
 	virtual void LevelShutdownPostEntity() override { VolSmokeDeleteRetired( VOLSMOKE_RETIRE_NOW ); }
 	virtual void Shutdown() override { VolSmokeDeleteRetired( VOLSMOKE_RETIRE_NOW ); }
 };
@@ -638,6 +643,18 @@ void C_NeoVolSmoke::RemoveAll()
 	while ( s_Volumes.Count() > 0 )
 	{
 		s_Volumes[0]->Release();
+	}
+}
+
+void C_NeoVolSmoke::RemoveExpired()
+{
+	const float now = gpGlobals->curtime;
+	for ( int i = s_Volumes.Count() - 1; i >= 0; --i )
+	{
+		if ( now - s_Volumes[i]->m_flSpawnTime > NEO_VOLSMOKE_FADE_END )
+		{
+			s_Volumes[i]->Release();
+		}
 	}
 }
 
@@ -1196,11 +1213,9 @@ void C_NeoVolSmoke::ClientThink()
 {
 	const float now = gpGlobals->curtime;
 
-	// The think list may still use this entity after ClientThink returns, so
-	// it releases the entity after all thinks instead.
+	// RemoveExpired releases the volume later in the frame.
 	if ( now - m_flSpawnTime > NEO_VOLSMOKE_FADE_END )
 	{
-		ClientThinkList()->AddToDeleteList( GetClientHandle() );
 		return;
 	}
 
