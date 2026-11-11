@@ -84,6 +84,7 @@ private:
 	bool CellOpen( int x, int y, int z );
 	bool LinkOpen( int x, int y, int z, int axis );
 	bool BlockOpen( const int p[3], const int q[3] );
+	bool LineOpen( int from, int to );
 
 	void Relax( int cell );
 
@@ -99,6 +100,7 @@ private:
 	unsigned char *m_pOcc;     // cached world answers: cell and +x/+y/+z links
 	unsigned char *m_pState;   // CellState_t
 	int *m_pDist;
+	int *m_pAnchor;            // a cell with an open straight line to this one
 	int *m_pHeap;
 	int *m_pHeapPos;
 	int *m_pOrder;             // finalized cells, in order
