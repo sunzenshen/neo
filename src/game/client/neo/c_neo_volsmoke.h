@@ -20,6 +20,7 @@
 #include "materialsystem/itexture.h"
 #include "materialsystem/MaterialSystemUtil.h"
 #include "utlvector.h"
+#include "utlmap.h"
 #include "neo_smoke_fill.h"
 
 class CNeoVolSmokeRegenerator;
@@ -80,7 +81,21 @@ private:
 	static C_NeoVolSmoke *UploadTurn();
 	double StepFill( double budget );
 	void CompactCarveTimes();
-	int  CarveSlot( int idx ) const { return m_bCarveCompact ? m_Fill.FinalRank( idx ) : idx; }
+	float CarveTime( int idx ) const;
+	void SetCarveTime( int idx, float time );
+
+	// Cells of the volume's box
+	int  CellIndex( int x, int y, int z ) const { return ( z * m_nBox[1] + y ) * m_nBox[0] + x; }
+	void CellCoords( int idx, int &x, int &y, int &z ) const
+	{
+		x = idx % m_nBox[0];
+		y = ( idx / m_nBox[0] ) % m_nBox[1];
+		z = idx / ( m_nBox[0] * m_nBox[1] );
+	}
+	bool InBox( int x, int y, int z ) const
+	{
+		return x >= 0 && y >= 0 && z >= 0 && x < m_nBox[0] && y < m_nBox[1] && z < m_nBox[2];
+	}
 	float FrontRadius( float age ) const;
 	float BloomRadius( float age ) const;
 	float CellWeight( int idx, float now ) const;
@@ -89,6 +104,8 @@ private:
 	void UpdateBounds( float front );
 
 	// Atlas
+	int  AtlasOffset( int x, int y, int z ) const;
+	int  AtlasOffset( int idx ) const;
 	void ClearAtlas();
 	bool IsRegrowing( float now ) const;
 	bool ShapeChanged( float now ) const;
@@ -114,6 +131,7 @@ private:
 	static int s_nNextId;
 
 	int    m_nId;
+	int    m_nBox[3];          // the volume's box of cells, from the fill
 	Vector m_vecGridMin;
 	Vector m_vecGridMax;
 	Vector m_vecSpawn;
@@ -132,7 +150,10 @@ private:
 	int    m_nLagFrames;       // frames the fill or the upload held the bloom front back
 
 	// Per-cell state
-	CUtlVector< float >         m_CarveTime;  // curtime of last carve, <0 = never; per finalized cell once compact
+	// curtime of the last carve per finalized cell, by cell while the fill runs,
+	// then by FinalRank; a cell not listed was never carved.
+	CUtlMap< int, float >       m_CarveByCell;
+	CUtlVector< float >         m_CarveTime;  // by FinalRank once compact, <0 = never
 	bool   m_bCarveCompact;
 	int    m_SmokeLo[3];       // cell bounds of m_vecSmokeMin / Max
 	int    m_SmokeHi[3];
@@ -143,6 +164,9 @@ private:
 	CNeoVolSmokeRegenerator *m_pRegen;
 	CMaterialReference       m_Material;     // near pass: box far faces, clipped in the shader
 	CMaterialReference       m_SlabMaterial; // far slabs: hardware depth test
+	int   m_nAtlasCols;        // tiles per atlas row, one tile per z slice
+	int   m_nAtlasW;
+	int   m_nAtlasH;
 	int   m_nPacked;           // finalized cells written to the atlas
 	float m_flNextUpload;
 	float m_flRegrowEnd;       // curtime when the last carved cell has refilled

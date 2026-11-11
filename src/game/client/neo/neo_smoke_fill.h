@@ -97,6 +97,34 @@ public:
 	int  DroppedCount() const { return m_nDropped; }
 	int  WorldQueries() const { return m_nQueries; }
 
+	// The box the finalized cells are listed in: its size in cells and the
+	// cell corner the grenade sits on. World queries use its coordinates.
+	void BoxSize( int size[3] ) const
+	{
+		size[0] = GRID_XY;
+		size[1] = GRID_XY;
+		size[2] = GRID_Z;
+	}
+	void BoxSeedCorner( int corner[3] ) const
+	{
+		corner[0] = GRID_XY / 2;
+		corner[1] = GRID_XY / 2;
+		corner[2] = SEED_CELL_Z;
+	}
+
+	// The cells the fill may query, in box coordinates: lo inclusive, hi
+	// exclusive. Both are multiples of BLOCK_ALIGN.
+	static constexpr int BLOCK_ALIGN = 8;
+	void LatticeBounds( int lo[3], int hi[3] ) const
+	{
+		lo[0] = -BOX_SHIFT_XY;
+		lo[1] = -BOX_SHIFT_XY;
+		lo[2] = -BOX_SHIFT_Z;
+		hi[0] = LATTICE_XY - BOX_SHIFT_XY;
+		hi[1] = LATTICE_XY - BOX_SHIFT_XY;
+		hi[2] = LATTICE_Z - BOX_SHIFT_Z;
+	}
+
 	static float DistToUnits( int dist ) { return (float)dist * ( CELL_SIZE / (float)DIST_SCALE ); }
 
 	static int Index( int x, int y, int z ) { return ( z * GRID_XY + y ) * GRID_XY + x; }
@@ -128,6 +156,8 @@ private:
 	static constexpr int LATTICE_SEED_Z = 48;
 	static constexpr int BOX_SHIFT_XY = LATTICE_XY / 2 - GRID_XY / 2;
 	static constexpr int BOX_SHIFT_Z = LATTICE_SEED_Z - SEED_CELL_Z;
+	static_assert( BOX_SHIFT_XY % BLOCK_ALIGN == 0 && BOX_SHIFT_Z % BLOCK_ALIGN == 0, "box offset must keep block alignment" );
+	static_assert( LATTICE_XY % BLOCK_ALIGN == 0 && LATTICE_Z % BLOCK_ALIGN == 0, "lattice must hold whole blocks" );
 
 	static int  LatticeIndex( int x, int y, int z ) { return ( z * LATTICE_XY + y ) * LATTICE_XY + x; }
 	static void LatticeCoords( int idx, int &x, int &y, int &z )
