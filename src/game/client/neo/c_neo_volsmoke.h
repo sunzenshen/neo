@@ -1,7 +1,7 @@
 // NEO volumetric smoke - client-side voxel smoke volume (demo).
 //
-// A CPU-simulated density grid that flood-fills through world collision from
-// a spawn point, is lit by a sweep toward a light direction, can be carved by
+// A CPU-simulated density grid that fills through world collision from a
+// spawn point (CNeoSmokeFill), is shaded by a top-down sweep, can be carved by
 // bullets/explosions (with regrow), and is uploaded as a 2D slice atlas to a
 // procedural texture. Rendering is a single raymarched box per volume via the
 // Neo_VolSmoke shader, so there is no intra-volume sorting and no OIT issue.
@@ -66,6 +66,7 @@ private:
 	float FrontRadius( float age ) const;
 	void UpdateDensities();
 	void SweepLight();
+	static Vector SampleColor( const Vector &origin );
 	void Carve( const Vector &start, const Vector &end, float radius );
 
 private:
@@ -78,6 +79,7 @@ private:
 	Vector m_vecSpawn;
 
 	float  m_flSpawnTime;
+	Vector m_vecColor;         // linear smoke color, sampled once
 
 	// Gas fill and the world it queries
 	CNeoSmokeFill      m_Fill;
