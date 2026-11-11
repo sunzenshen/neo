@@ -26,10 +26,6 @@
 static ConVar neo_volsmoke_regrow( "neo_volsmoke_regrow", "4.0", FCVAR_CHEAT, "Seconds for a carved cell to refill.", true, 0.1f, true, 60.0f );
 static ConVar neo_volsmoke_carve_radius( "neo_volsmoke_carve_radius", "24", FCVAR_CHEAT, "Capsule radius carved by neo_volsmoke_carve.", true, 1.0f, true, 512.0f );
 static ConVar neo_volsmoke_explode_radius( "neo_volsmoke_explode_radius", "110", FCVAR_CHEAT, "Sphere radius carved by neo_volsmoke_explode.", true, 1.0f, true, 1024.0f );
-static ConVar neo_volsmoke_light_k( "neo_volsmoke_light_k", "0.05", FCVAR_CHEAT, "Extinction per world unit used by the light sweep.", true, 0.0f, true, 1.0f );
-static ConVar neo_volsmoke_light_sweep_hz( "neo_volsmoke_light_sweep_hz", "15", FCVAR_CHEAT, "How often per second to recompute the light sweep.", true, 1.0f, true, 120.0f );
-static ConVar neo_volsmoke_ambient_scale( "neo_volsmoke_ambient_scale", "0.9", FCVAR_CHEAT, "Multiplier on sampled ambient light.", true, 0.0f, true, 8.0f );
-static ConVar neo_volsmoke_light_scale( "neo_volsmoke_light_scale", "0.8", FCVAR_CHEAT, "Multiplier on the directional light term.", true, 0.0f, true, 8.0f );
 static ConVar neo_volsmoke_steps( "neo_volsmoke_steps", "64", FCVAR_CHEAT, "Raymarch steps across the box.", true, 4.0f, true, 64.0f );
 static ConVar neo_volsmoke_noise_amp( "neo_volsmoke_noise_amp", "0.35", FCVAR_CHEAT, "Edge erosion noise amplitude.", true, 0.0f, true, 2.0f );
 static ConVar neo_volsmoke_noise_scale( "neo_volsmoke_noise_scale", "0.045", FCVAR_CHEAT, "Noise frequency (1/world units).", true, 0.0f, true, 1.0f );
@@ -74,6 +70,23 @@ static constexpr float NEO_VOLSMOKE_EXTINCTION = 0.06f;
 // Until the fill finishes, the front grows as if toward the open-floor radius.
 static constexpr float NEO_VOLSMOKE_NOMINAL_RADIUS = 165.0f;
 
+// Look (cosmetic, may differ between clients).
+// The legacy particle color: a 0.5-0.6 grey times the light, desaturated
+// halfway to mid grey. It is a display value; the shader works in linear.
+static constexpr float NEO_VOLSMOKE_GREY = 0.55f;
+static constexpr float NEO_VOLSMOKE_DESATURATE = 0.5f;
+static constexpr float NEO_VOLSMOKE_DISPLAY_GAMMA = 2.2f;
+
+// Shade from a top-down light sweep: the top keeps full color, fully shaded
+// smoke keeps the ambient share, so nothing goes black.
+static constexpr float NEO_VOLSMOKE_AMBIENT_SHARE = 0.55f;
+static constexpr float NEO_VOLSMOKE_SWEEP_EXTINCTION = 0.012f;
+static constexpr float NEO_VOLSMOKE_SWEEP_HZ = 15.0f;
+
+// Light-grid samples: the grenade and four points at half the dome radius.
+static constexpr float NEO_VOLSMOKE_LIGHT_SAMPLE_UP = 32.0f;
+static constexpr float NEO_VOLSMOKE_LIGHT_SAMPLE_OUT = 82.0f;
+
 // World-only: no props or entities, so every client sees the same walls.
 static constexpr int NEO_VOLSMOKE_FILL_MASK = CONTENTS_SOLID | CONTENTS_WINDOW;
 
@@ -112,15 +125,19 @@ class CNeoVolSmokeWorld final : public INeoSmokeFillWorld
 public:
 	explicit CNeoVolSmokeWorld( const Vector &gridMin ) : m_vecGridMin( gridMin ) {}
 
-	virtual bool CellSolid( int x, int y, int z ) override
+	static bool PointSolid( const Vector &pos )
 	{
-		const Vector pos = Center( x, y, z );
 		Ray_t ray;
 		ray.Init( pos, pos );
 		CTraceFilterWorldOnly filter;
 		trace_t tr;
 		enginetrace->TraceRay( ray, NEO_VOLSMOKE_FILL_MASK, &filter, &tr );
 		return tr.startsolid;
+	}
+
+	virtual bool CellSolid( int x, int y, int z ) override
+	{
+		return PointSolid( Center( x, y, z ) );
 	}
 
 	virtual bool LinkBlocked( int x, int y, int z, int axis ) override
@@ -279,6 +296,8 @@ void C_NeoVolSmoke::Init( const Vector &origin, float spawnTime )
 	m_pWorld = new CNeoVolSmokeWorld( m_vecGridMin );
 	m_Fill.Start( m_pWorld );
 
+	m_vecColor = SampleColor( origin );
+
 	// GPU resources
 	const int atlasW = NEO_VOLSMOKE_ATLAS_W;
 	const int atlasH = NEO_VOLSMOKE_ATLAS_H;
@@ -343,6 +362,39 @@ void C_NeoVolSmoke::Shutdown()
 // ---------------------------------------------------------------------------
 // Simulation
 // ---------------------------------------------------------------------------
+Vector C_NeoVolSmoke::SampleColor( const Vector &origin )
+{
+	const float out = NEO_VOLSMOKE_LIGHT_SAMPLE_OUT;
+	const Vector offsets[] =
+	{
+		Vector( 0, 0, 0 ), Vector( out, 0, 0 ), Vector( -out, 0, 0 ), Vector( 0, out, 0 ), Vector( 0, -out, 0 ),
+	};
+
+	Vector light( 0, 0, 0 );
+	int samples = 0;
+	for ( int i = 0; i < ARRAYSIZE( offsets ); ++i )
+	{
+		const Vector pos = origin + offsets[i] + Vector( 0, 0, NEO_VOLSMOKE_LIGHT_SAMPLE_UP );
+		if ( i > 0 && CNeoVolSmokeWorld::PointSolid( pos ) )
+		{
+			continue;
+		}
+
+		light += engine->GetLightForPoint( pos, true );
+		++samples;
+	}
+	light /= (float)samples;
+
+	Vector color;
+	for ( int k = 0; k < 3; ++k )
+	{
+		const float display = ( NEO_VOLSMOKE_GREY * clamp( light[k], 0.0f, 1.0f ) + NEO_VOLSMOKE_DESATURATE ) * 0.5f;
+		color[k] = powf( display, NEO_VOLSMOKE_DISPLAY_GAMMA );
+	}
+
+	return color;
+}
+
 void C_NeoVolSmoke::StepFill()
 {
 	if ( m_Fill.IsDone() )
@@ -399,7 +451,7 @@ void C_NeoVolSmoke::UpdateDensities()
 // Top-down sweep: each cell gets the transmittance of the smoke above it.
 void C_NeoVolSmoke::SweepLight()
 {
-	const float kStep = neo_volsmoke_light_k.GetFloat() * CNeoSmokeFill::CELL_SIZE;
+	const float kStep = NEO_VOLSMOKE_SWEEP_EXTINCTION * CNeoSmokeFill::CELL_SIZE;
 	for ( int y = 0; y < CNeoSmokeFill::GRID_XY; ++y )
 	{
 		for ( int x = 0; x < CNeoSmokeFill::GRID_XY; ++x )
@@ -521,7 +573,7 @@ void C_NeoVolSmoke::ClientThink()
 	if ( now >= m_flNextLightSweep )
 	{
 		SweepLight();
-		m_flNextLightSweep = now + 1.0f / neo_volsmoke_light_sweep_hz.GetFloat();
+		m_flNextLightSweep = now + 1.0f / NEO_VOLSMOKE_SWEEP_HZ;
 	}
 
 	if ( m_pRegen && m_Atlas.IsValid() )
@@ -582,15 +634,8 @@ int C_NeoVolSmoke::DrawModel( int flags )
 
 	IMaterial *pMat = m_Material;
 
-	// Lighting: ambient from the light grid at the spawn point (gamma -> linear).
-	Vector amb = engine->GetLightForPoint( m_vecSpawn + Vector( 0, 0, 32.0f ), true );
-	amb.x = powf( MAX( amb.x, 0.0f ), 2.2f );
-	amb.y = powf( MAX( amb.y, 0.0f ), 2.2f );
-	amb.z = powf( MAX( amb.z, 0.0f ), 2.2f );
-	amb *= neo_volsmoke_ambient_scale.GetFloat();
-	// Directional term scales with the scene brightness so indoor smoke stays dim.
-	const float brightness = clamp( ( amb.x + amb.y + amb.z ) / 3.0f, 0.02f, 1.0f );
-	const Vector lightCol = Vector( 1, 1, 1 ) * ( brightness * neo_volsmoke_light_scale.GetFloat() );
+	const Vector amb = m_vecColor * NEO_VOLSMOKE_AMBIENT_SHARE;
+	const Vector lightCol = m_vecColor * ( 1.0f - NEO_VOLSMOKE_AMBIENT_SHARE );
 
 	SetVec3Var( pMat, "$volmin", m_vecGridMin );
 	SetVec3Var( pMat, "$volmax", m_vecGridMax );
