@@ -127,6 +127,9 @@ static constexpr float NEO_VOLSMOKE_LIGHT_SAMPLE_OUT = 0.5f * CNeoSmokeFill::DOM
 // assumes. Dense smoke then covers the view as the legacy overlay does.
 static constexpr float NEO_VOLSMOKE_OVERLAY_PATH = 64.0f;
 
+// The legacy smoke's thermal-vision transparency.
+extern ConVar r_neo_thermal_smoke_alpha;
+
 // World-only: no props or entities, so every client sees the same walls.
 static constexpr int NEO_VOLSMOKE_FILL_MASK = CONTENTS_SOLID | CONTENTS_WINDOW;
 
@@ -1313,7 +1316,12 @@ void C_NeoVolSmoke::SetDrawParams( IMaterial *pMat ) const
 	SetVec3Var( pMat, "$lightcolor", lightCol );
 	// The legacy smoke scales its alpha by the bloom and the fade the same way.
 	const float age = gpGlobals->curtime - m_flSpawnTime;
-	SetFloatVar( pMat, "$extinction", NEO_VOLSMOKE_EXTINCTION * VolSmokeBloom( age ) * VolSmokeFade( age ) );
+	float extinction = NEO_VOLSMOKE_EXTINCTION * VolSmokeBloom( age ) * VolSmokeFade( age );
+	if ( g_SmokeFogOverlayThermalOverride )
+	{
+		extinction *= r_neo_thermal_smoke_alpha.GetFloat();
+	}
+	SetFloatVar( pMat, "$extinction", extinction );
 	SetVec3Var( pMat, "$front", Vector( FrontRadius( age ), NEO_VOLSMOKE_DIST_RANGE, 1.0f / NEO_VOLSMOKE_EDGE ) );
 	SetFloatVar( pMat, "$noiseamp", neo_volsmoke_noise_amp.GetFloat() );
 	SetFloatVar( pMat, "$age", age );
