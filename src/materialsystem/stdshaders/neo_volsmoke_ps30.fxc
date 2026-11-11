@@ -84,8 +84,10 @@ struct PS_INPUT
 // ---------------------------------------------------------------------------
 float2 SliceUV( float2 uv, float slice )
 {
-	float col = fmod( slice, g_Grid.y );
-	float row = floor( slice / g_Grid.y );
+	// The half keeps the row exact when cols is not a power of two: a divide
+	// by multiplying with the reciprocal can land just under a whole number.
+	float row = floor( ( slice + 0.5f ) / g_Grid.y );
+	float col = slice - row * g_Grid.y;
 	return ( float2( col, row ) + uv ) / g_Grid.zw;
 }
 

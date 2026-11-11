@@ -231,11 +231,10 @@ static void ShrinkToCount( int *&pArray, int count )
 }
 
 // The listed box: the gas box with a cell of margin, so a trilinear lookup
-// beside the gas stays inside it, kept inside the query frame's box.
+// beside the gas stays inside it.
 void CNeoSmokeFill::FitBox()
 {
-	const int frameLo[3] = { BOX_SHIFT_XY, BOX_SHIFT_XY, BOX_SHIFT_Z };
-	const int frameHi[3] = { BOX_SHIFT_XY + GRID_XY - 1, BOX_SHIFT_XY + GRID_XY - 1, BOX_SHIFT_Z + GRID_Z - 1 };
+	const int latticeHi[3] = { LATTICE_XY - 1, LATTICE_XY - 1, LATTICE_Z - 1 };
 	const int seed[3] = { LATTICE_XY / 2, LATTICE_XY / 2, LATTICE_SEED_Z };
 	for ( int k = 0; k < 3; ++k )
 	{
@@ -247,8 +246,8 @@ void CNeoSmokeFill::FitBox()
 			hi = m_nHi[k] + 1;
 		}
 
-		lo = MAX( lo, frameLo[k] );
-		hi = MIN( hi, frameHi[k] );
+		lo = MAX( lo, 0 );
+		hi = MIN( hi, latticeHi[k] );
 		m_nBoxLo[k] = lo;
 		m_nBoxSize[k] = hi - lo + 1;
 	}
