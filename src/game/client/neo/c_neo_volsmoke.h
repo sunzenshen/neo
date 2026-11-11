@@ -22,6 +22,8 @@
 #include "neo_smoke_fill.h"
 
 class CNeoVolSmokeRegenerator;
+class IMatRenderContext;
+class IMaterial;
 class CNeoVolSmokeWorld;
 
 class C_NeoVolSmoke : public C_BaseEntity
@@ -72,6 +74,11 @@ private:
 	static Vector SampleColor( const Vector &origin );
 	void Carve( const Vector &start, const Vector &end, float radius );
 
+	// Rendering
+	void SetDrawParams( IMaterial *pMat ) const;
+	void DrawFarSlabs( IMatRenderContext *pRenderContext );
+	void DrawNearPass( IMatRenderContext *pRenderContext );
+
 private:
 	static CUtlVector< C_NeoVolSmoke * > s_Volumes;
 	static int s_nNextId;
@@ -80,6 +87,8 @@ private:
 	Vector m_vecGridMin;
 	Vector m_vecGridMax;
 	Vector m_vecSpawn;
+	Vector m_vecSmokeMin;      // bounds of the cells that hold smoke, padded; drawn instead of the grid
+	Vector m_vecSmokeMax;
 
 	float  m_flSpawnTime;
 	Vector m_vecColor;         // linear smoke color, sampled once
@@ -98,7 +107,8 @@ private:
 	// GPU side
 	CTextureReference        m_Atlas;
 	CNeoVolSmokeRegenerator *m_pRegen;
-	CMaterialReference       m_Material;
+	CMaterialReference       m_Material;     // near pass: box far faces, clipped in the shader
+	CMaterialReference       m_SlabMaterial; // far slabs: hardware depth test
 	bool  m_bAtlasDirty;
 	float m_flNextLightSweep;
 };

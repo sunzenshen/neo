@@ -30,6 +30,7 @@ static ConVar neo_volsmoke_noise_amp( "neo_volsmoke_noise_amp", "0.35", FCVAR_CH
 static ConVar neo_volsmoke_noise_scale( "neo_volsmoke_noise_scale", "0.045", FCVAR_CHEAT, "Noise frequency (1/world units).", true, 0.0f, true, 1.0f );
 static ConVar neo_volsmoke_jitter( "neo_volsmoke_jitter", "1", FCVAR_CHEAT, "Per-pixel step jitter (grain) instead of banding." );
 static ConVar neo_volsmoke_debug( "neo_volsmoke_debug", "0", FCVAR_CHEAT, "0 off, 1 coverage, 2 scene depth as read by the shader, 3 box hit." );
+static ConVar neo_volsmoke_slabs( "neo_volsmoke_slabs", "1", FCVAR_CHEAT, "Test: 0 one march clipped by dest-alpha depth only, 1 far slabs depth-tested at their middle, 2 at their far end." );
 static ConVar neo_volsmoke_draw( "neo_volsmoke_draw", "1", FCVAR_CHEAT, "Draw smoke volumes." );
 
 // ---------------------------------------------------------------------------
@@ -66,8 +67,19 @@ static constexpr float NEO_VOLSMOKE_CELL_VARIATION = 0.15f;
 // Extinction per world unit at density 1.
 static constexpr float NEO_VOLSMOKE_EXTINCTION = 0.06f;
 
+// The near pass clips against the engine's dest-alpha depth, which saturates
+// about 194 u from the eye. It marches view depths up to NEAR_RANGE, kept
+// below that with a margin; depth-tested slabs draw the rest.
+static constexpr float NEO_VOLSMOKE_NEAR_RANGE = 172.0f;
+static constexpr float NEO_VOLSMOKE_SLAB_MIN = 24.0f;
+static constexpr float NEO_VOLSMOKE_SLAB_GROWTH = 0.08f; // of the slab's view depth
+static constexpr int NEO_VOLSMOKE_MAX_SLABS = 24;
+
 // View depth range of a whole-volume march; farther than any volume is drawn.
 static constexpr float NEO_VOLSMOKE_MAX_DEPTH = 65536.0f;
+
+// Bounds of a slab quad in view-space x / z and y / z: past any field of view.
+static constexpr float NEO_VOLSMOKE_SLAB_MAX_TAN = 4.0f;
 
 // Until the fill finishes, the front grows as if toward the open-floor radius.
 static constexpr float NEO_VOLSMOKE_NOMINAL_RADIUS = CNeoSmokeFill::DOME_RADIUS;
@@ -308,6 +320,8 @@ void C_NeoVolSmoke::RemoveAll()
 void C_NeoVolSmoke::Init( const Vector &origin, float spawnTime )
 {
 	m_vecSpawn    = origin;
+	m_vecSmokeMin = origin;
+	m_vecSmokeMax = origin;
 	m_vecGridMin  = origin - Vector( NEO_VOLSMOKE_HALF_XY, NEO_VOLSMOKE_HALF_XY, NEO_VOLSMOKE_BELOW );
 	m_vecGridMax  = origin + Vector( NEO_VOLSMOKE_HALF_XY, NEO_VOLSMOKE_HALF_XY, NEO_VOLSMOKE_ABOVE );
 	m_flSpawnTime = spawnTime;
@@ -358,16 +372,27 @@ void C_NeoVolSmoke::Init( const Vector &origin, float spawnTime )
 	KeyValues *pVMT = new KeyValues( "Neo_VolSmoke" );
 	pVMT->SetString( "$basetexture", texName );
 	m_Material.Init( matName, pVMT );
-	if ( !m_Material || m_Material->IsErrorMaterial() )
+
+	Q_snprintf( matName, sizeof( matName ), "__neo_volsmoke_%d_slab", m_nId );
+	pVMT = new KeyValues( "Neo_VolSmoke" );
+	pVMT->SetString( "$basetexture", texName );
+	pVMT->SetInt( "$slab", 1 );
+	m_SlabMaterial.Init( matName, pVMT );
+
+	CMaterialReference *pMaterials[] = { &m_Material, &m_SlabMaterial };
+	for ( CMaterialReference *pRef : pMaterials )
 	{
-		Warning( "C_NeoVolSmoke: material %s failed (needs the Neo_VolSmoke shader)\n", matName );
-	}
-	else
-	{
+		IMaterial *pMat = *pRef;
+		if ( !pMat || pMat->IsErrorMaterial() )
+		{
+			Warning( "C_NeoVolSmoke: material %s failed (needs the Neo_VolSmoke shader)\n", pMat ? pMat->GetName() : "?" );
+			continue;
+		}
+
 		// Precaches the material. Binding an uncached material makes the
 		// material system add a reference of its own, which would keep the
 		// material and its atlas alive after the volume dies.
-		m_Material->GetNumPasses();
+		pMat->GetNumPasses();
 	}
 
 	m_bAtlasDirty = true;
@@ -376,12 +401,16 @@ void C_NeoVolSmoke::Init( const Vector &origin, float spawnTime )
 
 void C_NeoVolSmoke::Shutdown()
 {
-	// The material references the atlas, so it goes first.
-	IMaterial *pMat = m_Material;
-	m_Material.Shutdown();
-	if ( pMat )
+	// The materials reference the atlas, so they go first.
+	CMaterialReference *pMaterials[] = { &m_Material, &m_SlabMaterial };
+	for ( CMaterialReference *pRef : pMaterials )
 	{
-		pMat->DeleteIfUnreferenced();
+		IMaterial *pMat = *pRef;
+		pRef->Shutdown();
+		if ( pMat )
+		{
+			pMat->DeleteIfUnreferenced();
+		}
 	}
 
 	if ( m_Atlas.IsValid() )
@@ -462,6 +491,8 @@ void C_NeoVolSmoke::UpdateDensities()
 	const float regrow = neo_volsmoke_regrow.GetFloat();
 
 	// Only finalized cells carry smoke; the rest stay at zero.
+	int lo[3] = { CNeoSmokeFill::GRID_XY, CNeoSmokeFill::GRID_XY, CNeoSmokeFill::GRID_Z };
+	int hi[3] = { -1, -1, -1 };
 	const int count = m_Fill.FinalizedCount();
 	for ( int k = 0; k < count; ++k )
 	{
@@ -478,6 +509,33 @@ void C_NeoVolSmoke::UpdateDensities()
 		}
 
 		m_Density[i] = body * VolSmokeCellVariation( i ) * hole;
+		if ( m_Density[i] <= 0.0f )
+		{
+			continue;
+		}
+
+		int c[3];
+		CNeoSmokeFill::Coords( i, c[0], c[1], c[2] );
+		for ( int a = 0; a < 3; ++a )
+		{
+			lo[a] = MIN( lo[a], c[a] );
+			hi[a] = MAX( hi[a], c[a] );
+		}
+	}
+
+	if ( hi[0] < 0 )
+	{
+		m_vecSmokeMin = m_vecSmokeMax = m_vecSpawn;
+		return;
+	}
+
+	// One cell of margin: the shader's trilinear lookup spreads a cell's
+	// smoke half a cell past it.
+	const float cell = CNeoSmokeFill::CELL_SIZE;
+	for ( int a = 0; a < 3; ++a )
+	{
+		m_vecSmokeMin[a] = MAX( m_vecGridMin[a], m_vecGridMin[a] + ( lo[a] - 1 ) * cell );
+		m_vecSmokeMax[a] = MIN( m_vecGridMax[a], m_vecGridMin[a] + ( hi[a] + 2 ) * cell );
 	}
 }
 
@@ -654,19 +712,8 @@ static void SetIntVar( IMaterial *pMat, const char *name, int i )
 	if ( found ) pVar->SetIntValue( i );
 }
 
-int C_NeoVolSmoke::DrawModel( int flags )
+void C_NeoVolSmoke::SetDrawParams( IMaterial *pMat ) const
 {
-	if ( !neo_volsmoke_draw.GetBool() || !m_Material || m_Material->IsErrorMaterial() || !m_Atlas.IsValid() )
-		return 0;
-
-	// The scene depth the shader clips against is only current in the main view.
-	if ( CurrentViewID() != VIEW_MAIN )
-	{
-		return 0;
-	}
-
-	IMaterial *pMat = m_Material;
-
 	const Vector amb = m_vecColor * NEO_VOLSMOKE_AMBIENT_SHARE;
 	const Vector lightCol = m_vecColor * ( 1.0f - NEO_VOLSMOKE_AMBIENT_SHARE );
 
@@ -684,6 +731,34 @@ int C_NeoVolSmoke::DrawModel( int flags )
 	SetFloatVar( pMat, "$noisescale", neo_volsmoke_noise_scale.GetFloat() );
 	SetIntVar( pMat, "$jitter", neo_volsmoke_jitter.GetInt() );
 	SetIntVar( pMat, "$debugmode", neo_volsmoke_debug.GetInt() );
+}
+
+int C_NeoVolSmoke::DrawModel( int flags )
+{
+	if ( !neo_volsmoke_draw.GetBool() || !m_Atlas.IsValid() )
+	{
+		return 0;
+	}
+
+	if ( !m_Material || m_Material->IsErrorMaterial() || !m_SlabMaterial || m_SlabMaterial->IsErrorMaterial() )
+	{
+		return 0;
+	}
+
+	// The scene depth the shader clips against is only current in the main view.
+	if ( CurrentViewID() != VIEW_MAIN )
+	{
+		return 0;
+	}
+
+	// Nothing to draw before the first cell fills.
+	if ( m_vecSmokeMax.x <= m_vecSmokeMin.x )
+	{
+		return 0;
+	}
+
+	SetDrawParams( m_Material );
+	SetDrawParams( m_SlabMaterial );
 
 	CMatRenderContextPtr pRenderContext( materials );
 
@@ -691,16 +766,142 @@ int C_NeoVolSmoke::DrawModel( int flags )
 	pRenderContext->PushMatrix();
 	pRenderContext->LoadIdentity();
 
-	// Draw only the far side of the box: exactly one fragment per pixel, and
-	// still correct with the camera inside the volume. The pixel shader does
-	// the depth test against the scene itself.
+	// Back to front: the far slabs, then the near pass in front of them.
+	DrawFarSlabs( pRenderContext );
+	DrawNearPass( pRenderContext );
+
+	pRenderContext->MatrixMode( MATERIAL_MODEL );
+	pRenderContext->PopMatrix();
+
+	return 1;
+}
+
+// The part of the volume beyond NEAR_RANGE, as view-parallel quads at the
+// middle depth of each slab. The depth test hides a slab behind geometry, so
+// smoke behind a surface the dest-alpha depth cannot see is wrong by at most
+// half a slab along the ray.
+void C_NeoVolSmoke::DrawFarSlabs( IMatRenderContext *pRenderContext )
+{
+	const Vector &eye = CurrentViewOrigin();
+	const Vector &fwd = CurrentViewForward();
+	const Vector &right = CurrentViewRight();
+	const Vector &up = CurrentViewUp();
+
+	const Vector &a = m_vecSmokeMin;
+	const Vector &b = m_vecSmokeMax;
+
+	// View depth range of the box, and its screen rectangle as view-space
+	// x / z and y / z. A corner at or behind the eye makes the rectangle the
+	// whole view.
+	float zMin = FLT_MAX;
+	float zMax = -FLT_MAX;
+	float xMin = NEO_VOLSMOKE_SLAB_MAX_TAN;
+	float xMax = -NEO_VOLSMOKE_SLAB_MAX_TAN;
+	float yMin = NEO_VOLSMOKE_SLAB_MAX_TAN;
+	float yMax = -NEO_VOLSMOKE_SLAB_MAX_TAN;
+	bool bWholeView = false;
+	for ( int i = 0; i < 8; ++i )
+	{
+		const Vector corner( ( i & 1 ) ? b.x : a.x, ( i & 2 ) ? b.y : a.y, ( i & 4 ) ? b.z : a.z );
+		const Vector rel = corner - eye;
+		const float z = DotProduct( rel, fwd );
+		zMin = MIN( zMin, z );
+		zMax = MAX( zMax, z );
+
+		if ( z < 1.0f )
+		{
+			bWholeView = true;
+			continue;
+		}
+
+		const float x = DotProduct( rel, right ) / z;
+		const float y = DotProduct( rel, up ) / z;
+		xMin = MIN( xMin, x );
+		xMax = MAX( xMax, x );
+		yMin = MIN( yMin, y );
+		yMax = MAX( yMax, y );
+	}
+
+	if ( zMax <= NEO_VOLSMOKE_NEAR_RANGE || neo_volsmoke_slabs.GetInt() == 0 )
+	{
+		return;
+	}
+	const float testAt = neo_volsmoke_slabs.GetInt() == 2 ? 1.0f : 0.5f;
+
+	if ( bWholeView )
+	{
+		xMin = yMin = -NEO_VOLSMOKE_SLAB_MAX_TAN;
+		xMax = yMax = NEO_VOLSMOKE_SLAB_MAX_TAN;
+	}
+	xMin = MAX( xMin, -NEO_VOLSMOKE_SLAB_MAX_TAN );
+	yMin = MAX( yMin, -NEO_VOLSMOKE_SLAB_MAX_TAN );
+	xMax = MIN( xMax, NEO_VOLSMOKE_SLAB_MAX_TAN );
+	yMax = MIN( yMax, NEO_VOLSMOKE_SLAB_MAX_TAN );
+
+	// Slab ends are whole units: the shader rounds the range it is given, and
+	// the near pass ends at NEAR_RANGE exactly.
+	float bounds[NEO_VOLSMOKE_MAX_SLABS + 1];
+	int nSlabs = 0;
+	bounds[0] = MAX( NEO_VOLSMOKE_NEAR_RANGE, floorf( zMin ) );
+	const float zEnd = ceilf( zMax );
+	while ( bounds[nSlabs] < zEnd )
+	{
+		const float z = bounds[nSlabs];
+		float next = ceilf( z + MAX( NEO_VOLSMOKE_SLAB_MIN, NEO_VOLSMOKE_SLAB_GROWTH * z ) );
+		if ( nSlabs == NEO_VOLSMOKE_MAX_SLABS - 1 || next > zEnd )
+		{
+			next = zEnd;
+		}
+
+		bounds[++nSlabs] = next;
+	}
+
+	pRenderContext->Bind( m_SlabMaterial, (IClientRenderable *)this );
+	IMesh *pMesh = pRenderContext->GetDynamicMesh( true, NULL, NULL, m_SlabMaterial );
+
+	CMeshBuilder meshBuilder;
+	meshBuilder.Begin( pMesh, MATERIAL_TRIANGLES, 4 * nSlabs, 6 * nSlabs );
+	int nVert = 0;
+	for ( int s = nSlabs - 1; s >= 0; --s )
+	{
+		const float lo = bounds[s];
+		const float hi = bounds[s + 1];
+		const float zc = lo + testAt * ( hi - lo );
+		const Vector center = eye + fwd * zc;
+		const float xs[4] = { xMin, xMax, xMax, xMin };
+		const float ys[4] = { yMin, yMin, yMax, yMax };
+		for ( int i = 0; i < 4; ++i )
+		{
+			const Vector pos = center + right * ( xs[i] * zc ) + up * ( ys[i] * zc );
+			meshBuilder.Position3fv( pos.Base() );
+			meshBuilder.TexCoord2f( 0, lo, hi );
+			meshBuilder.AdvanceVertex();
+		}
+
+		static const int quad[6] = { 0, 1, 2, 0, 2, 3 };
+		for ( int i = 0; i < 6; ++i )
+		{
+			meshBuilder.Index( nVert + quad[i] );
+			meshBuilder.AdvanceIndex();
+		}
+		nVert += 4;
+	}
+	meshBuilder.End();
+	pMesh->Draw();
+}
+
+// The box's far faces, marching view depths up to NEAR_RANGE: exactly one
+// fragment per pixel, and still correct with the camera inside the volume.
+// The pixel shader does the depth test against the scene itself.
+void C_NeoVolSmoke::DrawNearPass( IMatRenderContext *pRenderContext )
+{
 	pRenderContext->CullMode( MATERIAL_CULLMODE_CCW );
 
-	pRenderContext->Bind( pMat, (IClientRenderable *)this );
-	IMesh *pMesh = pRenderContext->GetDynamicMesh( true, NULL, NULL, pMat );
+	pRenderContext->Bind( m_Material, (IClientRenderable *)this );
+	IMesh *pMesh = pRenderContext->GetDynamicMesh( true, NULL, NULL, m_Material );
 
-	const Vector &a = m_vecGridMin;
-	const Vector &b = m_vecGridMax;
+	const Vector &a = m_vecSmokeMin;
+	const Vector &b = m_vecSmokeMax;
 	const Vector corners[8] =
 	{
 		Vector( a.x, a.y, a.z ), Vector( b.x, a.y, a.z ), Vector( b.x, b.y, a.z ), Vector( a.x, b.y, a.z ),
@@ -723,7 +924,7 @@ int C_NeoVolSmoke::DrawModel( int flags )
 	for ( int i = 0; i < 8; ++i )
 	{
 		meshBuilder.Position3fv( corners[i].Base() );
-		meshBuilder.TexCoord2f( 0, 0.0f, NEO_VOLSMOKE_MAX_DEPTH );
+		meshBuilder.TexCoord2f( 0, 0.0f, neo_volsmoke_slabs.GetInt() == 0 ? NEO_VOLSMOKE_MAX_DEPTH : NEO_VOLSMOKE_NEAR_RANGE );
 		meshBuilder.AdvanceVertex();
 	}
 	for ( int i = 0; i < 36; ++i )
@@ -733,11 +934,6 @@ int C_NeoVolSmoke::DrawModel( int flags )
 	}
 	meshBuilder.End();
 	pMesh->Draw();
-
-	pRenderContext->MatrixMode( MATERIAL_MODEL );
-	pRenderContext->PopMatrix();
-
-	return 1;
 }
 
 // ---------------------------------------------------------------------------
