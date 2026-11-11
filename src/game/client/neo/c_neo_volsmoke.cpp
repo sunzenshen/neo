@@ -1823,21 +1823,41 @@ unsigned long long C_NeoVolSmoke::LatticeFieldHash() const
 	return hash;
 }
 
-// Over the texels that differ from a cleared one.
+// Over the texels a lookup near the gas reads (the gas cells and one cell
+// around them) that differ from a cleared one.
 unsigned long long C_NeoVolSmoke::AtlasHash() const
 {
-	if ( !m_pRegen )
+	if ( !m_pRegen || m_Fill.FinalizedCount() == 0 )
 	{
 		return 0;
 	}
 
+	int lo[3] = { m_nBox[0], m_nBox[1], m_nBox[2] };
+	int hi[3] = { -1, -1, -1 };
+	for ( int k = 0; k < m_Fill.FinalizedCount(); ++k )
+	{
+		int c[3];
+		CellCoords( m_Fill.FinalizedCell( k ), c[0], c[1], c[2] );
+		for ( int a = 0; a < 3; ++a )
+		{
+			lo[a] = MIN( lo[a], c[a] );
+			hi[a] = MAX( hi[a], c[a] );
+		}
+	}
+
+	for ( int a = 0; a < 3; ++a )
+	{
+		lo[a] = MAX( 0, lo[a] - 1 );
+		hi[a] = MIN( m_nBox[a] - 1, hi[a] + 1 );
+	}
+
 	const unsigned char *bits = m_pRegen->Bits();
 	unsigned long long hash = 0;
-	for ( int z = 0; z < m_nBox[2]; ++z )
+	for ( int z = lo[2]; z <= hi[2]; ++z )
 	{
-		for ( int y = 0; y < m_nBox[1]; ++y )
+		for ( int y = lo[1]; y <= hi[1]; ++y )
 		{
-			for ( int x = 0; x < m_nBox[0]; ++x )
+			for ( int x = lo[0]; x <= hi[0]; ++x )
 			{
 				const unsigned char *t = bits + AtlasOffset( x, y, z );
 				const unsigned int texel = (unsigned int)t[0] | ( (unsigned int)t[1] << 8 ) | ( (unsigned int)t[2] << 16 ) | ( (unsigned int)t[3] << 24 );
