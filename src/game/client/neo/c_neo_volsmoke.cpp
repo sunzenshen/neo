@@ -1278,8 +1278,6 @@ bool C_NeoVolSmoke::PackNewCells( float now )
 
 		texel[VOLSMOKE_BYTE_ALPHA] = VolSmokeWallByte( ownWall );
 
-		for ( int dz = -1; dz <= 1; ++dz )		int c[3];
-		CNeoSmokeFill::Coords( i, c[0], c[1], c[2] );
 		for ( int dz = -1; dz <= 1; ++dz )
 		{
 			for ( int dy = -1; dy <= 1; ++dy )
