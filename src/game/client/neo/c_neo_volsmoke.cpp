@@ -14,6 +14,8 @@
 #include "collisionutils.h"
 #include "c_baseplayer.h"
 #include "mathlib/mathlib.h"
+#include "viewrender.h"
+#include "tier1/KeyValues.h"
 
 // memdbgon must be the last include file in a .cpp file!!!
 #include "tier0/memdbgon.h"
@@ -43,7 +45,6 @@ static ConVar neo_volsmoke_noise_scale( "neo_volsmoke_noise_scale", "0.045", FCV
 static ConVar neo_volsmoke_jitter( "neo_volsmoke_jitter", "1", FCVAR_CHEAT, "Per-pixel step jitter (grain) instead of banding." );
 static ConVar neo_volsmoke_debug( "neo_volsmoke_debug", "0", FCVAR_CHEAT, "0 off, 1 coverage, 2 scene depth as read by the shader, 3 box hit." );
 static ConVar neo_volsmoke_draw( "neo_volsmoke_draw", "1", FCVAR_CHEAT, "Draw smoke volumes." );
-static ConVar neo_volsmoke_material( "neo_volsmoke_material", "dev/neo_volsmoke", FCVAR_CHEAT, "Material using the Neo_VolSmoke shader." );
 
 // ---------------------------------------------------------------------------
 // Texture regenerator: owns a CPU copy of the atlas so the material system
@@ -206,8 +207,10 @@ void C_NeoVolSmoke::Init( const Vector &origin, float extent, float lifetime )
 	int sx = m_nN / 2, sy = m_nN / 2, sz = m_nN / 2;
 	for ( int tries = 0; tries < 4; ++tries )
 	{
-		if ( !( enginetrace->GetPointContents( CellCenter( sx, sy, sz ) ) & CONTENTS_SOLID ) )
+		if ( !WorldSolidAt( CellCenter( sx, sy, sz ) ) )
+		{
 			break;
+		}
 		sz = MIN( sz + 1, m_nN - 1 );
 	}
 	const int seed = Idx( sx, sy, sz );
@@ -225,23 +228,36 @@ void C_NeoVolSmoke::Init( const Vector &origin, float extent, float lifetime )
 	char texName[64];
 	Q_snprintf( texName, sizeof( texName ), "_neo_volsmoke_%d", m_nId );
 
-	ITexture *pTex = materials->CreateProceduralTexture( texName, TEXTURE_GROUP_OTHER, atlasW, atlasH, IMAGE_FORMAT_BGRA8888,
+	m_Atlas.InitProceduralTexture( texName, TEXTURE_GROUP_OTHER, atlasW, atlasH, IMAGE_FORMAT_BGRA8888,
 		TEXTUREFLAGS_CLAMPS | TEXTUREFLAGS_CLAMPT | TEXTUREFLAGS_NOMIP | TEXTUREFLAGS_NOLOD | TEXTUREFLAGS_PROCEDURAL | TEXTUREFLAGS_SINGLECOPY );
-	if ( pTex && !IsErrorTexture( pTex ) )
+	if ( !m_Atlas.IsValid() || IsErrorTexture( m_Atlas ) )
 	{
-		m_pRegen = new CNeoVolSmokeRegenerator( atlasW, atlasH );
-		pTex->SetTextureRegenerator( m_pRegen );
-		m_Atlas.Init( pTex );
+		Warning( "C_NeoVolSmoke: failed to create procedural texture %s\n", texName );
+		m_Atlas.Shutdown( true );
+		return;
+	}
+
+	m_pRegen = new CNeoVolSmokeRegenerator( atlasW, atlasH );
+	m_Atlas->SetTextureRegenerator( m_pRegen );
+
+	// One material per volume: a shared material would carry one volume's
+	// params and atlas into another volume's draw.
+	char matName[64];
+	Q_snprintf( matName, sizeof( matName ), "__neo_volsmoke_%d", m_nId );
+
+	KeyValues *pVMT = new KeyValues( "Neo_VolSmoke" );
+	pVMT->SetString( "$basetexture", texName );
+	m_Material.Init( matName, pVMT );
+	if ( !m_Material || m_Material->IsErrorMaterial() )
+	{
+		Warning( "C_NeoVolSmoke: material %s failed (needs the Neo_VolSmoke shader)\n", matName );
 	}
 	else
 	{
-		Warning( "C_NeoVolSmoke: failed to create procedural texture %s\n", texName );
-	}
-
-	m_Material.Init( neo_volsmoke_material.GetString(), TEXTURE_GROUP_OTHER );
-	if ( !m_Material || m_Material->IsErrorMaterial() )
-	{
-		Warning( "C_NeoVolSmoke: material %s missing (needs the Neo_VolSmoke shader)\n", neo_volsmoke_material.GetString() );
+		// Precaches the material. Binding an uncached material makes the
+		// material system add a reference of its own, which would keep the
+		// material and its atlas alive after the volume dies.
+		m_Material->GetNumPasses();
 	}
 
 	m_bAtlasDirty = true;
@@ -250,25 +266,49 @@ void C_NeoVolSmoke::Init( const Vector &origin, float extent, float lifetime )
 
 void C_NeoVolSmoke::Shutdown()
 {
+	// The material references the atlas, so it goes first.
+	IMaterial *pMat = m_Material;
+	m_Material.Shutdown();
+	if ( pMat )
+	{
+		pMat->DeleteIfUnreferenced();
+	}
+
 	if ( m_Atlas.IsValid() )
 	{
 		m_Atlas->SetTextureRegenerator( NULL ); // calls Release() on m_pRegen
 		m_pRegen = NULL;
-		m_Atlas.Shutdown();
+		m_Atlas.Shutdown( true );
 	}
-	m_Material.Shutdown();
 }
 
 // ---------------------------------------------------------------------------
 // Simulation
 // ---------------------------------------------------------------------------
+// The fill sees only the world, so every client grows the same grid
+// whatever client-side entities it has.
+bool C_NeoVolSmoke::WorldSolidAt( const Vector &pos )
+{
+	Ray_t ray;
+	ray.Init( pos, pos );
+	CTraceFilterWorldOnly filter;
+	trace_t tr;
+	enginetrace->TraceRay( ray, CONTENTS_SOLID, &filter, &tr );
+	return tr.startsolid;
+}
+
 bool C_NeoVolSmoke::CellOpen( const Vector &from, const Vector &to ) const
 {
-	if ( enginetrace->GetPointContents( to ) & CONTENTS_SOLID )
+	if ( WorldSolidAt( to ) )
+	{
 		return false;
+	}
 
+	Ray_t ray;
+	ray.Init( from, to );
+	CTraceFilterWorldOnly filter;
 	trace_t tr;
-	UTIL_TraceLine( from, to, MASK_SOLID_BRUSHONLY, NULL, COLLISION_GROUP_NONE, &tr );
+	enginetrace->TraceRay( ray, MASK_SOLID_BRUSHONLY, &filter, &tr );
 	return !tr.startsolid && tr.fraction >= 1.0f;
 }
 
@@ -593,6 +633,12 @@ int C_NeoVolSmoke::DrawModel( int flags )
 	if ( !neo_volsmoke_draw.GetBool() || !m_Material || m_Material->IsErrorMaterial() || !m_Atlas.IsValid() )
 		return 0;
 
+	// The scene depth the shader clips against is only current in the main view.
+	if ( CurrentViewID() != VIEW_MAIN )
+	{
+		return 0;
+	}
+
 	IMaterial *pMat = m_Material;
 
 	// Lighting: ambient from the light grid at the spawn point (gamma -> linear).
@@ -604,10 +650,6 @@ int C_NeoVolSmoke::DrawModel( int flags )
 	// Directional term scales with the scene brightness so indoor smoke stays dim.
 	const float brightness = clamp( ( amb.x + amb.y + amb.z ) / 3.0f, 0.02f, 1.0f );
 	const Vector lightCol = Vector( 1, 1, 1 ) * ( brightness * neo_volsmoke_light_scale.GetFloat() );
-
-	bool found = false;
-	IMaterialVar *pBase = pMat->FindVar( "$basetexture", &found, false );
-	if ( found ) pBase->SetTextureValue( m_Atlas );
 
 	SetVec3Var( pMat, "$volmin", m_vecGridMin );
 	SetVec3Var( pMat, "$volmax", m_vecGridMax );
@@ -728,4 +770,19 @@ CON_COMMAND_F( neo_volsmoke_explode, "Carve an explosion-sized sphere out of smo
 CON_COMMAND_F( neo_volsmoke_clear, "Remove all volumetric smoke.", FCVAR_CHEAT )
 {
 	C_NeoVolSmoke::RemoveAll();
+}
+
+// A volume material holds its atlas, so a leaked material also shows up here.
+CON_COMMAND_F( neo_volsmoke_stats, "Print live volumes and the atlas textures still loaded.", FCVAR_CHEAT )
+{
+	int textures = 0;
+	for ( int id = 0; id < C_NeoVolSmoke::NextId(); ++id )
+	{
+		char name[64];
+		Q_snprintf( name, sizeof( name ), "_neo_volsmoke_%d", id );
+		textures += materials->IsTextureLoaded( name ) ? 1 : 0;
+	}
+
+	Msg( "neo_volsmoke_stats: live %d, created %d, atlas textures loaded %d\n",
+		C_NeoVolSmoke::LiveCount(), C_NeoVolSmoke::NextId(), textures );
 }
