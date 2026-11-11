@@ -102,6 +102,15 @@ float ValueNoise3( float3 p )
 	return lerp( nxy0, nxy1, f.z );
 }
 
+// Premultiplied output for blending in gamma space. The draws of one volume
+// split the ray, so each layer premultiplies its gamma color by its own alpha:
+// layers of one color then sum to what a single draw would give.
+float4 BlendOutput( float3 linearColor, float alpha )
+{
+	float3 c = float3( SrgbLinearToGamma( linearColor.r ), SrgbLinearToGamma( linearColor.g ), SrgbLinearToGamma( linearColor.b ) );
+	return float4( c * alpha, alpha );
+}
+
 // Interleaved gradient noise - per-pixel march offset to trade banding for grain.
 float IGN( float2 pixel )
 {
@@ -150,7 +159,7 @@ float4 main( PS_INPUT i ) : COLOR
 	{
 		// Visualise the depth we think the scene has (grey = closer).
 		float v = saturate( tScene / 2048.0f );
-		return FinalOutput( float4( v.xxx, 1.0f ), 0, PIXEL_FOG_TYPE_NONE, TONEMAP_SCALE_NONE );
+		return BlendOutput( v.xxx, 1.0f );
 	}
 
 	if ( t1 <= t0 || dViewZ <= 1.0e-6f )
@@ -177,7 +186,7 @@ float4 main( PS_INPUT i ) : COLOR
 
 	if ( debugMode == 3 )
 	{
-		return FinalOutput( float4( 0.2f, 0.6f, 0.2f, 0.6f ), 0, PIXEL_FOG_TYPE_NONE, TONEMAP_SCALE_NONE );
+		return BlendOutput( float3( 0.2f, 0.6f, 0.2f ), 0.6f );
 	}
 
 	// --- march ------------------------------------------------------------
@@ -187,46 +196,47 @@ float4 main( PS_INPUT i ) : COLOR
 	float3 col = float3( 0, 0, 0 );
 	float  time = g_Light.w;
 
+	// No break or continue: on linux-8845hs (DXVK, d3dcompiler_43 output) a
+	// break in this loop never fired, so every iteration is guarded instead.
+	float n = nFirst;
 	[loop]
 	for ( int s = 0; s < MAX_STEPS; s++ )
 	{
-		float n = nFirst + s;
-		if ( n >= nEnd || T < 0.005f )
-			break;
-
-		float tc = ( n + jitter ) * STEP_LEN;
-		float c0 = max( tc - 0.5f * STEP_LEN, t0 );
-		float c1 = min( tc + 0.5f * STEP_LEN, t1 );
+		float tc  = ( n + jitter ) * STEP_LEN;
+		float c0  = max( tc - 0.5f * STEP_LEN, t0 );
+		float c1  = min( tc + 0.5f * STEP_LEN, t1 );
 		float len = c1 - c0;
-		if ( len <= 0.0f )
-			continue;
-
-		float3 p   = ro + rd * ( 0.5f * ( c0 + c1 ) );
-		float3 uvw = ( p - g_VolMin.xyz ) / volSize;
-
-		float2 v = SampleVolume( uvw );
-		float d  = v.r;
-
-		if ( d > 0.001f )
+		if ( n < nEnd && T >= 0.005f && len > 0.0f )
 		{
-			// Erode with animated noise so cell boundaries read as wisps.
-			float nz = ValueNoise3( p * g_Misc.y + float3( 0.0f, 0.0f, -time * 0.35f ) );
-			d = saturate( d * 1.25f - g_Misc.x * nz );
+			float3 p   = ro + rd * ( 0.5f * ( c0 + c1 ) );
+			float3 uvw = ( p - g_VolMin.xyz ) / volSize;
 
-			float sigma = d * g_VolMin.w * len;
-			float a     = 1.0f - exp( -sigma );
+			float2 v = SampleVolume( uvw );
+			float d  = v.r;
 
-			float3 lit = g_Ambient.rgb + g_Light.rgb * v.g;
-			col += T * a * lit;
-			T   *= 1.0f - a;
+			if ( d > 0.001f )
+			{
+				// Erode with animated noise so cell boundaries read as wisps.
+				float nz = ValueNoise3( p * g_Misc.y + float3( 0.0f, 0.0f, -time * 0.35f ) );
+				d = saturate( d * 1.25f - g_Misc.x * nz );
+
+				float sigma = d * g_VolMin.w * len;
+				float a     = 1.0f - exp( -sigma );
+
+				float3 lit = g_Ambient.rgb + g_Light.rgb * v.g;
+				col += T * a * lit;
+				T   *= 1.0f - a;
+			}
 		}
+		n += 1.0f;
 	}
 
 	if ( debugMode == 1 )
 	{
-		return FinalOutput( float4( ( 1.0f - T ).xxx, 1.0f - T ), 0, PIXEL_FOG_TYPE_NONE, TONEMAP_SCALE_NONE );
+		return BlendOutput( float3( 1.0f, 1.0f, 1.0f ), 1.0f - T );
 	}
 
 	// Premultiplied output; shader sets ONE / ONE_MINUS_SRC_ALPHA.
-	return FinalOutput( float4( col, 1.0f - T ), 0, PIXEL_FOG_TYPE_NONE, TONEMAP_SCALE_LINEAR );
+	float alpha = 1.0f - T;
+	return BlendOutput( col / max( alpha, 1.0e-5f ) * LINEAR_LIGHT_SCALE, alpha );
 }
