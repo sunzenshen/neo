@@ -17,9 +17,9 @@ static constexpr int NEO_SMOKE_FILL_BUDGET = (int)( ( 2.0 / 3.0 ) * NEO_SMOKE_FI
 // that is dropped.
 static constexpr int NEO_SMOKE_FILL_ATLAS_SIZE = 512;
 
-// Longest path the gas may take. Keeps a narrow hall inside the grid; a
-// 126 u hall then holds about four fifths of the gas.
-static constexpr int NEO_SMOKE_FILL_REACH_CAP = (int)( 560.0 * CNeoSmokeFill::DIST_SCALE / CNeoSmokeFill::CELL_SIZE );
+// Finished path lengths are 16 bits; a longer path, possible only in a
+// winding duct, is stored as the longest.
+static constexpr int NEO_SMOKE_FILL_MAX_FINAL_DIST = 0xffff;
 
 // A grenade resting in a corner can put the first cell inside the floor.
 static constexpr int NEO_SMOKE_FILL_SEED_LIFT = 4;
@@ -223,7 +223,6 @@ static int NeoSmokePopCount( unsigned long long v )
 
 static constexpr int NEO_SMOKE_FILL_WORDS = CNeoSmokeFill::CELLS / 64;
 static_assert( CNeoSmokeFill::CELLS % 64 == 0, "the finished field packs 64 cells a word" );
-static_assert( NEO_SMOKE_FILL_REACH_CAP < 0xffff, "finished path lengths are 16 bits" );
 
 static void ShrinkToCount( int *&pArray, int count )
 {
@@ -257,7 +256,7 @@ void CNeoSmokeFill::Finish()
 	for ( int i = 0; i < m_nBoxFinalized; ++i )
 	{
 		const int idx = m_pBoxOrder[i];
-		m_pFinalDist[FinalRank( idx )] = (unsigned short)CellDist( BoxToLattice( idx ) );
+		m_pFinalDist[FinalRank( idx )] = (unsigned short)MIN( CellDist( BoxToLattice( idx ) ), NEO_SMOKE_FILL_MAX_FINAL_DIST );
 	}
 
 	ShrinkToCount( m_pOrder, m_nFinalized );
@@ -496,12 +495,6 @@ bool CNeoSmokeFill::Step( int maxCells, int maxQueries )
 		}
 
 		const HeapEntry_t top = m_pHeap[0];
-		if ( top.dist > NEO_SMOKE_FILL_REACH_CAP )
-		{
-			m_bDone = true;
-			break;
-		}
-
 		HeapPop();
 		const int cell = top.cell;
 		if ( !FitsAtlas( cell ) )
