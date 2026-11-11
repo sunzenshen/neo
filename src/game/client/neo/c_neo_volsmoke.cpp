@@ -123,6 +123,14 @@ static constexpr float NEO_VOLSMOKE_CULL_MIN_DEPTH = 1.0f;
 // View depth range of a whole-volume march; farther than any volume is drawn.
 static constexpr float NEO_VOLSMOKE_MAX_DEPTH = 65536.0f;
 
+// All smoke lies inside a sphere about the gas seed this much wider than the
+// front: a gas path is never shorter than the straight line from the seed,
+// and a trilinear lookup spreads a cell's path length up to sqrt(3) cells.
+// One more cell covers the atlas rounding and the clamp at the grid's z ends,
+// and one march step keeps the cells the shader clips at the sphere empty.
+static constexpr float NEO_VOLSMOKE_MARCH_STEP = 8.0f; // the shader's STEP_LEN
+static constexpr float NEO_VOLSMOKE_SPHERE_MARGIN = ( 1.7321f + 1.0f ) * CNeoSmokeFill::CELL_SIZE + NEO_VOLSMOKE_MARCH_STEP;
+
 // Bounds of a slab quad in view-space x / z and y / z: past any field of view.
 static constexpr float NEO_VOLSMOKE_SLAB_MAX_TAN = 4.0f;
 
@@ -1384,6 +1392,16 @@ float C_NeoVolSmoke::DrawExtinction() const
 	return extinction;
 }
 
+// The sphere about the gas seed that holds all smoke. Returns its radius.
+float C_NeoVolSmoke::SmokeSphere( Vector &center ) const
+{
+	int c[3];
+	CNeoSmokeFill::Coords( m_Fill.FinalizedCell( 0 ), c[0], c[1], c[2] );
+	const float cell = CNeoSmokeFill::CELL_SIZE;
+	center = m_vecGridMin + Vector( ( c[0] + 0.5f ) * cell, ( c[1] + 0.5f ) * cell, ( c[2] + 0.5f ) * cell );
+	return FrontRadius( gpGlobals->curtime - m_flSpawnTime ) + NEO_VOLSMOKE_SPHERE_MARGIN;
+}
+
 void C_NeoVolSmoke::SetDrawParams( IMaterial *pMat ) const
 {
 	const Vector amb = m_vecColor * NEO_VOLSMOKE_AMBIENT_SHARE;
@@ -1393,6 +1411,9 @@ void C_NeoVolSmoke::SetDrawParams( IMaterial *pMat ) const
 	SetVec3Var( pMat, "$volmax", m_vecGridMax );
 	SetVec3Var( pMat, "$smokemin", m_vecSmokeMin );
 	SetVec3Var( pMat, "$smokemax", m_vecSmokeMax );
+	Vector seed;
+	const float sphereRadius = SmokeSphere( seed );
+	SetVec4Var( pMat, "$smokesphere", seed.x, seed.y, seed.z, sphereRadius );
 	// Slices along z, square GRID_XY tiles.
 	SetVec4Var( pMat, "$gridparams", (float)CNeoSmokeFill::GRID_Z, (float)NEO_VOLSMOKE_ATLAS_COLS, (float)NEO_VOLSMOKE_ATLAS_ROWS,
 		1.0f / (float)CNeoSmokeFill::GRID_XY );
@@ -1497,6 +1518,48 @@ static void SlabScreenRect( const Vector view[8], float lo, float hi, float &xMi
 			}
 		}
 	}
+}
+
+// Shrinks a slab's screen rectangle (view-space x / z and y / z) to the part
+// of a view-space sphere between view depths lo and hi. That part lies in a
+// view-aligned box, whose screen bound comes from its corners.
+static void SphereSlabClip( const Vector &center, float radius, float lo, float hi, float &xMin, float &xMax, float &yMin, float &yMax )
+{
+	const float z0 = MAX( lo, center.z - radius );
+	const float z1 = MIN( hi, center.z + radius );
+	if ( z0 > z1 )
+	{
+		xMin = yMin = FLT_MAX;
+		xMax = yMax = -FLT_MAX;
+		return;
+	}
+
+	// Widest cross-section of the sphere inside the slab.
+	const float off = ( center.z < z0 ) ? z0 - center.z : ( ( center.z > z1 ) ? center.z - z1 : 0.0f );
+	const float reach = sqrtf( MAX( radius * radius - off * off, 0.0f ) );
+
+	const float xs[2] = { center.x - reach, center.x + reach };
+	const float ys[2] = { center.y - reach, center.y + reach };
+	const float zs[2] = { z0, z1 };
+	float sxMin = FLT_MAX;
+	float sxMax = -FLT_MAX;
+	float syMin = FLT_MAX;
+	float syMax = -FLT_MAX;
+	for ( const float z : zs )
+	{
+		for ( int k = 0; k < 2; ++k )
+		{
+			sxMin = MIN( sxMin, xs[k] / z );
+			sxMax = MAX( sxMax, xs[k] / z );
+			syMin = MIN( syMin, ys[k] / z );
+			syMax = MAX( syMax, ys[k] / z );
+		}
+	}
+
+	xMin = MAX( xMin, sxMin );
+	xMax = MIN( xMax, sxMax );
+	yMin = MAX( yMin, syMin );
+	yMax = MIN( yMax, syMax );
 }
 
 // The atlas's path length (0..1 of DIST_RANGE) and weight at a point,
@@ -1727,6 +1790,11 @@ void C_NeoVolSmoke::DrawFarSlabs( IMatRenderContext *pRenderContext )
 		zMax = MAX( zMax, view[i].z );
 	}
 
+	Vector seed;
+	const float sphereRadius = SmokeSphere( seed );
+	const Vector seedRel = seed - eye;
+	const Vector sphereView( DotProduct( seedRel, right ), DotProduct( seedRel, up ), DotProduct( seedRel, fwd ) );
+
 	m_nSlabTiles = 0;
 	m_nSlabTilesCulled = 0;
 	if ( zMax <= NEO_VOLSMOKE_NEAR_RANGE || neo_volsmoke_slabs.GetInt() == 0 )
@@ -1785,6 +1853,7 @@ void C_NeoVolSmoke::DrawFarSlabs( IMatRenderContext *pRenderContext )
 			const float lo = bounds[s];
 			float xMin, xMax, yMin, yMax;
 			SlabScreenRect( view, lo, bounds[s + 1], xMin, xMax, yMin, yMax );
+			SphereSlabClip( sphereView, sphereRadius, lo, bounds[s + 1], xMin, xMax, yMin, yMax );
 			xMin = MAX( xMin, -NEO_VOLSMOKE_SLAB_MAX_TAN );
 			yMin = MAX( yMin, -NEO_VOLSMOKE_SLAB_MAX_TAN );
 			xMax = MIN( xMax, NEO_VOLSMOKE_SLAB_MAX_TAN );
