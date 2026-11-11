@@ -26,8 +26,7 @@
 static ConVar neo_volsmoke_regrow( "neo_volsmoke_regrow", "4.0", FCVAR_CHEAT, "Seconds for a carved cell to refill.", true, 0.1f, true, 60.0f );
 static ConVar neo_volsmoke_carve_radius( "neo_volsmoke_carve_radius", "24", FCVAR_CHEAT, "Capsule radius carved by neo_volsmoke_carve.", true, 1.0f, true, 512.0f );
 static ConVar neo_volsmoke_explode_radius( "neo_volsmoke_explode_radius", "110", FCVAR_CHEAT, "Sphere radius carved by neo_volsmoke_explode.", true, 1.0f, true, 1024.0f );
-static ConVar neo_volsmoke_noise_amp( "neo_volsmoke_noise_amp", "0.35", FCVAR_CHEAT, "Edge erosion noise amplitude.", true, 0.0f, true, 2.0f );
-static ConVar neo_volsmoke_noise_scale( "neo_volsmoke_noise_scale", "0.045", FCVAR_CHEAT, "Noise frequency (1/world units).", true, 0.0f, true, 1.0f );
+static ConVar neo_volsmoke_noise_amp( "neo_volsmoke_noise_amp", "1", FCVAR_CHEAT, "Test: look noise strength, 0 (smooth) to 1.", true, 0.0f, true, 1.0f );
 static ConVar neo_volsmoke_jitter( "neo_volsmoke_jitter", "1", FCVAR_CHEAT, "Per-pixel step jitter (grain) instead of banding." );
 static ConVar neo_volsmoke_debug( "neo_volsmoke_debug", "0", FCVAR_CHEAT, "0 off, 1 coverage, 2 scene depth as read by the shader, 3 box hit." );
 static ConVar neo_volsmoke_slabs( "neo_volsmoke_slabs", "1", FCVAR_CHEAT, "Test: 0 one march clipped by dest-alpha depth only, 1 far slabs depth-tested at their middle, 2 at their far end." );
@@ -113,8 +112,9 @@ static constexpr float NEO_VOLSMOKE_DESATURATE = 0.5f;
 static constexpr float NEO_VOLSMOKE_DISPLAY_GAMMA = 2.2f;
 
 // Shade from a top-down light sweep: the top keeps full color, fully shaded
-// smoke keeps the ambient share, so nothing goes black.
-static constexpr float NEO_VOLSMOKE_AMBIENT_SHARE = 0.55f;
+// smoke keeps the ambient share, so nothing goes black. The legacy sprites
+// shade their base only a little.
+static constexpr float NEO_VOLSMOKE_AMBIENT_SHARE = 0.8f;
 static constexpr float NEO_VOLSMOKE_SWEEP_EXTINCTION = 0.012f;
 
 // Light-grid samples: the grenade and four points at half the dome radius.
@@ -968,7 +968,7 @@ void C_NeoVolSmoke::SetDrawParams( IMaterial *pMat ) const
 	SetFloatVar( pMat, "$extinction", NEO_VOLSMOKE_EXTINCTION * VolSmokeBloom( age ) * VolSmokeFade( age ) );
 	SetVec3Var( pMat, "$front", Vector( FrontRadius( age ), NEO_VOLSMOKE_DIST_RANGE, 1.0f / NEO_VOLSMOKE_EDGE ) );
 	SetFloatVar( pMat, "$noiseamp", neo_volsmoke_noise_amp.GetFloat() );
-	SetFloatVar( pMat, "$noisescale", neo_volsmoke_noise_scale.GetFloat() );
+	SetFloatVar( pMat, "$age", age );
 	SetIntVar( pMat, "$jitter", neo_volsmoke_jitter.GetInt() );
 	SetIntVar( pMat, "$debugmode", neo_volsmoke_debug.GetInt() );
 }

@@ -28,11 +28,26 @@ const float4 g_VolMax       : register( c2 ); // xyz, w unused
 const float4 g_Grid         : register( c3 ); // x = N, y = atlas cols, z = atlas rows, w = 1/N
 const float4 g_Ambient      : register( c4 ); // rgb ambient light, w = jitter enable
 const float4 g_Light        : register( c5 ); // rgb directional light, w = time
-const float4 g_Misc         : register( c6 ); // x = noise amp, y = noise scale, z = bloom front path length, w = debug mode
+const float4 g_Misc         : register( c6 ); // x = look noise strength 0..1, y = volume age, z = bloom front path length, w = debug mode
 const float4 g_ScreenParams : register( c7 ); // xy = half texel, z = path length at atlas value 1, w = 1 / edge width
 
 #define STEP_LEN  8.0f
 #define MAX_STEPS 64
+
+// Smoke behind this transmittance no longer shows.
+#define T_CUTOFF 0.005f
+
+// Look noise (cosmetic). Billows the size of the legacy smoke sprites move
+// the front inward by up to PUFF_BITE: with the soft edge, smoke deeper than
+// the legacy sprite radius below the front keeps its density, and the noise
+// only ever removes smoke.
+#define PUFF_BITE   28.0f
+#define FRINGE      55.0f   // PUFF_BITE plus the 27 u edge width
+#define PUFF_SCALE  0.0208f // 1 / 48 u
+#define PUFF_DETAIL 2.53f   // second octave frequency
+#define PUFF_SPIN   0.035f  // radians per second about the vertical axis
+#define PUFF_RISE   1.5f    // world units per second
+#define PUFF_SHADE  0.45f   // light lost in a crevice, where the noise bites
 
 struct PS_INPUT
 {
@@ -71,7 +86,8 @@ float3 SampleVolume( float3 uvw )
 }
 
 // ---------------------------------------------------------------------------
-// Cheap procedural 3D value noise for edge erosion / wisps.
+// Cheap procedural 3D value noise for the billows. Takes coordinates relative
+// to the volume, so the sine hash keeps its precision on large maps.
 // ---------------------------------------------------------------------------
 float Hash3( float3 p )
 {
@@ -194,7 +210,14 @@ float4 main( PS_INPUT i ) : COLOR
 
 	float  T   = 1.0f;          // transmittance
 	float3 col = float3( 0, 0, 0 );
-	float  time = g_Light.w;
+
+	// The billows turn slowly about the grenade and rise, like the legacy
+	// sprites. The volume's age keeps the noise input small.
+	float  age = g_Misc.y;
+	float3 center = 0.5f * ( g_VolMin.xyz + g_VolMax.xyz );
+	float2 spin;
+	sincos( age * PUFF_SPIN, spin.y, spin.x );
+	float3 puffDrift = float3( 0.0f, 0.0f, age * PUFF_RISE );
 
 	// No break or continue: on linux-8845hs (DXVK, d3dcompiler_43 output) a
 	// break in this loop never fired, so every iteration is guarded instead.
@@ -206,25 +229,36 @@ float4 main( PS_INPUT i ) : COLOR
 		float c0  = max( tc - 0.5f * STEP_LEN, t0 );
 		float c1  = min( tc + 0.5f * STEP_LEN, t1 );
 		float len = c1 - c0;
-		if ( n < nEnd && T >= 0.005f && len > 0.0f )
+		if ( n < nEnd && T >= T_CUTOFF && len > 0.0f )
 		{
 			float3 p   = ro + rd * ( 0.5f * ( c0 + c1 ) );
 			float3 uvw = ( p - g_VolMin.xyz ) / volSize;
+			float3 v   = SampleVolume( uvw );
 
-			// Density: the cell weight behind a soft edge at the bloom front.
-			float3 v = SampleVolume( uvw );
-			float d  = v.r * smoothstep( 0.0f, 1.0f, saturate( ( g_Misc.z - v.b * g_ScreenParams.z ) * g_ScreenParams.w ) );
-
-			if ( d > 0.001f )
+			// Depth below the bloom front along the gas path.
+			float depth = g_Misc.z - v.b * g_ScreenParams.z;
+			if ( v.r > 0.001f && depth > 0.0f )
 			{
-				// Erode with animated noise so cell boundaries read as wisps.
-				float nz = ValueNoise3( p * g_Misc.y + float3( 0.0f, 0.0f, -time * 0.35f ) );
-				d = saturate( d * 1.25f - g_Misc.x * nz );
+				float3 q = p - center;
+				q = float3( spin.x * q.x - spin.y * q.y, spin.y * q.x + spin.x * q.y, q.z ) - puffDrift;
+
+				// Near the surface, where the smoke shows, add a finer octave and
+				// move the front inward by up to PUFF_BITE.
+				float puff = ValueNoise3( q * PUFF_SCALE );
+				if ( depth < FRINGE )
+				{
+					float detail = ValueNoise3( q * ( PUFF_SCALE * PUFF_DETAIL ) + 17.0f );
+					puff = 0.6f * puff + 0.4f * detail;
+					depth -= g_Misc.x * PUFF_BITE * saturate( 2.2f * puff - 0.8f );
+				}
+
+				float d = v.r * smoothstep( 0.0f, 1.0f, saturate( depth * g_ScreenParams.w ) );
 
 				float sigma = d * g_VolMin.w * len;
 				float a     = 1.0f - exp( -sigma );
 
-				float3 lit = g_Ambient.rgb + g_Light.rgb * v.g;
+				float shade = 1.0f - g_Misc.x * PUFF_SHADE * puff;
+				float3 lit = ( g_Ambient.rgb + g_Light.rgb * v.g ) * shade;
 				col += T * a * lit;
 				T   *= 1.0f - a;
 			}
