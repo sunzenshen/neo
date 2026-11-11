@@ -71,10 +71,13 @@ private:
 	void Shutdown();
 
 	// Simulation
-	void StepFill();
+	static void StepFills();
+	static C_NeoVolSmoke *UploadTurn();
+	double StepFill( double budget );
 	void CompactCarveTimes();
 	int  CarveSlot( int idx ) const { return m_bCarveCompact ? m_Fill.FinalRank( idx ) : idx; }
 	float FrontRadius( float age ) const;
+	float BloomRadius( float age ) const;
 	float CellWeight( int idx, float now ) const;
 	float DensityAt( const Vector &pos, float front, float now ) const;
 	void AddInsideOverlay( float front, float now );
@@ -82,6 +85,8 @@ private:
 
 	// Atlas
 	void ClearAtlas();
+	bool IsRegrowing( float now ) const;
+	bool ShapeChanged( float now ) const;
 	bool PackNewCells( float now );
 	void PackWeights( float now );
 	void SweepLight( float front, float now );
@@ -119,7 +124,7 @@ private:
 	double m_flFillSeconds;    // CPU time spent in the fill
 	double m_flFillPeakFrame;  // longest single fill slice
 	float  m_flFillDoneAge;    // age when the fill finished, <0 = not yet
-	int    m_nLagFrames;       // frames the bloom front was past the filled cells
+	int    m_nLagFrames;       // frames the fill or the upload held the bloom front back
 
 	// Per-cell state
 	CUtlVector< float >         m_CarveTime;  // curtime of last carve, <0 = never; per finalized cell once compact
@@ -137,8 +142,8 @@ private:
 	float m_flNextUpload;
 	float m_flRegrowEnd;       // curtime when the last carved cell has refilled
 	float m_flSweptFront;      // bloom front of the last light sweep
+	float m_flUploadedFront;   // path length of the last cell the uploaded atlas holds
 	bool  m_bUploadPending;    // atlas changed, upload waits for a free frame
-	bool  m_bShapePending;     // path lengths or weights changed since the last upload
 	int   m_nSlabTiles;        // far slab tiles last frame, and those behind opaque smoke
 	int   m_nSlabTilesCulled;
 };
