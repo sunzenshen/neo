@@ -31,6 +31,10 @@ public:
 	static constexpr int CELLS = GRID_XY * GRID_XY * GRID_Z;
 	static constexpr float CELL_SIZE = 9.0f;
 
+	// Open-floor radius of the cloud: the legacy smoke's drawn dome, measured
+	// to the outer edge of its sprites. The gas budget is this dome's volume.
+	static constexpr float DOME_RADIUS = 220.0f;
+
 	// The grenade sits on the floor, so most of the grid is above it.
 	static constexpr int SEED_CELL_Z = 8;
 
