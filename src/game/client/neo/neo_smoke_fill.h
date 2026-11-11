@@ -21,6 +21,10 @@ public:
 
 	// Is the way from cell (x, y, z) to its neighbor one step along +axis blocked?
 	virtual bool LinkBlocked( int x, int y, int z, int axis ) = 0;
+
+	// Is the straight way from the grenade to the center of cell (x, y, z)
+	// blocked? The grenade sits on the corner shared by the seed candidates.
+	virtual bool SeedBlocked( int x, int y, int z ) = 0;
 };
 
 class CNeoSmokeFill
@@ -107,6 +111,8 @@ private:
 	bool BlockOpen( const int p[3], const int q[3] );
 	bool BlockOpenUncached( const int p[3], const int q[3] );
 	bool LineOpen( int from, int to );
+	bool SeedCellOk( int x, int y, int z );
+	int  FindSeed();
 
 	void Relax( int cell );
 	void AllocWork();
