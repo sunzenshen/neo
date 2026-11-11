@@ -35,6 +35,9 @@ public:
 class CNeoSmokeFill
 {
 public:
+	// The box of cells handed to the client, seed-centered inside the larger
+	// work lattice. Cells the gas reaches outside it are filled but not
+	// listed, until the client draws a box fitted to the gas.
 	static constexpr int GRID_XY = 128;
 	static constexpr int GRID_Z = 32;
 	static constexpr int CELLS = GRID_XY * GRID_XY * GRID_Z;
@@ -63,8 +66,10 @@ public:
 	bool Step( int maxCells, int maxQueries );
 
 	bool IsDone() const { return m_bDone; }
-	int  FinalizedCount() const { return m_nFinalized; }
-	int  FinalizedCell( int i ) const { return m_pOrder[i]; }
+
+	// The finalized cells inside the box, in fill order, as box indices.
+	int  FinalizedCount() const { return m_nBoxFinalized; }
+	int  FinalizedCell( int i ) const { return m_pBoxOrder[i]; }
 	bool IsFinalized( int idx ) const;
 
 	// Path length of a finalized cell, in 1/DIST_SCALE cells.
@@ -79,8 +84,17 @@ public:
 	int  MemoryBytes() const;
 	int  PeakMemoryBytes() const { return m_nPeakBytes; }
 
-	// Path length of the last finalized cell (the final radius once done).
-	int  FrontDist() const { return m_nFrontDist; }
+	// Path length of the last finalized cell in the box (the final radius
+	// once done).
+	int  FrontDist() const { return m_nBoxFront; }
+
+	// The whole field, in fill order, in box coordinates (which may lie
+	// outside the box), and the cells the atlas fit dropped.
+	int  LatticeCount() const { return m_nFinalized; }
+	void LatticeCell( int i, int &x, int &y, int &z ) const;
+	int  LatticeDist( int i ) const { return m_pOrderDist[i]; }
+	int  LatticeFrontDist() const { return m_nFrontDist; }
+	int  DroppedCount() const { return m_nDropped; }
 	int  WorldQueries() const { return m_nQueries; }
 
 	static float DistToUnits( int dist ) { return (float)dist * ( CELL_SIZE / (float)DIST_SCALE ); }
@@ -103,7 +117,31 @@ private:
 		STATE_NONE = 0,
 		STATE_QUEUED,
 		STATE_FINAL,
+		STATE_DROPPED, // popped, but the gas box would no longer fit the atlas
 	};
+
+	// The work lattice: the grenade on the same corner as in the box, 432 u
+	// below it and 720 u above, 2,304 u to each side.
+	static constexpr int LATTICE_LOG2_XY = 9;
+	static constexpr int LATTICE_XY = 1 << LATTICE_LOG2_XY;
+	static constexpr int LATTICE_Z = 128;
+	static constexpr int LATTICE_SEED_Z = 48;
+	static constexpr int BOX_SHIFT_XY = LATTICE_XY / 2 - GRID_XY / 2;
+	static constexpr int BOX_SHIFT_Z = LATTICE_SEED_Z - SEED_CELL_Z;
+
+	static int  LatticeIndex( int x, int y, int z ) { return ( z * LATTICE_XY + y ) * LATTICE_XY + x; }
+	static void LatticeCoords( int idx, int &x, int &y, int &z )
+	{
+		x = idx & ( LATTICE_XY - 1 );
+		y = ( idx >> LATTICE_LOG2_XY ) & ( LATTICE_XY - 1 );
+		z = idx >> ( 2 * LATTICE_LOG2_XY );
+	}
+	static bool InLattice( int x, int y, int z )
+	{
+		return x >= 0 && y >= 0 && z >= 0 && x < LATTICE_XY && y < LATTICE_XY && z < LATTICE_Z;
+	}
+	static int  BoxToLattice( int idx );
+	static int  LatticeToBox( int cell );
 
 	// The work arrays live in cubes of BRICK_SIZE cells, allocated when a cell
 	// in them is first written, so a fill holds memory for the cells it
@@ -111,8 +149,8 @@ private:
 	static constexpr int BRICK_SHIFT = 3;
 	static constexpr int BRICK_SIZE = 1 << BRICK_SHIFT;
 	static constexpr int BRICK_CELLS = BRICK_SIZE * BRICK_SIZE * BRICK_SIZE;
-	static constexpr int BRICKS_XY = GRID_XY / BRICK_SIZE;
-	static constexpr int BRICKS_Z = GRID_Z / BRICK_SIZE;
+	static constexpr int BRICKS_XY = LATTICE_XY / BRICK_SIZE;
+	static constexpr int BRICKS_Z = LATTICE_Z / BRICK_SIZE;
 	static constexpr int BRICKS = BRICKS_XY * BRICKS_XY * BRICKS_Z;
 
 	struct Brick_t
@@ -140,6 +178,7 @@ private:
 	int  CellDist( int cell ) const;
 	void NoteMemory();
 
+	bool FitsAtlas( int cell );
 	bool CellOpen( int x, int y, int z );
 	bool LinkOpen( int x, int y, int z, int axis );
 	bool BlockOpen( const int p[3], const int q[3] );
@@ -172,7 +211,11 @@ private:
 
 	HeapEntry_t *m_pHeap;
 	int m_nHeapCap;
-	int *m_pOrder;             // finalized cells, in order
+	int *m_pOrder;             // finalized lattice cells, in order
+	int *m_pOrderDist;
+	int *m_pBoxOrder;          // the same cells inside the box, as box indices
+	int  m_nLo[3];             // box of the finalized cells, in lattice cells
+	int  m_nHi[3];
 
 	// The finished field: a bit per cell, the finalized cells before each
 	// 64-cell word, and the path lengths in grid order.
@@ -183,6 +226,9 @@ private:
 	int  m_nHeapCount;
 	int  m_nFinalized;
 	int  m_nFrontDist;
+	int  m_nBoxFinalized;
+	int  m_nBoxFront;
+	int  m_nDropped;
 	int  m_nQueries;
 	int  m_nPeakBytes;
 	bool m_bDone;
