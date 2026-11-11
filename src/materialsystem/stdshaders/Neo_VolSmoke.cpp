@@ -23,8 +23,9 @@ BEGIN_SHADER_PARAMS
 	SHADER_PARAM( SMOKEMIN,   SHADER_PARAM_TYPE_VEC3,    "[0 0 0]",       "World-space min of the box around the cells that hold smoke" )
 	SHADER_PARAM( SMOKEMAX,   SHADER_PARAM_TYPE_VEC3,    "[1 1 1]",       "World-space max of that box" )
 	SHADER_PARAM( SMOKESPHERE, SHADER_PARAM_TYPE_VEC4,   "[0 0 0 100000]", "xyz = gas seed, w = radius of the sphere that holds all smoke" )
-	SHADER_PARAM( GRIDPARAMS, SHADER_PARAM_TYPE_VEC3,    "[32 8 4]",      "x = z slices, y = atlas cols, z = atlas rows" )
+	SHADER_PARAM( GRIDPARAMS, SHADER_PARAM_TYPE_VEC4,    "[32 8 8 4]",    "x = z slices, y = tiles per atlas row, zw = atlas size in tiles" )
 	SHADER_PARAM( TILECELLS,  SHADER_PARAM_TYPE_VEC2,    "[128 128]",     "Cells across one atlas tile: x, y" )
+	SHADER_PARAM( SPINCENTER, SHADER_PARAM_TYPE_VEC3,    "[0 0 0]",       "World point the look noise turns about" )
 	SHADER_PARAM( AMBIENT,    SHADER_PARAM_TYPE_VEC3,    "[0.6 0.6 0.6]", "Ambient light reaching the smoke (linear)" )
 	SHADER_PARAM( LIGHTCOLOR, SHADER_PARAM_TYPE_VEC3,    "[0.8 0.8 0.8]", "Directional light colour (linear), scaled by baked per-voxel light" )
 	SHADER_PARAM( EXTINCTION, SHADER_PARAM_TYPE_FLOAT,   "0.06",          "Extinction per world unit at density 1" )
@@ -137,8 +138,7 @@ SHADER_DRAW
 		pShaderAPI->SetPixelShaderConstant( 2, c );
 
 		// c3: grid layout
-		params[GRIDPARAMS]->GetVecValue( c, 3 );
-		c[3] = 0.0f;
+		params[GRIDPARAMS]->GetVecValue( c, 4 );
 		pShaderAPI->SetPixelShaderConstant( 3, c );
 
 		// c4: ambient + jitter flag
@@ -191,6 +191,11 @@ SHADER_DRAW
 		c[2] = 0.0f;
 		c[3] = 0.0f;
 		pShaderAPI->SetPixelShaderConstant( 11, c );
+
+		// c12: the point the look noise turns about
+		params[SPINCENTER]->GetVecValue( c, 3 );
+		c[3] = 0.0f;
+		pShaderAPI->SetPixelShaderConstant( 12, c );
 
 		DECLARE_DYNAMIC_VERTEX_SHADER( neo_volsmoke_vs30 );
 		SET_DYNAMIC_VERTEX_SHADER( neo_volsmoke_vs30 );

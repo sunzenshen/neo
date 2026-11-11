@@ -35,13 +35,16 @@ public:
 class CNeoSmokeFill
 {
 public:
-	// The box of cells handed to the client, seed-centered inside the larger
-	// work lattice. Cells the gas reaches outside it are filled but not
-	// listed, until the client draws a box fitted to the gas.
+	// World queries name cells in the frame of this seed-centered box inside
+	// the larger work lattice; they may lie outside it. Until the fill is done
+	// it is also the box the client is given.
 	static constexpr int GRID_XY = 128;
 	static constexpr int GRID_Z = 32;
-	static constexpr int CELLS = GRID_XY * GRID_XY * GRID_Z;
 	static constexpr float CELL_SIZE = 9.0f;
+
+	// The atlas a finished field must fit: z slices of the box's x by y
+	// cells in a square of this many texels.
+	static constexpr int ATLAS_SIZE = 512;
 
 	// Open-floor radius of the cloud: the legacy smoke's drawn dome, measured
 	// to the outer edge of its sprites. The gas budget is this dome's volume.
@@ -67,7 +70,8 @@ public:
 
 	bool IsDone() const { return m_bDone; }
 
-	// The finalized cells inside the box, in fill order, as box indices.
+	// Once done: the finalized cells inside the box, in fill order, as box
+	// indices. None while the fill runs.
 	int  FinalizedCount() const { return m_nBoxFinalized; }
 	int  FinalizedCell( int i ) const { return m_pBoxOrder[i]; }
 	bool IsFinalized( int idx ) const;
@@ -88,8 +92,8 @@ public:
 	// once done).
 	int  FrontDist() const { return m_nBoxFront; }
 
-	// The whole field, in fill order, in box coordinates (which may lie
-	// outside the box), and the cells the atlas fit dropped.
+	// The whole field, in fill order, in query coordinates, and the cells the
+	// atlas fit dropped.
 	int  LatticeCount() const { return m_nFinalized; }
 	void LatticeCell( int i, int &x, int &y, int &z ) const;
 	int  LatticeDist( int i ) const { return m_pOrderDist[i]; }
@@ -97,22 +101,14 @@ public:
 	int  DroppedCount() const { return m_nDropped; }
 	int  WorldQueries() const { return m_nQueries; }
 
-	// The box the finalized cells are listed in: its size in cells and the
-	// cell corner the grenade sits on. World queries use its coordinates.
-	void BoxSize( int size[3] ) const
-	{
-		size[0] = GRID_XY;
-		size[1] = GRID_XY;
-		size[2] = GRID_Z;
-	}
-	void BoxSeedCorner( int corner[3] ) const
-	{
-		corner[0] = GRID_XY / 2;
-		corner[1] = GRID_XY / 2;
-		corner[2] = SEED_CELL_Z;
-	}
+	// The box the finalized cells are listed in: its size in cells, the cell
+	// corner the grenade sits on, and its low corner in query coordinates.
+	// Once done it is the gas box with a cell of margin.
+	void BoxSize( int size[3] ) const;
+	void BoxSeedCorner( int corner[3] ) const;
+	void BoxOffset( int offset[3] ) const;
 
-	// The cells the fill may query, in box coordinates: lo inclusive, hi
+	// The cells the fill may query, in query coordinates: lo inclusive, hi
 	// exclusive. Both are multiples of BLOCK_ALIGN.
 	static constexpr int BLOCK_ALIGN = 8;
 	void LatticeBounds( int lo[3], int hi[3] ) const
@@ -170,8 +166,8 @@ private:
 	{
 		return x >= 0 && y >= 0 && z >= 0 && x < LATTICE_XY && y < LATTICE_XY && z < LATTICE_Z;
 	}
-	static int  BoxToLattice( int idx );
-	static int  LatticeToBox( int cell );
+	int  BoxIndex( int x, int y, int z ) const { return ( z * m_nBoxSize[1] + y ) * m_nBoxSize[0] + x; }
+	void FitBox();
 
 	// The work arrays live in cubes of BRICK_SIZE cells, allocated when a cell
 	// in them is first written, so a fill holds memory for the cells it
@@ -246,6 +242,8 @@ private:
 	int *m_pBoxOrder;          // the same cells inside the box, as box indices
 	int  m_nLo[3];             // box of the finalized cells, in lattice cells
 	int  m_nHi[3];
+	int  m_nBoxLo[3];          // the listed box once done, in lattice cells
+	int  m_nBoxSize[3];
 
 	// The finished field: a bit per cell, the finalized cells before each
 	// 64-cell word, and the path lengths in grid order.
@@ -258,6 +256,7 @@ private:
 	int  m_nFrontDist;
 	int  m_nBoxFinalized;
 	int  m_nBoxFront;
+	int  m_nWords;             // 64-cell words of m_pFinalBits
 	int  m_nDropped;
 	int  m_nQueries;
 	int  m_nPeakBytes;

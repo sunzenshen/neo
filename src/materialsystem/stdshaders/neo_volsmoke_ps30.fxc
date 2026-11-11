@@ -26,7 +26,7 @@ sampler NoiseSampler : register( s2 ); // tiled value noise: R = lattice layer z
 const float4 g_EyePos       : register( c0 ); // xyz eye, w unused
 const float4 g_VolMin       : register( c1 ); // xyz, w = extinction per unit at density 1
 const float4 g_VolMax       : register( c2 ); // xyz, w = 1 in a far slab
-const float4 g_Grid         : register( c3 ); // x = slices, y = atlas cols, z = atlas rows, w unused
+const float4 g_Grid         : register( c3 ); // x = slices, y = tiles per atlas row, zw = atlas size in tiles
 const float4 g_Ambient      : register( c4 ); // rgb ambient light, w = jitter enable
 const float4 g_Light        : register( c5 ); // rgb directional light, w = time
 const float4 g_Misc         : register( c6 ); // x = look noise strength 0..1, y = volume age, z = bloom front path length, w = debug mode
@@ -35,6 +35,7 @@ const float4 g_SmokeMin     : register( c8 ); // xyz box around the cells that h
 const float4 g_SmokeMax     : register( c9 ); // xyz, w unused
 const float4 g_SmokeSphere  : register( c10 ); // xyz gas seed, w radius that holds all smoke
 const float4 g_TileHalf     : register( c11 ); // xy = half a texel in tile coordinates, zw unused
+const float4 g_SpinCenter   : register( c12 ); // xyz the point the billows turn about, w unused
 
 #define STEP_LEN  8.0f
 
@@ -78,13 +79,14 @@ struct PS_INPUT
 };
 
 // ---------------------------------------------------------------------------
-// Atlas lookup: slice z lives at tile (z % cols, z / cols).
+// Atlas lookup: slice z lives at tile (z % cols, z / cols). The atlas may be
+// wider or taller than its tiles, so uv scales by its size in tiles.
 // ---------------------------------------------------------------------------
 float2 SliceUV( float2 uv, float slice )
 {
 	float col = fmod( slice, g_Grid.y );
 	float row = floor( slice / g_Grid.y );
-	return ( float2( col, row ) + uv ) / g_Grid.yz;
+	return ( float2( col, row ) + uv ) / g_Grid.zw;
 }
 
 float4 SampleVolume( float3 uvw )
@@ -234,7 +236,7 @@ float4 main( PS_INPUT i ) : COLOR
 	// The billows turn slowly about the grenade and rise, like the legacy
 	// sprites. The volume's age keeps the noise input small.
 	float  age = g_Misc.y;
-	float3 center = 0.5f * ( g_VolMin.xyz + g_VolMax.xyz );
+	float3 center = g_SpinCenter.xyz;
 	float2 spin;
 	sincos( age * PUFF_SPIN, spin.y, spin.x );
 	float3 puffDrift = float3( 0.0f, 0.0f, age * PUFF_RISE );
