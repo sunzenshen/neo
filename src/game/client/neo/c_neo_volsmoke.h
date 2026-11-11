@@ -89,7 +89,7 @@ private:
 	bool ShapeChanged( float now ) const;
 	bool PackNewCells( float now );
 	void PackWeights( float now );
-	void SweepLight( float front, float now );
+	void SweepLight( float now );
 	static Vector SampleColor( const Vector &origin );
 	void Carve( const Vector &start, const Vector &end, float radius );
 
@@ -141,7 +141,6 @@ private:
 	int   m_nPacked;           // finalized cells written to the atlas
 	float m_flNextUpload;
 	float m_flRegrowEnd;       // curtime when the last carved cell has refilled
-	float m_flSweptFront;      // bloom front of the last light sweep
 	float m_flUploadedFront;   // path length of the last cell the uploaded atlas holds
 	bool  m_bUploadPending;    // atlas changed, upload waits for a free frame
 	int   m_nSlabTiles;        // far slab tiles last frame, and those behind opaque smoke
