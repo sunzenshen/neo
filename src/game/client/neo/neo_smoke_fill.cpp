@@ -15,7 +15,7 @@ static constexpr int NEO_SMOKE_FILL_BUDGET = (int)( ( 2.0 / 3.0 ) * NEO_SMOKE_FI
 // The gas box, padded by a cell on each side, must fit a square atlas of
 // this many texels a side in z slices, or the cell that would grow it past
 // that is dropped.
-static constexpr int NEO_SMOKE_FILL_ATLAS_SIZE = 512;
+static constexpr int NEO_SMOKE_FILL_ATLAS_SIZE = CNeoSmokeFill::ATLAS_SIZE;
 
 // Finished path lengths are 16 bits; a longer path, possible only in a
 // winding duct, is stored as the longest.
@@ -93,7 +93,7 @@ static constexpr int NEO_SMOKE_FILL_BRICKS_START = 256;
 CNeoSmokeFill::CNeoSmokeFill()
 	: m_pWorld( NULL ), m_pBrickDir( NULL ), m_ppBricks( NULL ), m_nBricks( 0 ), m_nBrickCap( 0 ), m_pHeap( NULL ),
 	  m_nHeapCap( 0 ), m_pOrder( NULL ), m_pOrderDist( NULL ), m_pBoxOrder( NULL ), m_pFinalBits( NULL ), m_pWordRank( NULL ), m_pFinalDist( NULL ), m_nHeapCount( 0 ),
-	  m_nFinalized( 0 ), m_nFrontDist( 0 ), m_nBoxFinalized( 0 ), m_nBoxFront( 0 ), m_nDropped( 0 ), m_nQueries( 0 ), m_nPeakBytes( 0 ), m_bDone( true ), m_bBegun( false )
+	  m_nFinalized( 0 ), m_nFrontDist( 0 ), m_nBoxFinalized( 0 ), m_nBoxFront( 0 ), m_nWords( 0 ), m_nDropped( 0 ), m_nQueries( 0 ), m_nPeakBytes( 0 ), m_bDone( true ), m_bBegun( false )
 {
 }
 
@@ -221,8 +221,6 @@ static int NeoSmokePopCount( unsigned long long v )
 	return (int)( ( v * 0x0101010101010101ull ) >> 56 );
 }
 
-static constexpr int NEO_SMOKE_FILL_WORDS = CNeoSmokeFill::CELLS / 64;
-static_assert( CNeoSmokeFill::CELLS % 64 == 0, "the finished field packs 64 cells a word" );
 
 static void ShrinkToCount( int *&pArray, int count )
 {
@@ -232,13 +230,62 @@ static void ShrinkToCount( int *&pArray, int count )
 	pArray = pShrunk;
 }
 
+// The listed box: the gas box with a cell of margin, so a trilinear lookup
+// beside the gas stays inside it, kept inside the query frame's box.
+void CNeoSmokeFill::FitBox()
+{
+	const int frameLo[3] = { BOX_SHIFT_XY, BOX_SHIFT_XY, BOX_SHIFT_Z };
+	const int frameHi[3] = { BOX_SHIFT_XY + GRID_XY - 1, BOX_SHIFT_XY + GRID_XY - 1, BOX_SHIFT_Z + GRID_Z - 1 };
+	const int seed[3] = { LATTICE_XY / 2, LATTICE_XY / 2, LATTICE_SEED_Z };
+	for ( int k = 0; k < 3; ++k )
+	{
+		int lo = seed[k] - 1;
+		int hi = seed[k];
+		if ( m_nFinalized > 0 )
+		{
+			lo = m_nLo[k] - 1;
+			hi = m_nHi[k] + 1;
+		}
+
+		lo = MAX( lo, frameLo[k] );
+		hi = MIN( hi, frameHi[k] );
+		m_nBoxLo[k] = lo;
+		m_nBoxSize[k] = hi - lo + 1;
+	}
+
+	m_nBoxFinalized = 0;
+	m_nBoxFront = 0;
+	for ( int i = 0; i < m_nFinalized; ++i )
+	{
+		int c[3];
+		LatticeCoords( m_pOrder[i], c[0], c[1], c[2] );
+		bool inside = true;
+		for ( int k = 0; k < 3; ++k )
+		{
+			c[k] -= m_nBoxLo[k];
+			inside = inside && c[k] >= 0 && c[k] < m_nBoxSize[k];
+		}
+
+		if ( !inside )
+		{
+			continue;
+		}
+
+		m_pBoxOrder[m_nBoxFinalized++] = BoxIndex( c[0], c[1], c[2] );
+		m_nBoxFront = m_pOrderDist[i];
+	}
+}
+
 // Keeps what the finished field needs and frees the work arrays.
 void CNeoSmokeFill::Finish()
 {
-	m_pFinalBits = new unsigned long long[NEO_SMOKE_FILL_WORDS];
-	m_pWordRank = new int[NEO_SMOKE_FILL_WORDS];
+	FitBox();
+
+	m_nWords = ( m_nBoxSize[0] * m_nBoxSize[1] * m_nBoxSize[2] + 63 ) / 64;
+	m_pFinalBits = new unsigned long long[m_nWords];
+	m_pWordRank = new int[m_nWords];
 	m_pFinalDist = new unsigned short[MAX( m_nBoxFinalized, 1 )];
-	memset( m_pFinalBits, 0, NEO_SMOKE_FILL_WORDS * sizeof( *m_pFinalBits ) );
+	memset( m_pFinalBits, 0, m_nWords * sizeof( *m_pFinalBits ) );
 
 	for ( int i = 0; i < m_nBoxFinalized; ++i )
 	{
@@ -247,7 +294,7 @@ void CNeoSmokeFill::Finish()
 	}
 
 	int rank = 0;
-	for ( int w = 0; w < NEO_SMOKE_FILL_WORDS; ++w )
+	for ( int w = 0; w < m_nWords; ++w )
 	{
 		m_pWordRank[w] = rank;
 		rank += NeoSmokePopCount( m_pFinalBits[w] );
@@ -256,7 +303,11 @@ void CNeoSmokeFill::Finish()
 	for ( int i = 0; i < m_nBoxFinalized; ++i )
 	{
 		const int idx = m_pBoxOrder[i];
-		m_pFinalDist[FinalRank( idx )] = (unsigned short)MIN( CellDist( BoxToLattice( idx ) ), NEO_SMOKE_FILL_MAX_FINAL_DIST );
+		const int x = idx % m_nBoxSize[0];
+		const int y = ( idx / m_nBoxSize[0] ) % m_nBoxSize[1];
+		const int z = idx / ( m_nBoxSize[0] * m_nBoxSize[1] );
+		const int cell = LatticeIndex( x + m_nBoxLo[0], y + m_nBoxLo[1], z + m_nBoxLo[2] );
+		m_pFinalDist[FinalRank( idx )] = (unsigned short)MIN( CellDist( cell ), NEO_SMOKE_FILL_MAX_FINAL_DIST );
 	}
 
 	ShrinkToCount( m_pOrder, m_nFinalized );
@@ -266,26 +317,31 @@ void CNeoSmokeFill::Finish()
 	FreeWork();
 }
 
-int CNeoSmokeFill::BoxToLattice( int idx )
+void CNeoSmokeFill::BoxSize( int size[3] ) const
 {
-	int x;
-	int y;
-	int z;
-	Coords( idx, x, y, z );
-	return LatticeIndex( x + BOX_SHIFT_XY, y + BOX_SHIFT_XY, z + BOX_SHIFT_Z );
+	const int frame[3] = { GRID_XY, GRID_XY, GRID_Z };
+	for ( int k = 0; k < 3; ++k )
+	{
+		size[k] = m_pFinalBits ? m_nBoxSize[k] : frame[k];
+	}
 }
 
-// -1 for a cell outside the box.
-int CNeoSmokeFill::LatticeToBox( int cell )
+void CNeoSmokeFill::BoxSeedCorner( int corner[3] ) const
 {
-	int x;
-	int y;
-	int z;
-	LatticeCoords( cell, x, y, z );
-	x -= BOX_SHIFT_XY;
-	y -= BOX_SHIFT_XY;
-	z -= BOX_SHIFT_Z;
-	return InGrid( x, y, z ) ? Index( x, y, z ) : -1;
+	int offset[3];
+	BoxOffset( offset );
+	corner[0] = GRID_XY / 2 - offset[0];
+	corner[1] = GRID_XY / 2 - offset[1];
+	corner[2] = SEED_CELL_Z - offset[2];
+}
+
+void CNeoSmokeFill::BoxOffset( int offset[3] ) const
+{
+	const int shift[3] = { BOX_SHIFT_XY, BOX_SHIFT_XY, BOX_SHIFT_Z };
+	for ( int k = 0; k < 3; ++k )
+	{
+		offset[k] = m_pFinalBits ? m_nBoxLo[k] - shift[k] : 0;
+	}
 }
 
 void CNeoSmokeFill::LatticeCell( int i, int &x, int &y, int &z ) const
@@ -298,17 +354,12 @@ void CNeoSmokeFill::LatticeCell( int i, int &x, int &y, int &z ) const
 
 bool CNeoSmokeFill::IsFinalized( int idx ) const
 {
-	if ( m_pBrickDir )
-	{
-		return CellState( BoxToLattice( idx ) ) == STATE_FINAL;
-	}
-
 	return m_pFinalBits && ( ( m_pFinalBits[idx >> 6] >> ( idx & 63 ) ) & 1 ) != 0;
 }
 
 int CNeoSmokeFill::Dist( int idx ) const
 {
-	return m_pBrickDir ? CellDist( BoxToLattice( idx ) ) : m_pFinalDist[FinalRank( idx )];
+	return m_pFinalDist[FinalRank( idx )];
 }
 
 int CNeoSmokeFill::FinalRank( int idx ) const
@@ -328,7 +379,7 @@ int CNeoSmokeFill::MemoryBytes() const
 	}
 	else if ( m_pFinalBits )
 	{
-		bytes += NEO_SMOKE_FILL_WORDS * (int)( sizeof( *m_pFinalBits ) + sizeof( *m_pWordRank ) );
+		bytes += m_nWords * (int)( sizeof( *m_pFinalBits ) + sizeof( *m_pWordRank ) );
 		bytes += m_nBoxFinalized * (int)( sizeof( *m_pFinalDist ) + sizeof( *m_pBoxOrder ) );
 		bytes += m_nFinalized * (int)( sizeof( *m_pOrder ) + sizeof( *m_pOrderDist ) );
 	}
@@ -509,13 +560,6 @@ bool CNeoSmokeFill::Step( int maxCells, int maxQueries )
 		m_pOrderDist[m_nFinalized] = top.dist;
 		++m_nFinalized;
 		m_nFrontDist = top.dist;
-
-		const int boxIdx = LatticeToBox( cell );
-		if ( boxIdx >= 0 )
-		{
-			m_pBoxOrder[m_nBoxFinalized++] = boxIdx;
-			m_nBoxFront = top.dist;
-		}
 
 		Relax( cell );
 	}
