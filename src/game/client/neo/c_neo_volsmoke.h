@@ -70,6 +70,8 @@ private:
 	int  CarveSlot( int idx ) const { return m_bCarveCompact ? m_Fill.FinalRank( idx ) : idx; }
 	float FrontRadius( float age ) const;
 	float CellWeight( int idx, float now ) const;
+	float DensityAt( const Vector &pos, float front, float now ) const;
+	void AddInsideOverlay( float front, float now );
 	void UpdateBounds( float front );
 
 	// Atlas

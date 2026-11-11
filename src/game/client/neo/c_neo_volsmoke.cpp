@@ -16,6 +16,7 @@
 #include "mathlib/mathlib.h"
 #include "viewrender.h"
 #include "tier1/KeyValues.h"
+#include "smoke_fog_overlay.h"
 
 // memdbgon must be the last include file in a .cpp file!!!
 #include "tier0/memdbgon.h"
@@ -121,6 +122,10 @@ static constexpr float NEO_VOLSMOKE_SWEEP_EXTINCTION = 0.012f;
 // Light-grid samples: the grenade and four points at half the dome radius.
 static constexpr float NEO_VOLSMOKE_LIGHT_SAMPLE_UP = 32.0f;
 static constexpr float NEO_VOLSMOKE_LIGHT_SAMPLE_OUT = 0.5f * CNeoSmokeFill::DOME_RADIUS;
+
+// Path length through the camera's local density that the inside overlay
+// assumes. Dense smoke then covers the view as the legacy overlay does.
+static constexpr float NEO_VOLSMOKE_OVERLAY_PATH = 64.0f;
 
 // World-only: no props or entities, so every client sees the same walls.
 static constexpr int NEO_VOLSMOKE_FILL_MASK = CONTENTS_SOLID | CONTENTS_WINDOW;
@@ -852,6 +857,60 @@ float C_NeoVolSmoke::FrontRadius( float age ) const
 	return NEO_VOLSMOKE_NOMINAL_RADIUS * bloom;
 }
 
+// Smoke density at a point: trilinear over the eight nearest cell centers,
+// as the shader samples the atlas.
+float C_NeoVolSmoke::DensityAt( const Vector &pos, float front, float now ) const
+{
+	const Vector g = ( pos - m_vecGridMin ) / CNeoSmokeFill::CELL_SIZE - Vector( 0.5f, 0.5f, 0.5f );
+	const int base[3] = { (int)floorf( g.x ), (int)floorf( g.y ), (int)floorf( g.z ) };
+	const float frac[3] = { g.x - base[0], g.y - base[1], g.z - base[2] };
+
+	float density = 0.0f;
+	for ( int corner = 0; corner < 8; ++corner )
+	{
+		int c[3];
+		float w = 1.0f;
+		for ( int a = 0; a < 3; ++a )
+		{
+			const int bit = ( corner >> a ) & 1;
+			c[a] = base[a] + bit;
+			w *= bit ? frac[a] : 1.0f - frac[a];
+		}
+
+		if ( !CNeoSmokeFill::InGrid( c[0], c[1], c[2] ) )
+		{
+			continue;
+		}
+
+		const int i = CNeoSmokeFill::Index( c[0], c[1], c[2] );
+		if ( !m_Fill.IsFinalized( i ) )
+		{
+			continue;
+		}
+
+		const float edge = clamp( ( front - CNeoSmokeFill::DistToUnits( m_Fill.Dist( i ) ) ) / NEO_VOLSMOKE_EDGE, 0.0f, 1.0f );
+		density += w * edge * edge * ( 3.0f - 2.0f * edge ) * CellWeight( i, now );
+	}
+
+	return density;
+}
+
+// From inside the smoke the march leaves the nearest units clear. Like the
+// legacy grenade, add the camera's share to the fullscreen smoke overlay,
+// which the HUD also reads to hide names and hints.
+void C_NeoVolSmoke::AddInsideOverlay( float front, float now )
+{
+	const float age = now - m_flSpawnTime;
+	const float extinction = NEO_VOLSMOKE_EXTINCTION * VolSmokeBloom( age ) * VolSmokeFade( age );
+	const float density = DensityAt( MainViewOrigin(), front, now );
+	if ( density <= 0.0f )
+	{
+		return;
+	}
+
+	g_SmokeFogOverlayAlpha += 1.0f - expf( -density * extinction * NEO_VOLSMOKE_OVERLAY_PATH );
+}
+
 // Density of a cell inside the front: its variation, times the carve hole
 // while it refills.
 float C_NeoVolSmoke::CellWeight( int idx, float now ) const
@@ -1158,6 +1217,7 @@ void C_NeoVolSmoke::ClientThink()
 	{
 		CVolSmokePerfScope perf( VOLSMOKE_PERF_DENSITY );
 		UpdateBounds( front );
+		AddInsideOverlay( front, now );
 	}
 
 	if ( !m_pRegen || !m_Atlas.IsValid() || now < m_flNextUpload )
