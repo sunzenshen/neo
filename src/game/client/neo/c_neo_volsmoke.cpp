@@ -1549,6 +1549,12 @@ void C_NeoVolSmoke::UpdateBounds( float front )
 		m_vecSmokeMin[a] = MAX( m_vecGridMin[a], m_vecGridMin[a] + ( m_SmokeLo[a] - 1 ) * cell );
 		m_vecSmokeMax[a] = MIN( m_vecGridMax[a], m_vecGridMin[a] + ( m_SmokeHi[a] + 2 ) * cell );
 	}
+
+	// The render bounds follow the smoke, so the leaves it draws in do too.
+	if ( GetRenderHandle() != INVALID_CLIENT_RENDER_HANDLE )
+	{
+		ClientLeafSystem()->RenderableChanged( GetRenderHandle() );
+	}
 }
 
 // Top-down sweep: each cell gets the transmittance of the smoke above it.
@@ -1788,8 +1794,20 @@ void C_NeoVolSmoke::ClientThink()
 // ---------------------------------------------------------------------------
 void C_NeoVolSmoke::GetRenderBounds( Vector &mins, Vector &maxs )
 {
-	mins = m_vecGridMin - GetRenderOrigin();
-	maxs = m_vecGridMax - GetRenderOrigin();
+	// Before the first cell fills there is nothing to place.
+	if ( m_vecSmokeMax.x <= m_vecSmokeMin.x )
+	{
+		mins = maxs = m_vecSpawn - GetRenderOrigin();
+		return;
+	}
+
+	// The box that holds smoke, not the whole grid. The engine draws a
+	// translucent renderable in the nearest leaf its bounds touch, after the
+	// translucent world surfaces of that leaf and of every leaf behind it.
+	// Tight bounds keep glass that stands in front of the smoke out of those
+	// leaves, so it is drawn over the smoke and not under it.
+	mins = m_vecSmokeMin - GetRenderOrigin();
+	maxs = m_vecSmokeMax - GetRenderOrigin();
 }
 
 static void SetVec3Var( IMaterial *pMat, const char *name, const Vector &v )
