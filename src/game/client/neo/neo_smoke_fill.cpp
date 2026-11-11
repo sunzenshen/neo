@@ -288,7 +288,39 @@ int CNeoSmokeFill::FindSeed()
 		}
 	}
 
-	return -1;
+	return FindSeedAboveWater();
+}
+
+// A grenade under water starts the gas at the first air cell straight above
+// it, so it still smokes from the surface instead of making nothing.
+int CNeoSmokeFill::FindSeedAboveWater()
+{
+	++m_nQueries;
+	if ( !m_pWorld->SeedInWater() )
+	{
+		return -1;
+	}
+
+	const int x = GRID_XY / 2;
+	const int y = GRID_XY / 2;
+	int z = SEED_CELL_Z;
+	while ( z < GRID_Z )
+	{
+		++m_nQueries;
+		if ( !m_pWorld->CellWater( x, y, z ) )
+		{
+			break;
+		}
+
+		++z;
+	}
+
+	if ( z >= GRID_Z || !CellOpen( x, y, z ) )
+	{
+		return -1;
+	}
+
+	return Index( x, y, z );
 }
 
 bool CNeoSmokeFill::Step( int maxCells, int maxQueries )

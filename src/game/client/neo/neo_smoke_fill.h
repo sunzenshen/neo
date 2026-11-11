@@ -25,6 +25,11 @@ public:
 	// Is the straight way from the grenade to the center of cell (x, y, z)
 	// blocked? The grenade sits on the corner shared by the seed candidates.
 	virtual bool SeedBlocked( int x, int y, int z ) = 0;
+
+	// Water bounds the gas like a floor. Is the grenade itself under water, and
+	// is the center of cell (x, y, z) under water?
+	virtual bool SeedInWater() = 0;
+	virtual bool CellWater( int x, int y, int z ) = 0;
 };
 
 class CNeoSmokeFill
@@ -113,6 +118,7 @@ private:
 	bool LineOpen( int from, int to );
 	bool SeedCellOk( int x, int y, int z );
 	int  FindSeed();
+	int  FindSeedAboveWater();
 
 	void Begin();
 	void Relax( int cell );
