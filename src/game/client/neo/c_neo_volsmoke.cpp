@@ -1963,6 +1963,13 @@ static void SetVec3Var( IMaterial *pMat, const char *name, const Vector &v )
 	if ( found ) pVar->SetVecValue( v.x, v.y, v.z );
 }
 
+static void SetVec2Var( IMaterial *pMat, const char *name, float x, float y )
+{
+	bool found = false;
+	IMaterialVar *pVar = pMat->FindVar( name, &found, false );
+	if ( found ) pVar->SetVecValue( x, y );
+}
+
 static void SetVec4Var( IMaterial *pMat, const char *name, float x, float y, float z, float w )
 {
 	bool found = false;
@@ -2019,9 +2026,9 @@ void C_NeoVolSmoke::SetDrawParams( IMaterial *pMat ) const
 	Vector seed;
 	const float sphereRadius = SmokeSphere( seed );
 	SetVec4Var( pMat, "$smokesphere", seed.x, seed.y, seed.z, sphereRadius );
-	// Slices along z, square GRID_XY tiles.
-	SetVec4Var( pMat, "$gridparams", (float)m_nBox[2], (float)m_nAtlasCols, (float)( m_nAtlasH / m_nBox[1] ),
-		1.0f / (float)m_nBox[0] );
+	// Slices along z, one tile of the box's x by y cells each.
+	SetVec3Var( pMat, "$gridparams", Vector( (float)m_nBox[2], (float)m_nAtlasCols, (float)( m_nAtlasH / m_nBox[1] ) ) );
+	SetVec2Var( pMat, "$tilecells", (float)m_nBox[0], (float)m_nBox[1] );
 	SetVec3Var( pMat, "$ambient", amb );
 	SetVec3Var( pMat, "$lightcolor", lightCol );
 	const float age = gpGlobals->curtime - m_flSpawnTime;
