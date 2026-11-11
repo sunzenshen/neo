@@ -132,6 +132,77 @@ static float VolSmokeCellVariation( int idx )
 }
 
 // ---------------------------------------------------------------------------
+// CPU cost readout (neo_volsmoke_perf): time per stage, summed over volumes.
+// ---------------------------------------------------------------------------
+enum VolSmokePerfStage_t
+{
+	VOLSMOKE_PERF_FILL = 0,
+	VOLSMOKE_PERF_DENSITY,
+	VOLSMOKE_PERF_SWEEP,
+	VOLSMOKE_PERF_PACK,
+	VOLSMOKE_PERF_DOWNLOAD,
+	VOLSMOKE_PERF_STAGES,
+};
+
+static const char *const s_VolSmokePerfNames[VOLSMOKE_PERF_STAGES] = { "fill", "density", "sweep", "pack", "download" };
+
+struct VolSmokePerf_t
+{
+	double stage[VOLSMOKE_PERF_STAGES];
+	double stagePeak[VOLSMOKE_PERF_STAGES];
+	double frameTotal;     // this frame so far, all stages and volumes
+	double framePeak;
+	double frameTime;      // engine frame time summed over counted frames
+	int    frames;
+	int    lastFrame;
+	int    uploads;
+	double start;
+};
+
+static VolSmokePerf_t s_VolSmokePerf;
+
+static void VolSmokePerfReset()
+{
+	Q_memset( &s_VolSmokePerf, 0, sizeof( s_VolSmokePerf ) );
+	s_VolSmokePerf.lastFrame = -1;
+	s_VolSmokePerf.start = Plat_FloatTime();
+}
+
+// Opens a frame the first time any volume thinks in it.
+static void VolSmokePerfFrame()
+{
+	VolSmokePerf_t &p = s_VolSmokePerf;
+	if ( p.lastFrame == gpGlobals->framecount )
+	{
+		return;
+	}
+
+	p.framePeak = MAX( p.framePeak, p.frameTotal );
+	p.frameTotal = 0.0;
+	p.lastFrame = gpGlobals->framecount;
+	p.frameTime += gpGlobals->absoluteframetime;
+	++p.frames;
+}
+
+class CVolSmokePerfScope
+{
+public:
+	explicit CVolSmokePerfScope( VolSmokePerfStage_t stage ) : m_Stage( stage ), m_flStart( Plat_FloatTime() ) {}
+	~CVolSmokePerfScope()
+	{
+		const double spent = Plat_FloatTime() - m_flStart;
+		VolSmokePerf_t &p = s_VolSmokePerf;
+		p.stage[m_Stage] += spent;
+		p.stagePeak[m_Stage] = MAX( p.stagePeak[m_Stage], spent );
+		p.frameTotal += spent;
+	}
+
+private:
+	VolSmokePerfStage_t m_Stage;
+	double m_flStart;
+};
+
+// ---------------------------------------------------------------------------
 // World queries for the fill: cell centers and the segments between them.
 // ---------------------------------------------------------------------------
 class CNeoVolSmokeWorld final : public INeoSmokeFillWorld
@@ -656,21 +727,36 @@ void C_NeoVolSmoke::ClientThink()
 		return;
 	}
 
-	StepFill();
+	VolSmokePerfFrame();
+
+	{
+		CVolSmokePerfScope perf( VOLSMOKE_PERF_FILL );
+		StepFill();
+	}
 
 	// Densities animate every frame (bloom, regrow).
-	UpdateDensities();
+	{
+		CVolSmokePerfScope perf( VOLSMOKE_PERF_DENSITY );
+		UpdateDensities();
+	}
 
 	if ( now >= m_flNextLightSweep )
 	{
+		CVolSmokePerfScope perf( VOLSMOKE_PERF_SWEEP );
 		SweepLight();
 		m_flNextLightSweep = now + 1.0f / NEO_VOLSMOKE_SWEEP_HZ;
 	}
 
 	if ( m_pRegen && m_Atlas.IsValid() )
 	{
-		FillAtlas( m_pRegen->Bits(), m_pRegen->Pitch() );
+		{
+			CVolSmokePerfScope perf( VOLSMOKE_PERF_PACK );
+			FillAtlas( m_pRegen->Bits(), m_pRegen->Pitch() );
+		}
+
+		CVolSmokePerfScope perf( VOLSMOKE_PERF_DOWNLOAD );
 		m_Atlas->Download();
+		++s_VolSmokePerf.uploads;
 		m_bAtlasDirty = false;
 	}
 }
@@ -1006,4 +1092,35 @@ CON_COMMAND_F( neo_volsmoke_stats, "Print live volumes and the atlas textures st
 	Msg( "neo_volsmoke_stats: live %d, created %d, atlas textures loaded %d\n",
 		C_NeoVolSmoke::LiveCount(), C_NeoVolSmoke::NextId(), textures );
 	C_NeoVolSmoke::PrintAllStats();
+}
+
+CON_COMMAND_F( neo_volsmoke_perf, "Print the smoke's CPU time per frame by stage since the last reset. Args: [reset]", FCVAR_CHEAT )
+{
+	VolSmokePerf_t &p = s_VolSmokePerf;
+	if ( args.ArgC() > 1 && !Q_stricmp( args[1], "reset" ) )
+	{
+		VolSmokePerfReset();
+		Msg( "neo_volsmoke_perf: reset\n" );
+		return;
+	}
+
+	// The frame in progress counts toward the peak.
+	const double framePeak = MAX( p.framePeak, p.frameTotal );
+	const int frames = MAX( p.frames, 1 );
+	const double seconds = MAX( Plat_FloatTime() - p.start, 1.0e-3 );
+
+	double total = 0.0;
+	for ( int s = 0; s < VOLSMOKE_PERF_STAGES; ++s )
+	{
+		total += p.stage[s];
+	}
+
+	Msg( "neo_volsmoke_perf: live %d frames %d over %.2f s, engine frame %.3f ms, smoke cpu %.3f ms/frame (peak frame %.2f ms), uploads %d (%.1f/s)\n",
+		C_NeoVolSmoke::LiveCount(), p.frames, seconds, 1000.0 * p.frameTime / frames, 1000.0 * total / frames,
+		1000.0 * framePeak, p.uploads, p.uploads / seconds );
+	for ( int s = 0; s < VOLSMOKE_PERF_STAGES; ++s )
+	{
+		Msg( "neo_volsmoke_perf:   %-8s %.3f ms/frame (peak %.2f ms)\n", s_VolSmokePerfNames[s],
+			1000.0 * p.stage[s] / frames, 1000.0 * p.stagePeak[s] );
+	}
 }
