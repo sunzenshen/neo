@@ -503,6 +503,13 @@ private:
 
 	bool InEmptyBlock( int x, int y, int z )
 	{
+		// The block cache covers the client's box; the fill also asks about
+		// cells outside it, which then take the direct query.
+		if ( !CNeoSmokeFill::InGrid( x, y, z ) )
+		{
+			return false;
+		}
+
 		for ( int level = 0; level < NEO_VOLSMOKE_BLOCK_LEVELS; ++level )
 		{
 			const int b = NEO_VOLSMOKE_BLOCK_SIZES[level];
