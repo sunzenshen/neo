@@ -43,12 +43,40 @@ static int NeoSmokeOccLinkShift( int axis )
 	return 2 + 2 * axis;
 }
 
+// Floor of the square root, exact for any non-negative int.
+static int NeoSmokeISqrt( int v )
+{
+	int r = 0;
+	int bit = 1 << 30;
+	while ( bit > v )
+	{
+		bit >>= 2;
+	}
+
+	while ( bit != 0 )
+	{
+		if ( v >= r + bit )
+		{
+			v -= r + bit;
+			r = ( r >> 1 ) + bit;
+		}
+		else
+		{
+			r >>= 1;
+		}
+		bit >>= 2;
+	}
+
+	return r;
+}
+
 CNeoSmokeFill::CNeoSmokeFill()
 	: m_pWorld( NULL ), m_nHeapCount( 0 ), m_nFinalized( 0 ), m_nFrontDist( 0 ), m_nQueries( 0 ), m_bDone( true )
 {
 	m_pOcc = new unsigned char[CELLS];
 	m_pState = new unsigned char[CELLS];
 	m_pDist = new int[CELLS];
+	m_pAnchor = new int[CELLS];
 	m_pHeap = new int[CELLS];
 	m_pHeapPos = new int[CELLS];
 	m_pOrder = new int[NEO_SMOKE_FILL_BUDGET];
@@ -59,6 +87,7 @@ CNeoSmokeFill::~CNeoSmokeFill()
 	delete[] m_pOcc;
 	delete[] m_pState;
 	delete[] m_pDist;
+	delete[] m_pAnchor;
 	delete[] m_pHeap;
 	delete[] m_pHeapPos;
 	delete[] m_pOrder;
@@ -78,6 +107,7 @@ void CNeoSmokeFill::Start( INeoSmokeFillWorld *pWorld )
 		m_pOcc[i] = 0;
 		m_pState[i] = STATE_NONE;
 		m_pDist[i] = NEO_SMOKE_FILL_UNREACHED;
+		m_pAnchor[i] = -1;
 		m_pHeapPos[i] = -1;
 	}
 
@@ -97,6 +127,7 @@ void CNeoSmokeFill::Start( INeoSmokeFillWorld *pWorld )
 
 	const int seed = Index( sx, sy, sz );
 	m_pDist[seed] = 0;
+	m_pAnchor[seed] = seed;
 	HeapPush( seed );
 }
 
@@ -174,15 +205,37 @@ void CNeoSmokeFill::Relax( int cell )
 					continue;
 				}
 
-				const int step = ( axes == 1 ) ? NEO_SMOKE_FILL_STEP_FACE
-					: ( ( axes == 2 ) ? NEO_SMOKE_FILL_STEP_EDGE : NEO_SMOKE_FILL_STEP_CORNER );
-				const int dist = m_pDist[cell] + step;
+				// Measure straight from the anchor while it can see the cell, so
+				// open space fills as a sphere. Behind a corner the corner cell
+				// becomes the new anchor and the gas turns it as a sphere section.
+				int dist;
+				int anchor;
+				const int a = m_pAnchor[cell];
+				if ( LineOpen( a, next ) )
+				{
+					int ac[3];
+					Coords( a, ac[0], ac[1], ac[2] );
+					const int ex = ac[0] - n[0];
+					const int ey = ac[1] - n[1];
+					const int ez = ac[2] - n[2];
+					dist = m_pDist[a] + NeoSmokeISqrt( DIST_SCALE * DIST_SCALE * ( ex * ex + ey * ey + ez * ez ) );
+					anchor = a;
+				}
+				else
+				{
+					const int step = ( axes == 1 ) ? NEO_SMOKE_FILL_STEP_FACE
+						: ( ( axes == 2 ) ? NEO_SMOKE_FILL_STEP_EDGE : NEO_SMOKE_FILL_STEP_CORNER );
+					dist = m_pDist[cell] + step;
+					anchor = cell;
+				}
+
 				if ( dist >= m_pDist[next] )
 				{
 					continue;
 				}
 
 				m_pDist[next] = dist;
+				m_pAnchor[next] = anchor;
 				if ( m_pState[next] == STATE_QUEUED )
 				{
 					HeapUpdate( next );
@@ -281,6 +334,51 @@ bool CNeoSmokeFill::BlockOpen( const int p[3], const int q[3] )
 				}
 			}
 		}
+	}
+
+	return true;
+}
+
+// Walks the straight line between two cell centers in half-cell steps; each
+// step must pass BlockOpen. Integer only, so the answer is the same on every
+// compiler.
+bool CNeoSmokeFill::LineOpen( int from, int to )
+{
+	int a[3];
+	int b[3];
+	Coords( from, a[0], a[1], a[2] );
+	Coords( to, b[0], b[1], b[2] );
+
+	int span = 0;
+	for ( int k = 0; k < 3; ++k )
+	{
+		span = MAX( span, abs( b[k] - a[k] ) );
+	}
+
+	const int samples = 2 * span;
+	int prev[3] = { a[0], a[1], a[2] };
+	for ( int i = 1; i <= samples; ++i )
+	{
+		// floor( a + 0.5 + ( b - a ) * i / samples ); the numerator is never negative.
+		int p[3];
+		for ( int k = 0; k < 3; ++k )
+		{
+			p[k] = ( ( 2 * a[k] + 1 ) * samples + 2 * ( b[k] - a[k] ) * i ) / ( 2 * samples );
+		}
+
+		if ( p[0] == prev[0] && p[1] == prev[1] && p[2] == prev[2] )
+		{
+			continue;
+		}
+
+		if ( !BlockOpen( prev, p ) )
+		{
+			return false;
+		}
+
+		prev[0] = p[0];
+		prev[1] = p[1];
+		prev[2] = p[2];
 	}
 
 	return true;
