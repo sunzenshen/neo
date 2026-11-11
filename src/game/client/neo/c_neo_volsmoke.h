@@ -120,6 +120,7 @@ private:
 	float m_flNextUpload;
 	float m_flRegrowEnd;       // curtime when the last carved cell has refilled
 	float m_flSweptFront;      // bloom front of the last light sweep
+	bool  m_bUploadPending;    // atlas changed, upload waits for a free frame
 };
 
 #endif // C_NEO_VOLSMOKE_H
