@@ -1391,6 +1391,8 @@ void C_NeoVolSmoke::SetDrawParams( IMaterial *pMat ) const
 
 	SetVec3Var( pMat, "$volmin", m_vecGridMin );
 	SetVec3Var( pMat, "$volmax", m_vecGridMax );
+	SetVec3Var( pMat, "$smokemin", m_vecSmokeMin );
+	SetVec3Var( pMat, "$smokemax", m_vecSmokeMax );
 	// Slices along z, square GRID_XY tiles.
 	SetVec4Var( pMat, "$gridparams", (float)CNeoSmokeFill::GRID_Z, (float)NEO_VOLSMOKE_ATLAS_COLS, (float)NEO_VOLSMOKE_ATLAS_ROWS,
 		1.0f / (float)CNeoSmokeFill::GRID_XY );

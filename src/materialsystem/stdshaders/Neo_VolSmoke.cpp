@@ -20,6 +20,8 @@ BEGIN_VS_SHADER( Neo_VolSmoke, "NEO raymarched voxel smoke" )
 BEGIN_SHADER_PARAMS
 	SHADER_PARAM( VOLMIN,     SHADER_PARAM_TYPE_VEC3,    "[0 0 0]",       "World-space AABB min" )
 	SHADER_PARAM( VOLMAX,     SHADER_PARAM_TYPE_VEC3,    "[1 1 1]",       "World-space AABB max" )
+	SHADER_PARAM( SMOKEMIN,   SHADER_PARAM_TYPE_VEC3,    "[0 0 0]",       "World-space min of the box around the cells that hold smoke" )
+	SHADER_PARAM( SMOKEMAX,   SHADER_PARAM_TYPE_VEC3,    "[1 1 1]",       "World-space max of that box" )
 	SHADER_PARAM( GRIDPARAMS, SHADER_PARAM_TYPE_VEC4,    "[32 8 4 0.03125]", "x = N, y = atlas cols, z = atlas rows, w = 1/N" )
 	SHADER_PARAM( AMBIENT,    SHADER_PARAM_TYPE_VEC3,    "[0.6 0.6 0.6]", "Ambient light reaching the smoke (linear)" )
 	SHADER_PARAM( LIGHTCOLOR, SHADER_PARAM_TYPE_VEC3,    "[0.8 0.8 0.8]", "Directional light colour (linear), scaled by baked per-voxel light" )
@@ -155,6 +157,15 @@ SHADER_DRAW
 		c[2] = front[1];
 		c[3] = front[2];
 		pShaderAPI->SetPixelShaderConstant( 7, c );
+
+		// c8, c9: the box the march is clipped to
+		params[SMOKEMIN]->GetVecValue( c, 3 );
+		c[3] = 0.0f;
+		pShaderAPI->SetPixelShaderConstant( 8, c );
+
+		params[SMOKEMAX]->GetVecValue( c, 3 );
+		c[3] = 0.0f;
+		pShaderAPI->SetPixelShaderConstant( 9, c );
 
 		DECLARE_DYNAMIC_VERTEX_SHADER( neo_volsmoke_vs30 );
 		SET_DYNAMIC_VERTEX_SHADER( neo_volsmoke_vs30 );
