@@ -123,9 +123,15 @@ static constexpr float NEO_VOLSMOKE_SWEEP_EXTINCTION = 0.012f;
 static constexpr float NEO_VOLSMOKE_LIGHT_SAMPLE_UP = 32.0f;
 static constexpr float NEO_VOLSMOKE_LIGHT_SAMPLE_OUT = 0.5f * CNeoSmokeFill::DOME_RADIUS;
 
-// Path length through the camera's local density that the inside overlay
-// assumes. Dense smoke then covers the view as the legacy overlay does.
-static constexpr float NEO_VOLSMOKE_OVERLAY_PATH = 64.0f;
+// The inside overlay averages the density over a cube of samples around the
+// camera, so it ramps in over about the cube's size while walking in, as the
+// legacy overlay ramps with the distance to the grenade.
+static constexpr float NEO_VOLSMOKE_OVERLAY_REACH = 64.0f;
+static constexpr int NEO_VOLSMOKE_OVERLAY_SIDE = 3; // samples per axis
+
+// Average density at which the overlay covers the view completely. Below the
+// smallest cell variation, so the core hides the viewmodel as legacy does.
+static constexpr float NEO_VOLSMOKE_OVERLAY_FULL = 0.5f;
 
 // The legacy smoke's thermal-vision transparency.
 extern ConVar r_neo_thermal_smoke_alpha;
@@ -920,15 +926,31 @@ float C_NeoVolSmoke::DensityAt( const Vector &pos, float front, float now ) cons
 // which the HUD also reads to hide names and hints.
 void C_NeoVolSmoke::AddInsideOverlay( float front, float now )
 {
-	const float age = now - m_flSpawnTime;
-	const float extinction = NEO_VOLSMOKE_EXTINCTION * VolSmokeBloom( age ) * VolSmokeFade( age );
-	const float density = DensityAt( MainViewOrigin(), front, now );
-	if ( density <= 0.0f )
+	const Vector eye = MainViewOrigin();
+	const Vector reach( NEO_VOLSMOKE_OVERLAY_REACH, NEO_VOLSMOKE_OVERLAY_REACH, NEO_VOLSMOKE_OVERLAY_REACH );
+	if ( !IsPointInBox( eye, m_vecSmokeMin - reach, m_vecSmokeMax + reach ) )
 	{
 		return;
 	}
 
-	g_SmokeFogOverlayAlpha += 1.0f - expf( -density * extinction * NEO_VOLSMOKE_OVERLAY_PATH );
+	const int side = NEO_VOLSMOKE_OVERLAY_SIDE;
+	const float spacing = 2.0f * NEO_VOLSMOKE_OVERLAY_REACH / ( side - 1 );
+	float sum = 0.0f;
+	for ( int i = 0; i < side * side * side; ++i )
+	{
+		const Vector offset( i % side, ( i / side ) % side, i / ( side * side ) );
+		sum += DensityAt( eye - reach + offset * spacing, front, now );
+	}
+
+	if ( sum <= 0.0f )
+	{
+		return;
+	}
+
+	const float age = now - m_flSpawnTime;
+	const float density = sum / ( side * side * side );
+	const float share = clamp( density / NEO_VOLSMOKE_OVERLAY_FULL, 0.0f, 1.0f );
+	g_SmokeFogOverlayAlpha += share * VolSmokeBloom( age ) * VolSmokeFade( age );
 }
 
 // Density of a cell inside the front: its variation, times the carve hole
