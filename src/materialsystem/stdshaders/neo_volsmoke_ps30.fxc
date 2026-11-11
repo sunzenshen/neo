@@ -30,6 +30,8 @@ const float4 g_Ambient      : register( c4 ); // rgb ambient light, w = jitter e
 const float4 g_Light        : register( c5 ); // rgb directional light, w = time
 const float4 g_Misc         : register( c6 ); // x = look noise strength 0..1, y = volume age, z = bloom front path length, w = debug mode
 const float4 g_ScreenParams : register( c7 ); // xy = half texel, z = path length at atlas value 1, w = 1 / edge width
+const float4 g_SmokeMin     : register( c8 ); // xyz box around the cells that hold smoke, w unused
+const float4 g_SmokeMax     : register( c9 ); // xyz, w unused
 
 #define STEP_LEN  8.0f
 #define MAX_STEPS 64
@@ -159,9 +161,11 @@ float4 main( PS_INPUT i ) : COLOR
 	}
 
 	// --- AABB slab test -------------------------------------------------
+	// Against the box around the smoke, not the whole grid: the rest of the
+	// grid is empty, and a ray would spend its steps there.
 	float3 invDir = 1.0f / rd;
-	float3 tA = ( g_VolMin.xyz - ro ) * invDir;
-	float3 tB = ( g_VolMax.xyz - ro ) * invDir;
+	float3 tA = ( g_SmokeMin.xyz - ro ) * invDir;
+	float3 tB = ( g_SmokeMax.xyz - ro ) * invDir;
 	float3 tNear = min( tA, tB );
 	float3 tFar  = max( tA, tB );
 	float t0 = max( max( tNear.x, tNear.y ), tNear.z );
