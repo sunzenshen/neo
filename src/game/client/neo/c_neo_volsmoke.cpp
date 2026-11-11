@@ -228,7 +228,7 @@ private:
 class CNeoVolSmokeWorld final : public INeoSmokeFillWorld
 {
 public:
-	explicit CNeoVolSmokeWorld( const Vector &gridMin ) : m_vecGridMin( gridMin ) {}
+	explicit CNeoVolSmokeWorld( const Vector &gridMin ) : m_vecGridMin( gridMin ), m_flQuerySeconds( 0.0 ) {}
 
 	static bool PointSolid( const Vector &pos )
 	{
@@ -242,11 +242,15 @@ public:
 
 	virtual bool CellSolid( int x, int y, int z ) override
 	{
-		return PointSolid( Center( x, y, z ) );
+		const double start = Plat_FloatTime();
+		const bool solid = PointSolid( Center( x, y, z ) );
+		m_flQuerySeconds += Plat_FloatTime() - start;
+		return solid;
 	}
 
 	virtual bool LinkBlocked( int x, int y, int z, int axis ) override
 	{
+		const double start = Plat_FloatTime();
 		int n[3] = { x, y, z };
 		++n[axis];
 
@@ -255,8 +259,12 @@ public:
 		CTraceFilterWorldOnly filter;
 		trace_t tr;
 		enginetrace->TraceRay( ray, NEO_VOLSMOKE_FILL_MASK, &filter, &tr );
+		m_flQuerySeconds += Plat_FloatTime() - start;
 		return tr.startsolid || tr.fraction < 1.0f;
 	}
+
+	// Time spent answering queries, for neo_volsmoke_stats.
+	double QuerySeconds() const { return m_flQuerySeconds; }
 
 private:
 	Vector Center( int x, int y, int z ) const
@@ -266,6 +274,7 @@ private:
 	}
 
 	Vector m_vecGridMin;
+	double m_flQuerySeconds;
 };
 
 // ---------------------------------------------------------------------------
@@ -844,10 +853,24 @@ void C_NeoVolSmoke::Carve( const Vector &start, const Vector &end, float radius 
 // ---------------------------------------------------------------------------
 void C_NeoVolSmoke::PrintStats() const
 {
-	Msg( "neo_volsmoke_stats: volume %d age %.2f done %d (at age %.2f) cells %d radius %.1f queries %d fill %.1f ms (peak frame %.2f ms), front ahead of the fill in %d frames\n",
+	// FNV-1a over the finalized cells and their path lengths: equal hashes mean
+	// equal fields.
+	unsigned int hash = 2166136261u;
+	for ( int i = 0; i < m_Fill.FinalizedCount(); ++i )
+	{
+		const int cell = m_Fill.FinalizedCell( i );
+		const unsigned int words[2] = { (unsigned int)cell, (unsigned int)m_Fill.Dist( cell ) };
+		for ( unsigned int word : words )
+		{
+			hash = ( hash ^ word ) * 16777619u;
+		}
+	}
+
+	const double queryMs = m_pWorld ? m_pWorld->QuerySeconds() * 1000.0 : 0.0;
+	Msg( "neo_volsmoke_stats: volume %d age %.2f done %d (at age %.2f) cells %d radius %.1f queries %d fill %.1f ms (world %.1f ms, peak frame %.2f ms), hash %08x, front ahead of the fill in %d frames\n",
 		m_nId, gpGlobals->curtime - m_flSpawnTime, m_Fill.IsDone() ? 1 : 0, m_flFillDoneAge, m_Fill.FinalizedCount(),
 		CNeoSmokeFill::DistToUnits( m_Fill.FrontDist() ), m_Fill.WorldQueries(),
-		m_flFillSeconds * 1000.0, m_flFillPeakFrame * 1000.0, m_nLagFrames );
+		m_flFillSeconds * 1000.0, queryMs, m_flFillPeakFrame * 1000.0, hash, m_nLagFrames );
 }
 
 void C_NeoVolSmoke::ClientThink()
