@@ -514,6 +514,99 @@ private:
 };
 
 // ---------------------------------------------------------------------------
+// Look noise texture, shared by all volumes: random values on a lattice that
+// wraps, R one layer and G the layer above it, which the shader finds
+// NEO_VOLSMOKE_NOISE_SHIFT texels away. Must match NOISE_SIZE and
+// NOISE_Z_SHIFT in neo_volsmoke_ps30.fxc.
+// ---------------------------------------------------------------------------
+static constexpr int NEO_VOLSMOKE_NOISE_SIZE = 64;
+static constexpr int NEO_VOLSMOKE_NOISE_SHIFT_X = 37;
+static constexpr int NEO_VOLSMOKE_NOISE_SHIFT_Y = 17;
+
+// Integer hash (lowbias32): the same values on every client.
+static unsigned int VolSmokeNoiseHash( unsigned int x )
+{
+	x ^= x >> 16;
+	x *= 0x7feb352dU;
+	x ^= x >> 15;
+	x *= 0x846ca68bU;
+	x ^= x >> 16;
+	return x;
+}
+
+static unsigned char VolSmokeNoiseValue( int x, int y )
+{
+	const int size = NEO_VOLSMOKE_NOISE_SIZE;
+	const int wx = ( ( x % size ) + size ) % size;
+	const int wy = ( ( y % size ) + size ) % size;
+	return (unsigned char)( VolSmokeNoiseHash( (unsigned int)( wy * size + wx ) ) >> 24 );
+}
+
+class CNeoVolSmokeNoiseRegenerator final : public ITextureRegenerator
+{
+public:
+	virtual void RegenerateTextureBits( ITexture *pTexture, IVTFTexture *pVTFTexture, Rect_t *pRect ) override
+	{
+		const int size = NEO_VOLSMOKE_NOISE_SIZE;
+		if ( pVTFTexture->Width() != size || pVTFTexture->Height() != size )
+		{
+			return;
+		}
+
+		CPixelWriter writer;
+		writer.SetPixelMemory( pVTFTexture->Format(), pVTFTexture->ImageData( 0, 0, 0 ), pVTFTexture->RowSizeInBytes( 0 ) );
+		for ( int y = 0; y < size; ++y )
+		{
+			writer.Seek( 0, y );
+			for ( int x = 0; x < size; ++x )
+			{
+				const unsigned char layer = VolSmokeNoiseValue( x, y );
+				const unsigned char above = VolSmokeNoiseValue( x + NEO_VOLSMOKE_NOISE_SHIFT_X, y + NEO_VOLSMOKE_NOISE_SHIFT_Y );
+				writer.WritePixel( layer, above, 0, 255 );
+			}
+		}
+	}
+
+	virtual void Release() override {}
+};
+
+static CNeoVolSmokeNoiseRegenerator s_VolSmokeNoiseRegen;
+static CTextureReference s_VolSmokeNoise;
+static const char *const NEO_VOLSMOKE_NOISE_NAME = "_neo_volsmoke_noise";
+
+static bool VolSmokeNoiseInit()
+{
+	if ( s_VolSmokeNoise.IsValid() )
+	{
+		return true;
+	}
+
+	s_VolSmokeNoise.InitProceduralTexture( NEO_VOLSMOKE_NOISE_NAME, TEXTURE_GROUP_OTHER, NEO_VOLSMOKE_NOISE_SIZE, NEO_VOLSMOKE_NOISE_SIZE,
+		IMAGE_FORMAT_BGRA8888, TEXTUREFLAGS_NOMIP | TEXTUREFLAGS_NOLOD | TEXTUREFLAGS_PROCEDURAL | TEXTUREFLAGS_SINGLECOPY );
+	if ( !s_VolSmokeNoise.IsValid() || IsErrorTexture( s_VolSmokeNoise ) )
+	{
+		Warning( "C_NeoVolSmoke: failed to create procedural texture %s\n", NEO_VOLSMOKE_NOISE_NAME );
+		s_VolSmokeNoise.Shutdown( true );
+		return false;
+	}
+
+	s_VolSmokeNoise->SetTextureRegenerator( &s_VolSmokeNoiseRegen );
+	s_VolSmokeNoise->Download();
+	return true;
+}
+
+static void VolSmokeNoiseShutdown()
+{
+	if ( !s_VolSmokeNoise.IsValid() )
+	{
+		return;
+	}
+
+	s_VolSmokeNoise->SetTextureRegenerator( NULL );
+	s_VolSmokeNoise.Shutdown( true );
+}
+
+// ---------------------------------------------------------------------------
 // Retired GPU resources
 // ---------------------------------------------------------------------------
 // The queued material system can still hold a frame that draws a removed
@@ -587,7 +680,12 @@ public:
 	}
 
 	virtual void LevelShutdownPostEntity() override { VolSmokeDeleteRetired( VOLSMOKE_RETIRE_NOW ); }
-	virtual void Shutdown() override { VolSmokeDeleteRetired( VOLSMOKE_RETIRE_NOW ); }
+	virtual void Shutdown() override
+	{
+		// The retired materials reference the noise texture.
+		VolSmokeDeleteRetired( VOLSMOKE_RETIRE_NOW );
+		VolSmokeNoiseShutdown();
+	}
 };
 
 static CNeoVolSmokeRetireSystem s_VolSmokeRetireSystem;
@@ -743,6 +841,12 @@ void C_NeoVolSmoke::Init( const Vector &origin, float spawnTime )
 		return;
 	}
 
+	if ( !VolSmokeNoiseInit() )
+	{
+		m_Atlas.Shutdown( true );
+		return;
+	}
+
 	m_pRegen = new CNeoVolSmokeRegenerator( atlasW, atlasH );
 	ClearAtlas();
 	m_Atlas->SetTextureRegenerator( m_pRegen );
@@ -754,11 +858,13 @@ void C_NeoVolSmoke::Init( const Vector &origin, float spawnTime )
 
 	KeyValues *pVMT = new KeyValues( "Neo_VolSmoke" );
 	pVMT->SetString( "$basetexture", texName );
+	pVMT->SetString( "$noisetexture", NEO_VOLSMOKE_NOISE_NAME );
 	m_Material.Init( matName, pVMT );
 
 	Q_snprintf( matName, sizeof( matName ), "__neo_volsmoke_%d_slab", m_nId );
 	pVMT = new KeyValues( "Neo_VolSmoke" );
 	pVMT->SetString( "$basetexture", texName );
+	pVMT->SetString( "$noisetexture", NEO_VOLSMOKE_NOISE_NAME );
 	pVMT->SetInt( "$slab", 1 );
 	m_SlabMaterial.Init( matName, pVMT );
 
