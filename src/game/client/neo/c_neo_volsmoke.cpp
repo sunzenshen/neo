@@ -58,7 +58,7 @@ enum VolSmokeAtlasByte_t
 	VOLSMOKE_BYTE_DIST = 0,   // B: path length, 0..NEO_VOLSMOKE_DIST_RANGE
 	VOLSMOKE_BYTE_LIGHT = 1,  // G: transmittance toward the light
 	VOLSMOKE_BYTE_WEIGHT = 2, // R: density of a cell inside the front
-	VOLSMOKE_BYTE_ALPHA = 3,
+	VOLSMOKE_BYTE_ALPHA = 3,  // A: distance to the wall beside the gas
 };
 
 // Path lengths are stored up to the grid's half width, past any front.
@@ -130,6 +130,25 @@ static constexpr float NEO_VOLSMOKE_MAX_DEPTH = 65536.0f;
 // and one march step keeps the cells the shader clips at the sphere empty.
 static constexpr float NEO_VOLSMOKE_MARCH_STEP = 8.0f; // the shader's STEP_LEN
 static constexpr float NEO_VOLSMOKE_SPHERE_MARGIN = ( 1.7321f + 1.0f ) * CNeoSmokeFill::CELL_SIZE + NEO_VOLSMOKE_MARCH_STEP;
+
+// The atlas's fourth byte holds the distance to the wall beside the gas, in
+// world units: positive on the gas side, negative past the wall's face. The
+// trilinear lookup of a plane's distance is exact, so the shader finds the
+// face inside a cell and draws no smoke past it. WALL_CAP is below the least
+// distance at which a face can miss all six links of a cell.
+//
+// A far slab has no scene depth to clip its march, so it stops at the first
+// negative distance instead: the cells without gas up to WALL_REACH cells from
+// the gas carry it, which is deeper than one march step can skip.
+static constexpr float NEO_VOLSMOKE_WALL_CAP = 5.0f;
+static constexpr int NEO_VOLSMOKE_WALL_REACH = 2;
+static constexpr float NEO_VOLSMOKE_WALL_STEPS_PER_UNIT = 12.0f;
+static constexpr int NEO_VOLSMOKE_WALL_UNSET = 255; // no gas cell has written this cell
+static constexpr int NEO_VOLSMOKE_WALL_ZERO_BYTE = 255 - (int)( NEO_VOLSMOKE_WALL_CAP * NEO_VOLSMOKE_WALL_STEPS_PER_UNIT );
+
+// The shader draws full density this far inside the face and none at it; the
+// margin covers the rounding of the hardware's bilinear weights.
+static constexpr float NEO_VOLSMOKE_WALL_MARGIN = 0.25f;
 
 // Bounds of a slab quad in view-space x / z and y / z: past any field of view.
 static constexpr float NEO_VOLSMOKE_SLAB_MAX_TAN = 4.0f;
@@ -362,6 +381,44 @@ public:
 
 		m_flQuerySeconds += Plat_FloatTime() - start;
 		return blocked;
+	}
+
+	// The world face that blocks the way from an open cell to its neighbor n,
+	// as a plane whose normal points back at the cell. Not part of the fill.
+	bool LinkWall( int x, int y, int z, const int n[3], Vector &normal, float &planeDist )
+	{
+		if ( !CNeoSmokeFill::InGrid( n[0], n[1], n[2] ) )
+		{
+			return false;
+		}
+
+		if ( InEmptyBlock( x, y, z ) && InEmptyBlock( n[0], n[1], n[2] ) )
+		{
+			return false;
+		}
+
+		const double start = Plat_FloatTime();
+		++m_nTraces;
+		Ray_t ray;
+		ray.Init( Center( x, y, z ), Center( n[0], n[1], n[2] ) );
+		CTraceFilterWorldOnly filter;
+		trace_t tr;
+		enginetrace->TraceRay( ray, NEO_VOLSMOKE_FILL_MASK, &filter, &tr );
+		m_flQuerySeconds += Plat_FloatTime() - start;
+		if ( tr.startsolid || tr.fraction >= 1.0f )
+		{
+			return false;
+		}
+
+		// Smoke shows through glass and grates, so they do not end it.
+		if ( ( tr.contents & ( CONTENTS_WINDOW | CONTENTS_GRATE ) ) || ( tr.surface.flags & SURF_TRANS ) )
+		{
+			return false;
+		}
+
+		normal = tr.plane.normal;
+		planeDist = DotProduct( normal, tr.endpos );
+		return true;
 	}
 
 	virtual bool SeedBlocked( int x, int y, int z ) override
@@ -1071,7 +1128,15 @@ float C_NeoVolSmoke::DensityAt( const Vector &pos, float front, float now ) cons
 		density += w * edge * edge * ( 3.0f - 2.0f * edge ) * CellWeight( i, now );
 	}
 
-	return density;
+	if ( density <= 0.0f || !m_pRegen )
+	{
+		return density;
+	}
+
+	// No smoke past a wall's face, as in the shader.
+	float dist, weight, wallCut;
+	SampleAtlas( pos, dist, weight, wallCut );
+	return density * wallCut;
 }
 
 // From inside the smoke the march leaves the nearest units clear. Like the
@@ -1126,6 +1191,20 @@ static unsigned char VolSmokeByte( float v )
 	return (unsigned char)( clamp( v, 0.0f, 1.0f ) * 255.0f + 0.5f );
 }
 
+static unsigned char VolSmokeWallByte( float distance )
+{
+	// Rounded down: a face is never placed past where it is.
+	const float steps = floorf( distance * NEO_VOLSMOKE_WALL_STEPS_PER_UNIT ) + NEO_VOLSMOKE_WALL_ZERO_BYTE;
+	return (unsigned char)clamp( steps, 0.0f, 255.0f );
+}
+
+// Smoke left at a point by the wall distance read from the atlas.
+static float VolSmokeWallCut( float wallByte )
+{
+	const float distance = ( wallByte - NEO_VOLSMOKE_WALL_ZERO_BYTE ) / NEO_VOLSMOKE_WALL_STEPS_PER_UNIT;
+	return clamp( distance - NEO_VOLSMOKE_WALL_MARGIN, 0.0f, 1.0f );
+}
+
 // Byte offset of a cell's texel: slice z lives in tile ( z % cols, z / cols ).
 static int VolSmokeAtlasOffset( int x, int y, int z )
 {
@@ -1173,6 +1252,34 @@ bool C_NeoVolSmoke::PackNewCells( float now )
 
 		int c[3];
 		CNeoSmokeFill::Coords( i, c[0], c[1], c[2] );
+
+		// The faces that block this cell's six links. A cell without gas beside
+		// it takes its distance to them, so the lookup crosses zero at the face.
+		Vector wallNormal[6];
+		float wallDist[6];
+		int walls = 0;
+		for ( int link = 0; link < 6; ++link )
+		{
+			int n[3] = { c[0], c[1], c[2] };
+			n[link >> 1] += ( link & 1 ) ? 1 : -1;
+			if ( m_pWorld->LinkWall( c[0], c[1], c[2], n, wallNormal[walls], wallDist[walls] ) )
+			{
+				++walls;
+			}
+		}
+
+		const float cell = CNeoSmokeFill::CELL_SIZE;
+		const Vector center = m_vecGridMin + Vector( ( c[0] + 0.5f ) * cell, ( c[1] + 0.5f ) * cell, ( c[2] + 0.5f ) * cell );
+		float ownWall = NEO_VOLSMOKE_WALL_CAP;
+		for ( int w = 0; w < walls; ++w )
+		{
+			ownWall = MIN( ownWall, DotProduct( wallNormal[w], center ) - wallDist[w] );
+		}
+
+		texel[VOLSMOKE_BYTE_ALPHA] = VolSmokeWallByte( ownWall );
+
+		for ( int dz = -1; dz <= 1; ++dz )		int c[3];
+		CNeoSmokeFill::Coords( i, c[0], c[1], c[2] );
 		for ( int dz = -1; dz <= 1; ++dz )
 		{
 			for ( int dy = -1; dy <= 1; ++dy )
@@ -1192,6 +1299,58 @@ bool C_NeoVolSmoke::PackNewCells( float now )
 
 					unsigned char &nDist = bits[VolSmokeAtlasOffset( n ) + VOLSMOKE_BYTE_DIST];
 					nDist = MIN( nDist, dist );
+				}
+			}
+		}
+
+		if ( walls == 0 )
+		{
+			continue;
+		}
+
+		const int reach = NEO_VOLSMOKE_WALL_REACH;
+		for ( int dz = -reach; dz <= reach; ++dz )
+		{
+			for ( int dy = -reach; dy <= reach; ++dy )
+			{
+				for ( int dx = -reach; dx <= reach; ++dx )
+				{
+					if ( !CNeoSmokeFill::InGrid( c[0] + dx, c[1] + dy, c[2] + dz ) )
+					{
+						continue;
+					}
+
+					const int n = CNeoSmokeFill::Index( c[0] + dx, c[1] + dy, c[2] + dz );
+					if ( m_Fill.IsFinalized( n ) )
+					{
+						continue;
+					}
+
+					float nWall = NEO_VOLSMOKE_WALL_CAP;
+					const Vector nCenter = center + Vector( dx * cell, dy * cell, dz * cell );
+					for ( int w = 0; w < walls; ++w )
+					{
+						nWall = MIN( nWall, DotProduct( wallNormal[w], nCenter ) - wallDist[w] );
+					}
+
+					// A cell past a face stays past it whatever the other gas cells
+					// say. Among the faces it is past, the nearest one counts: at an
+					// outside corner the farther face is not the one beside the gas.
+					const unsigned char newByte = MIN( VolSmokeWallByte( nWall ), NEO_VOLSMOKE_WALL_UNSET - 1 );
+					unsigned char &nWallByte = bits[VolSmokeAtlasOffset( n ) + VOLSMOKE_BYTE_ALPHA];
+					const bool bothPast = nWallByte < NEO_VOLSMOKE_WALL_ZERO_BYTE && newByte < NEO_VOLSMOKE_WALL_ZERO_BYTE;
+					if ( nWallByte == NEO_VOLSMOKE_WALL_UNSET )
+					{
+						nWallByte = newByte;
+					}
+					else if ( bothPast )
+					{
+						nWallByte = MAX( nWallByte, newByte );
+					}
+					else
+					{
+						nWallByte = MIN( nWallByte, newByte );
+					}
 				}
 			}
 		}
@@ -1685,7 +1844,7 @@ static void SphereSlabClip( const Vector &center, float radius, float lo, float 
 
 // The atlas's path length (0..1 of DIST_RANGE) and weight at a point,
 // filtered like the shader's lookup: clamped to the grid, trilinear.
-void C_NeoVolSmoke::SampleAtlas( const Vector &pos, float &dist, float &weight ) const
+void C_NeoVolSmoke::SampleAtlas( const Vector &pos, float &dist, float &weight, float &wallCut ) const
 {
 	const int size[3] = { CNeoSmokeFill::GRID_XY, CNeoSmokeFill::GRID_XY, CNeoSmokeFill::GRID_Z };
 	int base[3];
@@ -1703,6 +1862,7 @@ void C_NeoVolSmoke::SampleAtlas( const Vector &pos, float &dist, float &weight )
 	const int dy = 4 * NEO_VOLSMOKE_ATLAS_W;
 	dist = 0.0f;
 	weight = 0.0f;
+	float wall = 0.0f;
 	for ( int bz = 0; bz < 2; ++bz )
 	{
 		const unsigned char *t = bits + VolSmokeAtlasOffset( base[0], base[1], base[2] + bz );
@@ -1715,18 +1875,22 @@ void C_NeoVolSmoke::SampleAtlas( const Vector &pos, float &dist, float &weight )
 			+ w01 * t[dy + VOLSMOKE_BYTE_DIST] + w11 * t[dx + dy + VOLSMOKE_BYTE_DIST];
 		weight += w00 * t[VOLSMOKE_BYTE_WEIGHT] + w10 * t[dx + VOLSMOKE_BYTE_WEIGHT]
 			+ w01 * t[dy + VOLSMOKE_BYTE_WEIGHT] + w11 * t[dx + dy + VOLSMOKE_BYTE_WEIGHT];
+		wall += w00 * t[VOLSMOKE_BYTE_ALPHA] + w10 * t[dx + VOLSMOKE_BYTE_ALPHA]
+			+ w01 * t[dy + VOLSMOKE_BYTE_ALPHA] + w11 * t[dx + dy + VOLSMOKE_BYTE_ALPHA];
 	}
 
 	dist /= 255.0f;
 	weight /= 255.0f;
+	wallCut = VolSmokeWallCut( wall );
 }
 
 // The shader's density at a point with the front moved in by the most the
 // look noise can bite: never more than what the shader draws.
 float C_NeoVolSmoke::DensityLowerBound( const Vector &pos, float front, float bite ) const
 {
-	float dist, weight;
-	SampleAtlas( pos, dist, weight );
+	float dist, weight, wallCut;
+	SampleAtlas( pos, dist, weight, wallCut );
+	weight *= wallCut;
 
 	const float depth = front - dist * NEO_VOLSMOKE_DIST_RANGE - bite;
 	if ( weight <= 0.001f || depth <= 0.0f )

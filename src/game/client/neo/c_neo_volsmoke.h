@@ -92,7 +92,7 @@ private:
 	float DrawExtinction() const;
 	float SmokeSphere( Vector &center ) const;
 	void SetDrawParams( IMaterial *pMat ) const;
-	void SampleAtlas( const Vector &pos, float &dist, float &weight ) const;
+	void SampleAtlas( const Vector &pos, float &dist, float &weight, float &wallCut ) const;
 	float DensityLowerBound( const Vector &pos, float front, float bite ) const;
 	float OpaqueDepth( const Vector &eye, const Vector &dir, float front, float bite, float extinction ) const;
 	bool BuildCullGrid( IMatRenderContext *pRenderContext, const Vector view[8], float zMin, float zMax, VolSmokeCullGrid_t &grid ) const;
