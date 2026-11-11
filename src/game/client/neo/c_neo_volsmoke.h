@@ -46,6 +46,11 @@ public:
 	static void CarveAll( const Vector &start, const Vector &end, float radius );
 
 	static void RemoveAll();
+
+	// Releases the volumes whose time is over. Called once a frame, outside
+	// the client think, which cannot release the entity it runs.
+	static void RemoveExpired();
+
 	static void PrintAllStats();
 	static int  LiveCount() { return s_Volumes.Count(); }
 	static int  NextId() { return s_nNextId; }
