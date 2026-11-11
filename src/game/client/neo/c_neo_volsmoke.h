@@ -3,7 +3,8 @@
 // A CPU-simulated density grid that fills through world collision from a
 // spawn point (CNeoSmokeFill), is shaded by a top-down sweep, can be carved by
 // bullets/explosions (with regrow), and is uploaded as a 2D slice atlas to a
-// procedural texture. Rendering is a single raymarched box per volume via the
+// procedural texture. The atlas holds path lengths, not densities: the shader
+// applies the bloom front and the fade, so a grown volume uploads nothing. Rendering is a single raymarched box per volume via the
 // Neo_VolSmoke shader, so there is no intra-volume sorting and no OIT issue.
 //
 // This is a client-only prototype: spawn with `neo_volsmoke_spawn`, carve with
@@ -57,9 +58,6 @@ public:
 	virtual void GetRenderBounds( Vector &mins, Vector &maxs ) override;
 	virtual int  DrawModel( int flags ) override;
 
-	// Fills the slice atlas; called by the texture regenerator.
-	void FillAtlas( unsigned char *pDst, int pitch ) const;
-
 	void PrintStats() const;
 
 private:
@@ -69,8 +67,14 @@ private:
 	// Simulation
 	void StepFill();
 	float FrontRadius( float age ) const;
-	void UpdateDensities();
-	void SweepLight();
+	float CellWeight( int idx, float now ) const;
+	void UpdateBounds( float front );
+
+	// Atlas
+	void ClearAtlas();
+	bool PackNewCells( float now );
+	void PackWeights( float now );
+	void SweepLight( float front, float now );
 	static Vector SampleColor( const Vector &origin );
 	void Carve( const Vector &start, const Vector &end, float radius );
 
@@ -101,16 +105,18 @@ private:
 
 	// Per-cell state
 	CUtlVector< float >         m_CarveTime;  // curtime of last carve, <0 = never
-	CUtlVector< float >         m_Density;    // 0..1 current density
-	CUtlVector< float >         m_Light;      // 0..1 transmittance toward light
+	int    m_SmokeLo[3];       // cell bounds of m_vecSmokeMin / Max
+	int    m_SmokeHi[3];
+	int    m_nBounded;         // finalized cells inside the drawn box
 
 	// GPU side
 	CTextureReference        m_Atlas;
 	CNeoVolSmokeRegenerator *m_pRegen;
 	CMaterialReference       m_Material;     // near pass: box far faces, clipped in the shader
 	CMaterialReference       m_SlabMaterial; // far slabs: hardware depth test
-	bool  m_bAtlasDirty;
-	float m_flNextLightSweep;
+	int   m_nPacked;           // finalized cells written to the atlas
+	float m_flNextUpload;
+	float m_flRegrowEnd;       // curtime when the last carved cell has refilled
 };
 
 #endif // C_NEO_VOLSMOKE_H
