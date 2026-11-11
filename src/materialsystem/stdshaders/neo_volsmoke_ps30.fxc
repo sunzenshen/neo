@@ -2,8 +2,13 @@
 //
 // Raymarches a CPU-simulated voxel grid (uploaded as a 2D slice atlas, since
 // the material system only hands us 2D procedural textures) through the
-// volume's AABB. One fragment per pixel per volume means transmittance is
+// volume's AABB. One fragment per pixel per draw means transmittance is
 // integrated along the ray: no intra-volume sorting, so no OIT problem.
+//
+// Samples sit on a lattice of fixed world length along each eye ray, and a
+// draw owns only the lattice points whose view depth lies in its own range
+// (per vertex). Draws that split the depth range between them therefore
+// neither overlap nor leave a gap, and composite like one march.
 //
 // Scene depth comes from the engine's depth-in-dest-alpha copy
 // (TEXTURE_FRAME_BUFFER_FULL_DEPTH), using exactly the encoding that
@@ -19,20 +24,23 @@ sampler DepthSampler : register( s1 ); // frame buffer copy, depth in .a
 
 const float4 g_EyePos       : register( c0 ); // xyz eye, w unused
 const float4 g_VolMin       : register( c1 ); // xyz, w = extinction per unit at density 1
-const float4 g_VolMax       : register( c2 ); // xyz, w = number of steps (float)
+const float4 g_VolMax       : register( c2 ); // xyz, w unused
 const float4 g_Grid         : register( c3 ); // x = N, y = atlas cols, z = atlas rows, w = 1/N
 const float4 g_Ambient      : register( c4 ); // rgb ambient light, w = jitter enable
 const float4 g_Light        : register( c5 ); // rgb directional light, w = time
 const float4 g_Misc         : register( c6 ); // x = noise amp, y = noise scale, z = unused, w = debug mode
 const float4 g_ScreenParams : register( c7 ); // xy = half texel
 
+#define STEP_LEN  8.0f
 #define MAX_STEPS 64
 
 struct PS_INPUT
 {
+	float2 vPixel     : VPOS;
 	float3 vWorldPos  : TEXCOORD0;
 	float4 vScreenPos : TEXCOORD1;
-	float2 vClipZ     : TEXCOORD2;
+	float4 vDepth     : TEXCOORD2; // x, y = clip Z here and at the eye; z, w = view depth here and at the eye
+	float2 vZRange    : TEXCOORD3; // view depth range this draw marches, [x, y)
 };
 
 // ---------------------------------------------------------------------------
@@ -114,15 +122,15 @@ float4 main( PS_INPUT i ) : COLOR
 
 	float sceneA = tex2D( DepthSampler, screenUV ).a;
 
-	// Clip Z is affine along the ray: solve for the distance at which our
-	// encoded depth equals the scene's. Dest alpha of ~0 (cleared/sky) or
-	// ~1 (saturated range) both mean "nothing in front of us".
+	// Clip Z and view depth are affine along the ray. Dest alpha of ~0
+	// (cleared/sky) or ~1 (saturated range) both mean "nothing in front of us".
+	float dClipZ = ( i.vDepth.x - i.vDepth.y ) / distVert;
+	float dViewZ = ( i.vDepth.z - i.vDepth.w ) / distVert;
 	float tScene = 1.0e9f;
-	float dClipZ = ( i.vClipZ.x - i.vClipZ.y ) / distVert;
 	if ( sceneA > 0.002f && sceneA < 0.995f && abs( dClipZ ) > 1.0e-6f )
 	{
 		float sceneClipZ = sceneA / OO_DESTALPHA_DEPTH_RANGE;
-		tScene = ( sceneClipZ - i.vClipZ.y ) / dClipZ;
+		tScene = ( sceneClipZ - i.vDepth.y ) / dClipZ;
 	}
 
 	// --- AABB slab test -------------------------------------------------
@@ -145,18 +153,35 @@ float4 main( PS_INPUT i ) : COLOR
 		return FinalOutput( float4( v.xxx, 1.0f ), 0, PIXEL_FOG_TYPE_NONE, TONEMAP_SCALE_NONE );
 	}
 
-	if ( t1 <= t0 )
+	if ( t1 <= t0 || dViewZ <= 1.0e-6f )
 	{
 		return float4( 0, 0, 0, 0 ); // premultiplied: leaves the frame buffer untouched
 	}
 
-	// --- march ------------------------------------------------------------
-	float  numSteps = max( g_VolMax.w, 4.0f );
-	float  stepLen  = ( t1 - t0 ) / numSteps;
-	float3 volSize  = g_VolMax.xyz - g_VolMin.xyz;
+	// --- lattice ------------------------------------------------------------
+	// Point n sits at t = ( n + jitter ) * STEP_LEN and stands for the cell of
+	// one step around it. This draw owns the points inside its depth range;
+	// each cell is clipped to the box and the scene, so clipping stays soft.
+	// The range ends are whole units, rounded so every draw sees the same value.
+	float jitter = ( g_Ambient.w > 0.5f ) ? IGN( i.vPixel + g_Light.w * 100.0f ) : 0.5f;
+	float2 zRange = floor( i.vZRange + 0.5f );
+	float tLo = ( zRange.x - i.vDepth.w ) / dViewZ;
+	float tHi = ( zRange.y - i.vDepth.w ) / dViewZ;
 
-	float jitter = ( g_Ambient.w > 0.5f ) ? IGN( i.vScreenPos.xy / i.vScreenPos.w * 1024.0f + g_Light.w * 100.0f ) : 0.5f;
-	float t = t0 + stepLen * jitter;
+	float nFirst = max( ceil( tLo / STEP_LEN - jitter ), ceil( t0 / STEP_LEN - 0.5f - jitter ) );
+	float nEnd   = min( ceil( tHi / STEP_LEN - jitter ), ceil( t1 / STEP_LEN + 0.5f - jitter ) );
+	if ( nEnd <= nFirst )
+	{
+		return float4( 0, 0, 0, 0 );
+	}
+
+	if ( debugMode == 3 )
+	{
+		return FinalOutput( float4( 0.2f, 0.6f, 0.2f, 0.6f ), 0, PIXEL_FOG_TYPE_NONE, TONEMAP_SCALE_NONE );
+	}
+
+	// --- march ------------------------------------------------------------
+	float3 volSize = g_VolMax.xyz - g_VolMin.xyz;
 
 	float  T   = 1.0f;          // transmittance
 	float3 col = float3( 0, 0, 0 );
@@ -165,10 +190,18 @@ float4 main( PS_INPUT i ) : COLOR
 	[loop]
 	for ( int s = 0; s < MAX_STEPS; s++ )
 	{
-		if ( t > t1 || T < 0.005f )
+		float n = nFirst + s;
+		if ( n >= nEnd || T < 0.005f )
 			break;
 
-		float3 p   = ro + rd * t;
+		float tc = ( n + jitter ) * STEP_LEN;
+		float c0 = max( tc - 0.5f * STEP_LEN, t0 );
+		float c1 = min( tc + 0.5f * STEP_LEN, t1 );
+		float len = c1 - c0;
+		if ( len <= 0.0f )
+			continue;
+
+		float3 p   = ro + rd * ( 0.5f * ( c0 + c1 ) );
 		float3 uvw = ( p - g_VolMin.xyz ) / volSize;
 
 		float2 v = SampleVolume( uvw );
@@ -177,27 +210,21 @@ float4 main( PS_INPUT i ) : COLOR
 		if ( d > 0.001f )
 		{
 			// Erode with animated noise so cell boundaries read as wisps.
-			float n = ValueNoise3( p * g_Misc.y + float3( 0.0f, 0.0f, -time * 0.35f ) );
-			d = saturate( d * 1.25f - g_Misc.x * n );
+			float nz = ValueNoise3( p * g_Misc.y + float3( 0.0f, 0.0f, -time * 0.35f ) );
+			d = saturate( d * 1.25f - g_Misc.x * nz );
 
-			float sigma = d * g_VolMin.w * stepLen;
+			float sigma = d * g_VolMin.w * len;
 			float a     = 1.0f - exp( -sigma );
 
 			float3 lit = g_Ambient.rgb + g_Light.rgb * v.g;
 			col += T * a * lit;
 			T   *= 1.0f - a;
 		}
-
-		t += stepLen;
 	}
 
 	if ( debugMode == 1 )
 	{
 		return FinalOutput( float4( ( 1.0f - T ).xxx, 1.0f - T ), 0, PIXEL_FOG_TYPE_NONE, TONEMAP_SCALE_NONE );
-	}
-	if ( debugMode == 3 )
-	{
-		return FinalOutput( float4( 0.2f, 0.6f, 0.2f, 0.6f ), 0, PIXEL_FOG_TYPE_NONE, TONEMAP_SCALE_NONE );
 	}
 
 	// Premultiplied output; shader sets ONE / ONE_MINUS_SRC_ALPHA.
