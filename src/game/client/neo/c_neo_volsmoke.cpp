@@ -781,7 +781,7 @@ int C_NeoVolSmoke::s_nNextId = 0;
 // ---------------------------------------------------------------------------
 C_NeoVolSmoke::C_NeoVolSmoke()
 	: m_nId( s_nNextId++ ), m_flSpawnTime( 0 ), m_pWorld( NULL ), m_flFillSeconds( 0 ), m_flFillPeakFrame( 0 ), m_flFillDoneAge( -1.0f ), m_nLagFrames( 0 ),
-	  m_nBounded( 0 ), m_pRegen( NULL ), m_nPacked( 0 ), m_flNextUpload( 0 ), m_flRegrowEnd( -1.0f ), m_flSweptFront( -1.0f ), m_flUploadedFront( 0 ), m_bUploadPending( false ), m_nSlabTiles( 0 ), m_nSlabTilesCulled( 0 ), m_bCarveCompact( false )
+	  m_nBounded( 0 ), m_pRegen( NULL ), m_nPacked( 0 ), m_flNextUpload( 0 ), m_flRegrowEnd( -1.0f ), m_flUploadedFront( 0 ), m_bUploadPending( false ), m_nSlabTiles( 0 ), m_nSlabTilesCulled( 0 ), m_bCarveCompact( false )
 {
 }
 
@@ -1553,22 +1553,38 @@ void C_NeoVolSmoke::UpdateBounds( float front )
 
 // Top-down sweep: each cell gets the transmittance of the smoke above it.
 // Only the columns and heights a lookup near the smoke can read are swept;
-// the rest keep full light.
-void C_NeoVolSmoke::SweepLight( float front, float now )
+// the rest keep full light. The sweep sees every packed cell, not only
+// those inside the bloom front: the light then changes with the shape
+// alone, so a bloom costs an upload per fill stage, not one per frame.
+void C_NeoVolSmoke::SweepLight( float now )
 {
-	if ( m_SmokeHi[0] < 0 )
+	const int count = m_Fill.FinalizedCount();
+	if ( count == 0 )
 	{
 		return;
 	}
 
+	// The bounds of all finalized cells: the bloom bounds grow later
+	// without a new sweep.
 	static constexpr int MARGIN = 2;
-	int lo[3];
-	int hi[3];
 	const int size[3] = { CNeoSmokeFill::GRID_XY, CNeoSmokeFill::GRID_XY, CNeoSmokeFill::GRID_Z };
+	int lo[3] = { size[0], size[1], size[2] };
+	int hi[3] = { -1, -1, -1 };
+	for ( int k = 0; k < count; ++k )
+	{
+		int c[3];
+		CNeoSmokeFill::Coords( m_Fill.FinalizedCell( k ), c[0], c[1], c[2] );
+		for ( int a = 0; a < 3; ++a )
+		{
+			lo[a] = MIN( lo[a], c[a] );
+			hi[a] = MAX( hi[a], c[a] );
+		}
+	}
+
 	for ( int a = 0; a < 3; ++a )
 	{
-		lo[a] = MAX( 0, m_SmokeLo[a] - MARGIN );
-		hi[a] = MIN( size[a] - 1, m_SmokeHi[a] + MARGIN );
+		lo[a] = MAX( 0, lo[a] - MARGIN );
+		hi[a] = MIN( size[a] - 1, hi[a] + MARGIN );
 	}
 
 	unsigned char *bits = m_pRegen->Bits();
@@ -1587,9 +1603,7 @@ void C_NeoVolSmoke::SweepLight( float front, float now )
 					continue;
 				}
 
-				const float edge = clamp( ( front - CNeoSmokeFill::DistToUnits( m_Fill.Dist( i ) ) ) / NEO_VOLSMOKE_EDGE, 0.0f, 1.0f );
-				const float body = edge * edge * ( 3.0f - 2.0f * edge );
-				T *= expf( -kStep * body * CellWeight( i, now ) );
+				T *= expf( -kStep * CellWeight( i, now ) );
 			}
 		}
 	}
@@ -1731,7 +1745,7 @@ void C_NeoVolSmoke::ClientThink()
 
 	// A grown volume with no carve refilling changes nothing.
 	const bool regrow = IsRegrowing( now );
-	m_bUploadPending = m_bUploadPending || ShapeChanged( now ) || front != m_flSweptFront;
+	m_bUploadPending = m_bUploadPending || ShapeChanged( now );
 
 	// One upload a frame across all volumes: an upload can stall the frame.
 	// A volume packs and sweeps on its turn only, or many volumes would
@@ -1754,8 +1768,7 @@ void C_NeoVolSmoke::ClientThink()
 
 	{
 		CVolSmokePerfScope perf( VOLSMOKE_PERF_SWEEP );
-		SweepLight( front, now );
-		m_flSweptFront = front;
+		SweepLight( now );
 	}
 
 	CVolSmokePerfScope perf( VOLSMOKE_PERF_DOWNLOAD );
