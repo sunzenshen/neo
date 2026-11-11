@@ -6,9 +6,7 @@
 // memdbgon must be the last include file in a .cpp file!!!
 #include "tier0/memdbgon.h"
 
-// The legacy smoke is a dome of this radius on a floor; the gas budget is
-// that dome's volume in cells.
-static constexpr double NEO_SMOKE_FILL_DOME_RADIUS = 165.0;
+static constexpr double NEO_SMOKE_FILL_DOME_RADIUS = CNeoSmokeFill::DOME_RADIUS;
 static constexpr double NEO_SMOKE_FILL_PI = 3.14159265358979323846;
 static constexpr int NEO_SMOKE_FILL_BUDGET = (int)( ( 2.0 / 3.0 ) * NEO_SMOKE_FILL_PI
 	* NEO_SMOKE_FILL_DOME_RADIUS * NEO_SMOKE_FILL_DOME_RADIUS * NEO_SMOKE_FILL_DOME_RADIUS
