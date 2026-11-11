@@ -43,6 +43,8 @@ public:
 
 	CNeoSmokeFill();
 	~CNeoSmokeFill();
+	CNeoSmokeFill( const CNeoSmokeFill & ) = delete;
+	CNeoSmokeFill &operator=( const CNeoSmokeFill & ) = delete;
 
 	void Start( INeoSmokeFillWorld *pWorld );
 
@@ -54,10 +56,25 @@ public:
 	bool IsDone() const { return m_bDone; }
 	int  FinalizedCount() const { return m_nFinalized; }
 	int  FinalizedCell( int i ) const { return m_pOrder[i]; }
-	bool IsFinalized( int idx ) const { return m_pState[idx] == STATE_FINAL; }
+	bool IsFinalized( int idx ) const
+	{
+		if ( m_pState )
+		{
+			return m_pState[idx] == STATE_FINAL;
+		}
+
+		return m_pFinalBits && ( ( m_pFinalBits[idx >> 6] >> ( idx & 63 ) ) & 1 ) != 0;
+	}
 
 	// Path length of a finalized cell, in 1/DIST_SCALE cells.
-	int  Dist( int idx ) const { return m_pDist[idx]; }
+	int  Dist( int idx ) const { return m_pState ? m_pDist[idx] : m_pFinalDist[FinalRank( idx )]; }
+
+	// Once done: the position of a finalized cell among the finalized cells
+	// in grid order, 0 to FinalizedCount() - 1.
+	int  FinalRank( int idx ) const;
+
+	// Heap bytes held now. The work arrays are freed when the fill is done.
+	int  MemoryBytes() const;
 
 	// Path length of the last finalized cell (the final radius once done).
 	int  FrontDist() const { return m_nFrontDist; }
@@ -92,6 +109,9 @@ private:
 	bool LineOpen( int from, int to );
 
 	void Relax( int cell );
+	void AllocWork();
+	void FreeWork();
+	void Finish();
 
 	bool HeapLess( int a, int b ) const;
 	void HeapPush( int cell );
@@ -110,6 +130,12 @@ private:
 	int *m_pHeap;
 	int *m_pHeapPos;
 	int *m_pOrder;             // finalized cells, in order
+
+	// The finished field: a bit per cell, the finalized cells before each
+	// 64-cell word, and the path lengths in grid order.
+	unsigned long long *m_pFinalBits;
+	int *m_pWordRank;
+	unsigned short *m_pFinalDist;
 
 	int  m_nHeapCount;
 	int  m_nFinalized;

@@ -66,6 +66,8 @@ private:
 
 	// Simulation
 	void StepFill();
+	void CompactCarveTimes();
+	int  CarveSlot( int idx ) const { return m_bCarveCompact ? m_Fill.FinalRank( idx ) : idx; }
 	float FrontRadius( float age ) const;
 	float CellWeight( int idx, float now ) const;
 	void UpdateBounds( float front );
@@ -106,7 +108,8 @@ private:
 	int    m_nLagFrames;       // frames the bloom front was past the filled cells
 
 	// Per-cell state
-	CUtlVector< float >         m_CarveTime;  // curtime of last carve, <0 = never
+	CUtlVector< float >         m_CarveTime;  // curtime of last carve, <0 = never; per finalized cell once compact
+	bool   m_bCarveCompact;
 	int    m_SmokeLo[3];       // cell bounds of m_vecSmokeMin / Max
 	int    m_SmokeHi[3];
 	int    m_nBounded;         // finalized cells inside the drawn box
