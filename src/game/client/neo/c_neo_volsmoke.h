@@ -36,6 +36,9 @@ public:
 	// detonated at `spawnTime` (server time). Bloom and fade follow that time.
 	static C_NeoVolSmoke *Create( const Vector &origin, float spawnTime );
 
+	// As Create, but at most one volume per grenade, and none once its time is over.
+	static C_NeoVolSmoke *CreateForGrenade( const Vector &origin, float spawnTime );
+
 	// Carves a capsule out of every live volume (bullet trace / explosion).
 	static void CarveAll( const Vector &start, const Vector &end, float radius );
 
