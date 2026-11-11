@@ -78,10 +78,17 @@ static int NeoSmokeISqrt( int v )
 	return r;
 }
 
+// Unless the fill spends its budget early, most of the cells it queues stay
+// in the heap, so it starts big enough for an open dome.
+static constexpr int NEO_SMOKE_FILL_HEAP_START = 8192;
+
+// Bricks a fill usually touches; the list grows past this as needed.
+static constexpr int NEO_SMOKE_FILL_BRICKS_START = 256;
+
 CNeoSmokeFill::CNeoSmokeFill()
-	: m_pWorld( NULL ), m_pOcc( NULL ), m_pMoveMemo( NULL ), m_pState( NULL ), m_pDist( NULL ), m_pAnchor( NULL ),
-	  m_pHeap( NULL ), m_pHeapPos( NULL ), m_pOrder( NULL ), m_pFinalBits( NULL ), m_pWordRank( NULL ), m_pFinalDist( NULL ),
-	  m_nHeapCount( 0 ), m_nFinalized( 0 ), m_nFrontDist( 0 ), m_nQueries( 0 ), m_bDone( true ), m_bBegun( false )
+	: m_pWorld( NULL ), m_pBrickDir( NULL ), m_ppBricks( NULL ), m_nBricks( 0 ), m_nBrickCap( 0 ), m_pHeap( NULL ),
+	  m_nHeapCap( 0 ), m_pOrder( NULL ), m_pFinalBits( NULL ), m_pWordRank( NULL ), m_pFinalDist( NULL ), m_nHeapCount( 0 ),
+	  m_nFinalized( 0 ), m_nFrontDist( 0 ), m_nQueries( 0 ), m_nPeakBytes( 0 ), m_bDone( true ), m_bBegun( false )
 {
 }
 
@@ -96,31 +103,107 @@ CNeoSmokeFill::~CNeoSmokeFill()
 
 void CNeoSmokeFill::AllocWork()
 {
-	m_pOcc = new unsigned char[CELLS];
-	m_pMoveMemo = new unsigned int[CELLS];
-	m_pState = new unsigned char[CELLS];
-	m_pDist = new int[CELLS];
-	m_pAnchor = new int[CELLS];
-	m_pHeap = new int[CELLS];
-	m_pHeapPos = new int[CELLS];
+	m_pBrickDir = new int[BRICKS];
+	memset( m_pBrickDir, 0, BRICKS * sizeof( int ) );
+	m_nBrickCap = NEO_SMOKE_FILL_BRICKS_START;
+	m_ppBricks = new Brick_t *[m_nBrickCap];
+	m_nBricks = 0;
+	m_nHeapCap = NEO_SMOKE_FILL_HEAP_START;
+	m_pHeap = new HeapEntry_t[m_nHeapCap];
 }
 
 void CNeoSmokeFill::FreeWork()
 {
-	delete[] m_pOcc;
-	delete[] m_pMoveMemo;
-	delete[] m_pState;
-	delete[] m_pDist;
-	delete[] m_pAnchor;
+	for ( int i = 0; i < m_nBricks; ++i )
+	{
+		delete m_ppBricks[i];
+	}
+
+	delete[] m_ppBricks;
+	delete[] m_pBrickDir;
 	delete[] m_pHeap;
-	delete[] m_pHeapPos;
-	m_pOcc = NULL;
-	m_pMoveMemo = NULL;
-	m_pState = NULL;
-	m_pDist = NULL;
-	m_pAnchor = NULL;
+	m_ppBricks = NULL;
+	m_pBrickDir = NULL;
 	m_pHeap = NULL;
-	m_pHeapPos = NULL;
+	m_nBricks = 0;
+	m_nBrickCap = 0;
+	m_nHeapCap = 0;
+}
+
+int CNeoSmokeFill::BrickOf( int cell )
+{
+	int x;
+	int y;
+	int z;
+	Coords( cell, x, y, z );
+	return ( ( z >> BRICK_SHIFT ) * BRICKS_XY + ( y >> BRICK_SHIFT ) ) * BRICKS_XY + ( x >> BRICK_SHIFT );
+}
+
+int CNeoSmokeFill::BrickSlot( int cell )
+{
+	int x;
+	int y;
+	int z;
+	Coords( cell, x, y, z );
+	const int mask = BRICK_SIZE - 1;
+	return ( ( ( ( z & mask ) << BRICK_SHIFT ) + ( y & mask ) ) << BRICK_SHIFT ) + ( x & mask );
+}
+
+const CNeoSmokeFill::Brick_t *CNeoSmokeFill::FindBrick( int cell ) const
+{
+	const int n = m_pBrickDir[BrickOf( cell )];
+	return n ? m_ppBricks[n - 1] : NULL;
+}
+
+CNeoSmokeFill::Brick_t &CNeoSmokeFill::TouchBrick( int cell )
+{
+	int &n = m_pBrickDir[BrickOf( cell )];
+	if ( n )
+	{
+		return *m_ppBricks[n - 1];
+	}
+
+	if ( m_nBricks == m_nBrickCap )
+	{
+		Brick_t **ppGrown = new Brick_t *[2 * m_nBrickCap];
+		memcpy( ppGrown, m_ppBricks, m_nBricks * sizeof( Brick_t * ) );
+		delete[] m_ppBricks;
+		m_ppBricks = ppGrown;
+		m_nBrickCap *= 2;
+	}
+
+	Brick_t *pBrick = new Brick_t;
+	for ( int i = 0; i < BRICK_CELLS; ++i )
+	{
+		pBrick->dist[i] = NEO_SMOKE_FILL_UNREACHED;
+		pBrick->anchor[i] = -1;
+		pBrick->heapPos[i] = -1;
+	}
+	memset( pBrick->moveMemo, 0, sizeof( pBrick->moveMemo ) );
+	memset( pBrick->occ, 0, sizeof( pBrick->occ ) );
+	memset( pBrick->state, STATE_NONE, sizeof( pBrick->state ) );
+
+	m_ppBricks[m_nBricks++] = pBrick;
+	n = m_nBricks;
+	NoteMemory();
+	return *pBrick;
+}
+
+int CNeoSmokeFill::CellState( int cell ) const
+{
+	const Brick_t *pBrick = FindBrick( cell );
+	return pBrick ? pBrick->state[BrickSlot( cell )] : (int)STATE_NONE;
+}
+
+int CNeoSmokeFill::CellDist( int cell ) const
+{
+	const Brick_t *pBrick = FindBrick( cell );
+	return pBrick ? pBrick->dist[BrickSlot( cell )] : NEO_SMOKE_FILL_UNREACHED;
+}
+
+void CNeoSmokeFill::NoteMemory()
+{
+	m_nPeakBytes = MAX( m_nPeakBytes, MemoryBytes() );
 }
 
 static int NeoSmokePopCount( unsigned long long v )
@@ -141,24 +224,25 @@ void CNeoSmokeFill::Finish()
 	m_pFinalBits = new unsigned long long[NEO_SMOKE_FILL_WORDS];
 	m_pWordRank = new int[NEO_SMOKE_FILL_WORDS];
 	m_pFinalDist = new unsigned short[MAX( m_nFinalized, 1 )];
+	memset( m_pFinalBits, 0, NEO_SMOKE_FILL_WORDS * sizeof( *m_pFinalBits ) );
+
+	for ( int i = 0; i < m_nFinalized; ++i )
+	{
+		const int idx = m_pOrder[i];
+		m_pFinalBits[idx >> 6] |= 1ull << ( idx & 63 );
+	}
 
 	int rank = 0;
 	for ( int w = 0; w < NEO_SMOKE_FILL_WORDS; ++w )
 	{
 		m_pWordRank[w] = rank;
-		unsigned long long bits = 0;
-		for ( int b = 0; b < 64; ++b )
-		{
-			const int idx = w * 64 + b;
-			if ( m_pState[idx] != STATE_FINAL )
-			{
-				continue;
-			}
+		rank += NeoSmokePopCount( m_pFinalBits[w] );
+	}
 
-			bits |= 1ull << b;
-			m_pFinalDist[rank++] = (unsigned short)m_pDist[idx];
-		}
-		m_pFinalBits[w] = bits;
+	for ( int i = 0; i < m_nFinalized; ++i )
+	{
+		const int idx = m_pOrder[i];
+		m_pFinalDist[FinalRank( idx )] = (unsigned short)CellDist( idx );
 	}
 
 	int *pOrder = new int[MAX( m_nFinalized, 1 )];
@@ -167,6 +251,21 @@ void CNeoSmokeFill::Finish()
 	m_pOrder = pOrder;
 
 	FreeWork();
+}
+
+bool CNeoSmokeFill::IsFinalized( int idx ) const
+{
+	if ( m_pBrickDir )
+	{
+		return CellState( idx ) == STATE_FINAL;
+	}
+
+	return m_pFinalBits && ( ( m_pFinalBits[idx >> 6] >> ( idx & 63 ) ) & 1 ) != 0;
+}
+
+int CNeoSmokeFill::Dist( int idx ) const
+{
+	return m_pBrickDir ? CellDist( idx ) : m_pFinalDist[FinalRank( idx )];
 }
 
 int CNeoSmokeFill::FinalRank( int idx ) const
@@ -179,11 +278,10 @@ int CNeoSmokeFill::FinalRank( int idx ) const
 int CNeoSmokeFill::MemoryBytes() const
 {
 	int bytes = 0;
-	if ( m_pState )
+	if ( m_pBrickDir )
 	{
-		const int perCell = sizeof( *m_pOcc ) + sizeof( *m_pMoveMemo ) + sizeof( *m_pState ) + sizeof( *m_pDist )
-			+ sizeof( *m_pAnchor ) + sizeof( *m_pHeap ) + sizeof( *m_pHeapPos );
-		bytes += CELLS * perCell + NEO_SMOKE_FILL_BUDGET * (int)sizeof( int );
+		bytes += BRICKS * (int)sizeof( int ) + m_nBrickCap * (int)sizeof( Brick_t * ) + m_nBricks * (int)sizeof( Brick_t );
+		bytes += m_nHeapCap * (int)sizeof( HeapEntry_t ) + NEO_SMOKE_FILL_BUDGET * (int)sizeof( int );
 	}
 	else if ( m_pFinalBits )
 	{
@@ -211,6 +309,7 @@ void CNeoSmokeFill::Start( INeoSmokeFillWorld *pWorld )
 	m_nFinalized = 0;
 	m_nFrontDist = 0;
 	m_nQueries = 0;
+	m_nPeakBytes = 0;
 	m_bDone = false;
 	m_bBegun = false;
 }
@@ -222,16 +321,7 @@ void CNeoSmokeFill::Begin()
 	m_bBegun = true;
 	AllocWork();
 	m_pOrder = new int[NEO_SMOKE_FILL_BUDGET];
-
-	for ( int i = 0; i < CELLS; ++i )
-	{
-		m_pOcc[i] = 0;
-		m_pMoveMemo[i] = 0;
-		m_pState[i] = STATE_NONE;
-		m_pDist[i] = NEO_SMOKE_FILL_UNREACHED;
-		m_pAnchor[i] = -1;
-		m_pHeapPos[i] = -1;
-	}
+	NoteMemory();
 
 	const int seed = FindSeed();
 	if ( seed < 0 )
@@ -241,9 +331,11 @@ void CNeoSmokeFill::Begin()
 		return;
 	}
 
-	m_pDist[seed] = 0;
-	m_pAnchor[seed] = seed;
-	HeapPush( seed );
+	Brick_t &brick = TouchBrick( seed );
+	const int slot = BrickSlot( seed );
+	brick.dist[slot] = 0;
+	brick.anchor[slot] = seed;
+	HeapPush( seed, 0 );
 }
 
 bool CNeoSmokeFill::SeedCellOk( int x, int y, int z )
@@ -344,17 +436,18 @@ bool CNeoSmokeFill::Step( int maxCells, int maxQueries )
 			break;
 		}
 
-		const int cell = m_pHeap[0];
-		if ( m_pDist[cell] > NEO_SMOKE_FILL_REACH_CAP )
+		const HeapEntry_t top = m_pHeap[0];
+		if ( top.dist > NEO_SMOKE_FILL_REACH_CAP )
 		{
 			m_bDone = true;
 			break;
 		}
 
 		HeapPop();
-		m_pState[cell] = STATE_FINAL;
-		m_pOrder[m_nFinalized++] = cell;
-		m_nFrontDist = m_pDist[cell];
+		TouchBrick( top.cell ).state[BrickSlot( top.cell )] = STATE_FINAL;
+		m_pOrder[m_nFinalized++] = top.cell;
+		m_nFrontDist = top.dist;
+		const int cell = top.cell;
 
 		Relax( cell );
 	}
@@ -364,7 +457,7 @@ bool CNeoSmokeFill::Step( int maxCells, int maxQueries )
 		m_bDone = true;
 	}
 
-	if ( m_bDone && m_pState )
+	if ( m_bDone && m_pBrickDir )
 	{
 		Finish();
 	}
@@ -376,6 +469,16 @@ void CNeoSmokeFill::Relax( int cell )
 {
 	int c[3];
 	Coords( cell, c[0], c[1], c[2] );
+
+	// Measure straight from the anchor while it can see the cell, so open
+	// space fills as a sphere. Behind a corner the corner cell becomes the new
+	// anchor and the gas turns it as a sphere section.
+	const Brick_t &home = *FindBrick( cell );
+	const int cellDist = home.dist[BrickSlot( cell )];
+	const int a = home.anchor[BrickSlot( cell )];
+	const int anchorDist = CellDist( a );
+	int ac[3];
+	Coords( a, ac[0], ac[1], ac[2] );
 
 	for ( int dx = -1; dx <= 1; ++dx )
 	{
@@ -396,28 +499,26 @@ void CNeoSmokeFill::Relax( int cell )
 				}
 
 				const int next = Index( n[0], n[1], n[2] );
-				if ( m_pState[next] == STATE_FINAL )
+				const Brick_t *pNext = FindBrick( next );
+				const int nextSlot = BrickSlot( next );
+				const int nextState = pNext ? pNext->state[nextSlot] : (int)STATE_NONE;
+				if ( nextState == STATE_FINAL )
 				{
 					continue;
 				}
 
-				// Measure straight from the anchor while it can see the cell, so
-				// open space fills as a sphere. Behind a corner the corner cell
-				// becomes the new anchor and the gas turns it as a sphere section.
-				const int a = m_pAnchor[cell];
-				int ac[3];
-				Coords( a, ac[0], ac[1], ac[2] );
+				const int nextDist = pNext ? pNext->dist[nextSlot] : NEO_SMOKE_FILL_UNREACHED;
 				const int ex = ac[0] - n[0];
 				const int ey = ac[1] - n[1];
 				const int ez = ac[2] - n[2];
-				const int lineDist = m_pDist[a] + NeoSmokeISqrt( DIST_SCALE * DIST_SCALE * ( ex * ex + ey * ey + ez * ez ) );
+				const int lineDist = anchorDist + NeoSmokeISqrt( DIST_SCALE * DIST_SCALE * ( ex * ex + ey * ey + ez * ez ) );
 				const int step = ( axes == 1 ) ? NEO_SMOKE_FILL_STEP_FACE
 					: ( ( axes == 2 ) ? NEO_SMOKE_FILL_STEP_EDGE : NEO_SMOKE_FILL_STEP_CORNER );
-				const int stepDist = m_pDist[cell] + step;
+				const int stepDist = cellDist + step;
 
 				// Only these two values can be written, so when neither improves
 				// the neighbor no world answer can change the field.
-				if ( MIN( lineDist, stepDist ) >= m_pDist[next] )
+				if ( MIN( lineDist, stepDist ) >= nextDist )
 				{
 					continue;
 				}
@@ -436,20 +537,21 @@ void CNeoSmokeFill::Relax( int cell )
 					anchor = a;
 				}
 
-				if ( dist >= m_pDist[next] )
+				if ( dist >= nextDist )
 				{
 					continue;
 				}
 
-				m_pDist[next] = dist;
-				m_pAnchor[next] = anchor;
-				if ( m_pState[next] == STATE_QUEUED )
+				Brick_t &brick = TouchBrick( next );
+				brick.dist[nextSlot] = dist;
+				brick.anchor[nextSlot] = anchor;
+				if ( nextState == STATE_QUEUED )
 				{
-					HeapUpdate( next );
+					HeapUpdate( next, dist );
 				}
 				else
 				{
-					HeapPush( next );
+					HeapPush( next, dist );
 				}
 			}
 		}
@@ -466,7 +568,8 @@ bool CNeoSmokeFill::CellOpen( int x, int y, int z )
 		return false;
 	}
 
-	unsigned char &occ = m_pOcc[Index( x, y, z )];
+	const int idx = Index( x, y, z );
+	unsigned char &occ = TouchBrick( idx ).occ[BrickSlot( idx )];
 	int state = ( occ >> NEO_SMOKE_OCC_CELL_SHIFT ) & NEO_SMOKE_OCC_MASK;
 	if ( state == NEO_SMOKE_OCC_UNKNOWN )
 	{
@@ -480,7 +583,8 @@ bool CNeoSmokeFill::CellOpen( int x, int y, int z )
 
 bool CNeoSmokeFill::LinkOpen( int x, int y, int z, int axis )
 {
-	unsigned char &occ = m_pOcc[Index( x, y, z )];
+	const int idx = Index( x, y, z );
+	unsigned char &occ = TouchBrick( idx ).occ[BrickSlot( idx )];
 	const int shift = NeoSmokeOccLinkShift( axis );
 	int state = ( occ >> shift ) & NEO_SMOKE_OCC_MASK;
 	if ( state == NEO_SMOKE_OCC_UNKNOWN )
@@ -507,14 +611,16 @@ bool CNeoSmokeFill::BlockOpen( const int p[3], const int q[3] )
 	}
 
 	const int shift = 2 * ( move - NEO_SMOKE_MOVE_SELF - 1 );
-	unsigned int &memo = m_pMoveMemo[Index( base[0], base[1], base[2] )];
-	const int known = ( memo >> shift ) & NEO_SMOKE_OCC_MASK;
+	const int idx = Index( base[0], base[1], base[2] );
+	const Brick_t *pBase = FindBrick( idx );
+	const int known = pBase ? ( pBase->moveMemo[BrickSlot( idx )] >> shift ) & NEO_SMOKE_OCC_MASK : (int)NEO_SMOKE_OCC_UNKNOWN;
 	if ( known != NEO_SMOKE_OCC_UNKNOWN )
 	{
 		return known == NEO_SMOKE_OCC_OPEN;
 	}
 
 	const bool open = BlockOpenUncached( p, q );
+	unsigned int &memo = TouchBrick( idx ).moveMemo[BrickSlot( idx )];
 	memo |= (unsigned int)( open ? NEO_SMOKE_OCC_OPEN : NEO_SMOKE_OCC_BLOCKED ) << shift;
 	return open;
 }
@@ -621,69 +727,82 @@ bool CNeoSmokeFill::LineOpen( int from, int to )
 // Indexed binary heap keyed by (distance, cell index): a total order, so the
 // fill is the same on every machine.
 // ---------------------------------------------------------------------------
-bool CNeoSmokeFill::HeapLess( int a, int b ) const
+bool CNeoSmokeFill::HeapLess( const HeapEntry_t &a, const HeapEntry_t &b )
 {
-	if ( m_pDist[a] != m_pDist[b] )
+	if ( a.dist != b.dist )
 	{
-		return m_pDist[a] < m_pDist[b];
+		return a.dist < b.dist;
 	}
 
-	return a < b;
+	return a.cell < b.cell;
 }
 
-void CNeoSmokeFill::HeapPush( int cell )
+void CNeoSmokeFill::HeapPlace( int pos, const HeapEntry_t &entry )
 {
-	m_pState[cell] = STATE_QUEUED;
-	m_pHeap[m_nHeapCount] = cell;
-	m_pHeapPos[cell] = m_nHeapCount;
+	m_pHeap[pos] = entry;
+	TouchBrick( entry.cell ).heapPos[BrickSlot( entry.cell )] = pos;
+}
+
+void CNeoSmokeFill::HeapPush( int cell, int dist )
+{
+	if ( m_nHeapCount == m_nHeapCap )
+	{
+		HeapEntry_t *pGrown = new HeapEntry_t[2 * m_nHeapCap];
+		memcpy( pGrown, m_pHeap, m_nHeapCount * sizeof( HeapEntry_t ) );
+		delete[] m_pHeap;
+		m_pHeap = pGrown;
+		m_nHeapCap *= 2;
+		NoteMemory();
+	}
+
+	TouchBrick( cell ).state[BrickSlot( cell )] = STATE_QUEUED;
+	const HeapEntry_t entry = { dist, cell };
+	HeapPlace( m_nHeapCount, entry );
 	SiftUp( m_nHeapCount++ );
 }
 
 // The cell's distance only ever drops while it is queued.
-void CNeoSmokeFill::HeapUpdate( int cell )
+void CNeoSmokeFill::HeapUpdate( int cell, int dist )
 {
-	SiftUp( m_pHeapPos[cell] );
+	const int pos = FindBrick( cell )->heapPos[BrickSlot( cell )];
+	m_pHeap[pos].dist = dist;
+	SiftUp( pos );
 }
 
-int CNeoSmokeFill::HeapPop()
+void CNeoSmokeFill::HeapPop()
 {
-	const int top = m_pHeap[0];
-	m_pHeapPos[top] = -1;
+	const int top = m_pHeap[0].cell;
+	TouchBrick( top ).heapPos[BrickSlot( top )] = -1;
 
 	--m_nHeapCount;
 	if ( m_nHeapCount > 0 )
 	{
-		m_pHeap[0] = m_pHeap[m_nHeapCount];
-		m_pHeapPos[m_pHeap[0]] = 0;
+		HeapPlace( 0, m_pHeap[m_nHeapCount] );
 		SiftDown( 0 );
 	}
-
-	return top;
 }
 
 void CNeoSmokeFill::SiftUp( int pos )
 {
-	const int cell = m_pHeap[pos];
+	const HeapEntry_t entry = m_pHeap[pos];
 	while ( pos > 0 )
 	{
 		const int parent = ( pos - 1 ) / 2;
-		if ( !HeapLess( cell, m_pHeap[parent] ) )
+		if ( !HeapLess( entry, m_pHeap[parent] ) )
 		{
 			break;
 		}
 
-		m_pHeap[pos] = m_pHeap[parent];
-		m_pHeapPos[m_pHeap[pos]] = pos;
+		HeapPlace( pos, m_pHeap[parent] );
 		pos = parent;
 	}
 
-	m_pHeap[pos] = cell;
-	m_pHeapPos[cell] = pos;
+	HeapPlace( pos, entry );
 }
 
 void CNeoSmokeFill::SiftDown( int pos )
 {
-	const int cell = m_pHeap[pos];
+	const HeapEntry_t entry = m_pHeap[pos];
 	for ( ;; )
 	{
 		const int left = 2 * pos + 1;
@@ -699,16 +818,14 @@ void CNeoSmokeFill::SiftDown( int pos )
 			child = right;
 		}
 
-		if ( !HeapLess( m_pHeap[child], cell ) )
+		if ( !HeapLess( m_pHeap[child], entry ) )
 		{
 			break;
 		}
 
-		m_pHeap[pos] = m_pHeap[child];
-		m_pHeapPos[m_pHeap[pos]] = pos;
+		HeapPlace( pos, m_pHeap[child] );
 		pos = child;
 	}
 
-	m_pHeap[pos] = cell;
-	m_pHeapPos[cell] = pos;
+	HeapPlace( pos, entry );
 }
