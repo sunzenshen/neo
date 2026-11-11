@@ -26,7 +26,6 @@
 static ConVar neo_volsmoke_regrow( "neo_volsmoke_regrow", "4.0", FCVAR_CHEAT, "Seconds for a carved cell to refill.", true, 0.1f, true, 60.0f );
 static ConVar neo_volsmoke_carve_radius( "neo_volsmoke_carve_radius", "24", FCVAR_CHEAT, "Capsule radius carved by neo_volsmoke_carve.", true, 1.0f, true, 512.0f );
 static ConVar neo_volsmoke_explode_radius( "neo_volsmoke_explode_radius", "110", FCVAR_CHEAT, "Sphere radius carved by neo_volsmoke_explode.", true, 1.0f, true, 1024.0f );
-static ConVar neo_volsmoke_steps( "neo_volsmoke_steps", "64", FCVAR_CHEAT, "Raymarch steps across the box.", true, 4.0f, true, 64.0f );
 static ConVar neo_volsmoke_noise_amp( "neo_volsmoke_noise_amp", "0.35", FCVAR_CHEAT, "Edge erosion noise amplitude.", true, 0.0f, true, 2.0f );
 static ConVar neo_volsmoke_noise_scale( "neo_volsmoke_noise_scale", "0.045", FCVAR_CHEAT, "Noise frequency (1/world units).", true, 0.0f, true, 1.0f );
 static ConVar neo_volsmoke_jitter( "neo_volsmoke_jitter", "1", FCVAR_CHEAT, "Per-pixel step jitter (grain) instead of banding." );
@@ -66,6 +65,9 @@ static constexpr float NEO_VOLSMOKE_CELL_VARIATION = 0.15f;
 
 // Extinction per world unit at density 1.
 static constexpr float NEO_VOLSMOKE_EXTINCTION = 0.06f;
+
+// View depth range of a whole-volume march; farther than any volume is drawn.
+static constexpr float NEO_VOLSMOKE_MAX_DEPTH = 65536.0f;
 
 // Until the fill finishes, the front grows as if toward the open-floor radius.
 static constexpr float NEO_VOLSMOKE_NOMINAL_RADIUS = CNeoSmokeFill::DOME_RADIUS;
@@ -678,7 +680,6 @@ int C_NeoVolSmoke::DrawModel( int flags )
 	// The legacy smoke scales its alpha by the bloom and the fade the same way.
 	const float age = gpGlobals->curtime - m_flSpawnTime;
 	SetFloatVar( pMat, "$extinction", NEO_VOLSMOKE_EXTINCTION * VolSmokeBloom( age ) * VolSmokeFade( age ) );
-	SetFloatVar( pMat, "$steps", neo_volsmoke_steps.GetFloat() );
 	SetFloatVar( pMat, "$noiseamp", neo_volsmoke_noise_amp.GetFloat() );
 	SetFloatVar( pMat, "$noisescale", neo_volsmoke_noise_scale.GetFloat() );
 	SetIntVar( pMat, "$jitter", neo_volsmoke_jitter.GetInt() );
@@ -722,6 +723,7 @@ int C_NeoVolSmoke::DrawModel( int flags )
 	for ( int i = 0; i < 8; ++i )
 	{
 		meshBuilder.Position3fv( corners[i].Base() );
+		meshBuilder.TexCoord2f( 0, 0.0f, NEO_VOLSMOKE_MAX_DEPTH );
 		meshBuilder.AdvanceVertex();
 	}
 	for ( int i = 0; i < 36; ++i )

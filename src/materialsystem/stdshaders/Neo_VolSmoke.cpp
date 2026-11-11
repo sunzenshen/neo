@@ -22,7 +22,6 @@ BEGIN_SHADER_PARAMS
 	SHADER_PARAM( AMBIENT,    SHADER_PARAM_TYPE_VEC3,    "[0.6 0.6 0.6]", "Ambient light reaching the smoke (linear)" )
 	SHADER_PARAM( LIGHTCOLOR, SHADER_PARAM_TYPE_VEC3,    "[0.8 0.8 0.8]", "Directional light colour (linear), scaled by baked per-voxel light" )
 	SHADER_PARAM( EXTINCTION, SHADER_PARAM_TYPE_FLOAT,   "0.06",          "Extinction per world unit at density 1" )
-	SHADER_PARAM( STEPS,      SHADER_PARAM_TYPE_FLOAT,   "32",            "Raymarch steps across the box" )
 	SHADER_PARAM( NOISEAMP,   SHADER_PARAM_TYPE_FLOAT,   "0.35",          "Edge erosion noise amplitude" )
 	SHADER_PARAM( NOISESCALE, SHADER_PARAM_TYPE_FLOAT,   "0.045",         "Noise frequency (1/world units)" )
 	SHADER_PARAM( JITTER,     SHADER_PARAM_TYPE_INTEGER, "1",             "Per-pixel step jitter (grain instead of banding)" )
@@ -60,7 +59,9 @@ SHADER_DRAW
 {
 	SHADOW_STATE
 	{
-		pShaderShadow->VertexShaderVertexFormat( VERTEX_POSITION, 1, 0, 0 );
+		// Texcoord 0 = the view depth range the draw marches.
+		int texCoordDims[1] = { 2 };
+		pShaderShadow->VertexShaderVertexFormat( VERTEX_POSITION, 1, texCoordDims, 0 );
 
 		// Manual depth test in the PS; never touch hardware depth.
 		pShaderShadow->EnableDepthWrites( false );
@@ -109,9 +110,9 @@ SHADER_DRAW
 		c[3] = params[EXTINCTION]->GetFloatValue();
 		pShaderAPI->SetPixelShaderConstant( 1, c );
 
-		// c2: volume max + steps
+		// c2: volume max
 		params[VOLMAX]->GetVecValue( c, 3 );
-		c[3] = params[STEPS]->GetFloatValue();
+		c[3] = 0.0f;
 		pShaderAPI->SetPixelShaderConstant( 2, c );
 
 		// c3: grid layout
