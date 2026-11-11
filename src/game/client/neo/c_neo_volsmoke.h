@@ -39,6 +39,7 @@ public:
 
 	static void RemoveAll();
 	static int  LiveCount() { return s_Volumes.Count(); }
+	static int  NextId() { return s_nNextId; }
 
 	// C_BaseEntity
 	virtual void ClientThink() override;
@@ -72,6 +73,7 @@ private:
 	{
 		return m_vecGridMin + Vector( ( x + 0.5f ) * m_flCellSize, ( y + 0.5f ) * m_flCellSize, ( z + 0.5f ) * m_flCellSize );
 	}
+	static bool WorldSolidAt( const Vector &pos );
 	bool CellOpen( const Vector &from, const Vector &to ) const;
 
 	float SampleLight( float fx, float fy, int zSlab, int axis ) const;
