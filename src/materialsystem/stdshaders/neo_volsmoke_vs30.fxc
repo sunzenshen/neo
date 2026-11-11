@@ -5,15 +5,18 @@
 // everything it needs to build a per-pixel eye ray and to compare against the
 // engine's depth-in-dest-alpha encoding without any extra matrices:
 //
-//   clip-space Z is affine in world position, so interpolating it as a
-//   TEXCOORD (perspective-correct) gives the exact clip Z of the surface point,
-//   and clip Z of the eye itself is a constant we can compute here.
+//   clip-space Z and view depth are affine in world position, so interpolating
+//   them as a TEXCOORD (perspective-correct) gives their exact values at the
+//   surface point, and their values at the eye are constants we compute here.
+//   Clip Z uses cModelViewProjZ, the row opaque shaders write to dest alpha;
+//   cModelViewProj has a different Z row under fast clip.
 
 #include "common_vs_fxc.h"
 
 struct VS_INPUT
 {
-	float4 vPos : POSITION;
+	float4 vPos    : POSITION;
+	float2 vZRange : TEXCOORD0; // view depth range this draw marches
 };
 
 struct VS_OUTPUT
@@ -21,7 +24,8 @@ struct VS_OUTPUT
 	float4 vProjPos   : POSITION;
 	float3 vWorldPos  : TEXCOORD0;
 	float4 vScreenPos : TEXCOORD1; // projPos, for screen UV reconstruction
-	float2 vClipZ     : TEXCOORD2; // x = clip Z at this vertex, y = clip Z at the eye
+	float4 vDepth     : TEXCOORD2; // x, y = clip Z here and at the eye; z, w = view depth here and at the eye
+	float2 vZRange    : TEXCOORD3;
 };
 
 VS_OUTPUT main( const VS_INPUT v )
@@ -34,8 +38,12 @@ VS_OUTPUT main( const VS_INPUT v )
 	o.vProjPos   = projPos;
 	o.vWorldPos  = worldPos.xyz;
 	o.vScreenPos = projPos;
-	o.vClipZ.x   = projPos.z;
-	o.vClipZ.y   = mul( float4( cEyePos, 1.0f ), cModelViewProj ).z;
+	float4 eyePos = float4( cEyePos, 1.0f );
+	o.vDepth.x   = dot( worldPos, cModelViewProjZ );
+	o.vDepth.y   = dot( eyePos, cModelViewProjZ );
+	o.vDepth.z   = projPos.w;
+	o.vDepth.w   = mul( eyePos, cModelViewProj ).w;
+	o.vZRange    = v.vZRange;
 
 	return o;
 }
