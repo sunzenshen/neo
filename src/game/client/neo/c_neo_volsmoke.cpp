@@ -458,6 +458,80 @@ private:
 };
 
 // ---------------------------------------------------------------------------
+// Retired GPU resources
+// ---------------------------------------------------------------------------
+// The queued material system can still hold a frame that draws a removed
+// volume. While it does, its materials stay referenced, DeleteIfUnreferenced
+// does nothing, and they leak until the material system shuts down, which
+// can crash the client at quit. The volume therefore hands its materials and
+// atlas over here, and they are deleted once the render thread is past them.
+static constexpr int NEO_VOLSMOKE_RETIRE_FRAMES = 3;
+
+struct VolSmokeRetired_t
+{
+	IMaterial *pMaterials[2];
+	ITexture  *pAtlas;
+	int        nFrame;
+};
+
+static CUtlVector< VolSmokeRetired_t > s_VolSmokeRetired;
+
+static void VolSmokeDeleteRetired( const VolSmokeRetired_t &retired )
+{
+	// The materials reference the atlas, so they go first.
+	for ( IMaterial *pMat : retired.pMaterials )
+	{
+		if ( pMat )
+		{
+			pMat->DecrementReferenceCount();
+			pMat->DeleteIfUnreferenced();
+		}
+	}
+
+	if ( retired.pAtlas )
+	{
+		retired.pAtlas->SetTextureRegenerator( NULL ); // calls Release() on the regenerator
+		retired.pAtlas->DecrementReferenceCount();
+		retired.pAtlas->DeleteIfUnreferenced();
+	}
+}
+
+enum VolSmokeRetireWait_t
+{
+	VOLSMOKE_RETIRE_AFTER_FRAMES,
+	VOLSMOKE_RETIRE_NOW,
+};
+
+static void VolSmokeDeleteRetired( VolSmokeRetireWait_t wait )
+{
+	for ( int i = s_VolSmokeRetired.Count() - 1; i >= 0; --i )
+	{
+		if ( wait == VOLSMOKE_RETIRE_AFTER_FRAMES
+			&& gpGlobals->framecount - s_VolSmokeRetired[i].nFrame < NEO_VOLSMOKE_RETIRE_FRAMES )
+		{
+			continue;
+		}
+
+		VolSmokeDeleteRetired( s_VolSmokeRetired[i] );
+		s_VolSmokeRetired.Remove( i );
+	}
+}
+
+// Deletes retired resources each frame, and all of them when the level or the
+// client shuts down (no frame is queued then).
+class CNeoVolSmokeRetireSystem final : public CAutoGameSystemPerFrame
+{
+public:
+	CNeoVolSmokeRetireSystem() : CAutoGameSystemPerFrame( "CNeoVolSmokeRetireSystem" ) {}
+
+	virtual void Update( float frametime ) override { VolSmokeDeleteRetired( VOLSMOKE_RETIRE_AFTER_FRAMES ); }
+	virtual void LevelShutdownPostEntity() override { VolSmokeDeleteRetired( VOLSMOKE_RETIRE_NOW ); }
+	virtual void Shutdown() override { VolSmokeDeleteRetired( VOLSMOKE_RETIRE_NOW ); }
+};
+
+static CNeoVolSmokeRetireSystem s_VolSmokeRetireSystem;
+
+// ---------------------------------------------------------------------------
 // Statics
 // ---------------------------------------------------------------------------
 CUtlVector< C_NeoVolSmoke * > C_NeoVolSmoke::s_Volumes;
@@ -635,23 +709,33 @@ void C_NeoVolSmoke::Init( const Vector &origin, float spawnTime )
 
 void C_NeoVolSmoke::Shutdown()
 {
-	// The materials reference the atlas, so they go first.
+	// Hand this volume's references over to the retire list.
+	VolSmokeRetired_t retired = {};
+	retired.nFrame = gpGlobals->framecount;
+
 	CMaterialReference *pMaterials[] = { &m_Material, &m_SlabMaterial };
-	for ( CMaterialReference *pRef : pMaterials )
+	for ( int i = 0; i < ARRAYSIZE( pMaterials ); ++i )
 	{
-		IMaterial *pMat = *pRef;
-		pRef->Shutdown();
+		IMaterial *pMat = *pMaterials[i];
 		if ( pMat )
 		{
-			pMat->DeleteIfUnreferenced();
+			pMat->IncrementReferenceCount();
 		}
+		retired.pMaterials[i] = pMat;
+		pMaterials[i]->Shutdown();
 	}
 
 	if ( m_Atlas.IsValid() )
 	{
-		m_Atlas->SetTextureRegenerator( NULL ); // calls Release() on m_pRegen
-		m_pRegen = NULL;
-		m_Atlas.Shutdown( true );
+		retired.pAtlas = m_Atlas;
+		retired.pAtlas->IncrementReferenceCount();
+		m_Atlas.Shutdown( false );
+	}
+	m_pRegen = NULL; // the atlas owns it
+
+	if ( retired.pMaterials[0] || retired.pMaterials[1] || retired.pAtlas )
+	{
+		s_VolSmokeRetired.AddToTail( retired );
 	}
 }
 
