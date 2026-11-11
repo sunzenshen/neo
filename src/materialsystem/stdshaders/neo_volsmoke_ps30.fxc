@@ -219,17 +219,17 @@ float4 main( PS_INPUT i ) : COLOR
 	sincos( age * PUFF_SPIN, spin.y, spin.x );
 	float3 puffDrift = float3( 0.0f, 0.0f, age * PUFF_RISE );
 
-	// No break or continue: on linux-8845hs (DXVK, d3dcompiler_43 output) a
-	// break in this loop never fired, so every iteration is guarded instead.
+	// The exit tests sit in the loop condition: fxc compiles a break inside
+	// this loop body to a compare of two equal constants, which never fires.
 	float n = nFirst;
 	[loop]
-	for ( int s = 0; s < MAX_STEPS; s++ )
+	for ( int s = 0; s < MAX_STEPS && n < nEnd && T >= T_CUTOFF; s++ )
 	{
 		float tc  = ( n + jitter ) * STEP_LEN;
 		float c0  = max( tc - 0.5f * STEP_LEN, t0 );
 		float c1  = min( tc + 0.5f * STEP_LEN, t1 );
 		float len = c1 - c0;
-		if ( n < nEnd && T >= T_CUTOFF && len > 0.0f )
+		if ( len > 0.0f )
 		{
 			float3 p   = ro + rd * ( 0.5f * ( c0 + c1 ) );
 			float3 uvw = ( p - g_VolMin.xyz ) / volSize;
