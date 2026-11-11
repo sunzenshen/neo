@@ -19,6 +19,11 @@ static constexpr int NEO_SMOKE_FILL_REACH_CAP = (int)( 560.0 * CNeoSmokeFill::DI
 // A grenade resting in a corner can put the first cell inside the floor.
 static constexpr int NEO_SMOKE_FILL_SEED_LIFT = 4;
 
+// The grenade sits on a grid corner. The cell above and toward +x +y is the
+// usual seed; the other seven touch the same corner, so one of them is on the
+// grenade's side of a wall it rests against.
+static constexpr int NEO_SMOKE_FILL_SEED_CORNERS = 8;
+
 // Step costs in 1/DIST_SCALE cells: face, edge and corner neighbor.
 static constexpr int NEO_SMOKE_FILL_STEP_FACE = 16;
 static constexpr int NEO_SMOKE_FILL_STEP_EDGE = 23;
@@ -219,25 +224,62 @@ void CNeoSmokeFill::Start( INeoSmokeFillWorld *pWorld )
 		m_pHeapPos[i] = -1;
 	}
 
-	const int sx = GRID_XY / 2;
-	const int sy = GRID_XY / 2;
-	int sz = SEED_CELL_Z;
-	for ( int lift = 0; lift < NEO_SMOKE_FILL_SEED_LIFT && !CellOpen( sx, sy, sz ); ++lift )
-	{
-		++sz;
-	}
-
-	if ( !CellOpen( sx, sy, sz ) )
+	const int seed = FindSeed();
+	if ( seed < 0 )
 	{
 		m_bDone = true;
 		Finish();
 		return;
 	}
 
-	const int seed = Index( sx, sy, sz );
 	m_pDist[seed] = 0;
 	m_pAnchor[seed] = seed;
 	HeapPush( seed );
+}
+
+bool CNeoSmokeFill::SeedCellOk( int x, int y, int z )
+{
+	if ( !CellOpen( x, y, z ) )
+	{
+		return false;
+	}
+
+	++m_nQueries;
+	return !m_pWorld->SeedBlocked( x, y, z );
+}
+
+// The seed must be open and in plain sight of the grenade, or a grenade
+// resting against a thin wall or under a slab starts the gas on the far side.
+int CNeoSmokeFill::FindSeed()
+{
+	const int cx = GRID_XY / 2;
+	const int cy = GRID_XY / 2;
+	const int cz = SEED_CELL_Z;
+	for ( int i = 0; i < NEO_SMOKE_FILL_SEED_CORNERS; ++i )
+	{
+		const int x = cx - ( i & 1 );
+		const int y = cy - ( ( i >> 1 ) & 1 );
+		const int z = cz - ( ( i >> 2 ) & 1 );
+		if ( SeedCellOk( x, y, z ) )
+		{
+			return Index( x, y, z );
+		}
+	}
+
+	for ( int lift = 1; lift <= NEO_SMOKE_FILL_SEED_LIFT; ++lift )
+	{
+		for ( int i = 0; i < NEO_SMOKE_FILL_SEED_CORNERS / 2; ++i )
+		{
+			const int x = cx - ( i & 1 );
+			const int y = cy - ( ( i >> 1 ) & 1 );
+			if ( SeedCellOk( x, y, cz + lift ) )
+			{
+				return Index( x, y, cz + lift );
+			}
+		}
+	}
+
+	return -1;
 }
 
 bool CNeoSmokeFill::Step( int maxCells, int maxQueries )
