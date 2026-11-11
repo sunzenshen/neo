@@ -42,7 +42,6 @@ static ConVar neo_volsmoke_noise_amp( "neo_volsmoke_noise_amp", "0.35", FCVAR_CH
 static ConVar neo_volsmoke_noise_scale( "neo_volsmoke_noise_scale", "0.045", FCVAR_CHEAT, "Noise frequency (1/world units).", true, 0.0f, true, 1.0f );
 static ConVar neo_volsmoke_jitter( "neo_volsmoke_jitter", "1", FCVAR_CHEAT, "Per-pixel step jitter (grain) instead of banding." );
 static ConVar neo_volsmoke_debug( "neo_volsmoke_debug", "0", FCVAR_CHEAT, "0 off, 1 coverage, 2 scene depth as read by the shader, 3 box hit." );
-static ConVar neo_volsmoke_cullflip( "neo_volsmoke_cullflip", "0", FCVAR_CHEAT, "Flip which box faces are drawn. If the smoke vanishes when you step inside the box, toggle this." );
 static ConVar neo_volsmoke_draw( "neo_volsmoke_draw", "1", FCVAR_CHEAT, "Draw smoke volumes." );
 static ConVar neo_volsmoke_material( "neo_volsmoke_material", "dev/neo_volsmoke", FCVAR_CHEAT, "Material using the Neo_VolSmoke shader." );
 
@@ -631,7 +630,7 @@ int C_NeoVolSmoke::DrawModel( int flags )
 	// Draw only the far side of the box: exactly one fragment per pixel, and
 	// still correct with the camera inside the volume. The pixel shader does
 	// the depth test against the scene itself.
-	pRenderContext->CullMode( neo_volsmoke_cullflip.GetBool() ? MATERIAL_CULLMODE_CCW : MATERIAL_CULLMODE_CW );
+	pRenderContext->CullMode( MATERIAL_CULLMODE_CCW );
 
 	pRenderContext->Bind( pMat, (IClientRenderable *)this );
 	IMesh *pMesh = pRenderContext->GetDynamicMesh( true, NULL, NULL, pMat );
@@ -643,7 +642,8 @@ int C_NeoVolSmoke::DrawModel( int flags )
 		Vector( a.x, a.y, a.z ), Vector( b.x, a.y, a.z ), Vector( b.x, b.y, a.z ), Vector( a.x, b.y, a.z ),
 		Vector( a.x, a.y, b.z ), Vector( b.x, a.y, b.z ), Vector( b.x, b.y, b.z ), Vector( a.x, b.y, b.z ),
 	};
-	// Outward-facing, consistent winding per face.
+	// Counter-clockwise seen from outside. Source treats clockwise as front
+	// facing, so culling counter-clockwise faces keeps only the far side.
 	static const unsigned short indices[36] =
 	{
 		0, 2, 1,  0, 3, 2,   // -z
@@ -669,7 +669,6 @@ int C_NeoVolSmoke::DrawModel( int flags )
 	meshBuilder.End();
 	pMesh->Draw();
 
-	pRenderContext->CullMode( MATERIAL_CULLMODE_CCW );
 	pRenderContext->MatrixMode( MATERIAL_MODEL );
 	pRenderContext->PopMatrix();
 
