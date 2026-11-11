@@ -114,6 +114,7 @@ private:
 	bool SeedCellOk( int x, int y, int z );
 	int  FindSeed();
 
+	void Begin();
 	void Relax( int cell );
 	void AllocWork();
 	void FreeWork();
@@ -148,6 +149,7 @@ private:
 	int  m_nFrontDist;
 	int  m_nQueries;
 	bool m_bDone;
+	bool m_bBegun;     // work arrays allocated and the seed placed
 };
 
 #endif // NEO_SMOKE_FILL_H
