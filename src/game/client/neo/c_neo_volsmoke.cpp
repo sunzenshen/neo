@@ -50,7 +50,7 @@ static ConVar neo_volsmoke_material( "neo_volsmoke_material", "dev/neo_volsmoke"
 // Texture regenerator: owns a CPU copy of the atlas so the material system
 // can pull bits whenever it likes without touching the simulation arrays.
 // ---------------------------------------------------------------------------
-class CNeoVolSmokeRegenerator : public ITextureRegenerator
+class CNeoVolSmokeRegenerator final : public ITextureRegenerator
 {
 public:
 	CNeoVolSmokeRegenerator( int width, int height )
