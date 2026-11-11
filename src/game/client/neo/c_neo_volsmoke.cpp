@@ -39,22 +39,24 @@ static ConVar neo_volsmoke_fill_audit( "neo_volsmoke_fill_audit", "0", FCVAR_CHE
 // the same for every client.
 // ---------------------------------------------------------------------------
 
-// Atlas: one tile of the box's x by y cells per z slice, in rows of this many.
-static constexpr int NEO_VOLSMOKE_ATLAS_COLS = 8;
 
 // Atlas texel bytes in BGRA order. The atlas holds what does not change with
 // time: the gas path length, the cell weight (variation and carve hole) and
 // the light. The shader applies the bloom front and the fade.
 enum VolSmokeAtlasByte_t
 {
-	VOLSMOKE_BYTE_DIST = 0,   // B: path length, 0..NEO_VOLSMOKE_DIST_RANGE
+	VOLSMOKE_BYTE_DIST = 0,   // B: path length, 0..the volume's distance range
 	VOLSMOKE_BYTE_LIGHT = 1,  // G: transmittance toward the light
 	VOLSMOKE_BYTE_WEIGHT = 2, // R: density of a cell inside the front
 	VOLSMOKE_BYTE_ALPHA = 3,  // A: distance to the wall beside the gas
 };
 
-// Path lengths are stored up to this length, past any front the fill made
-// before its cap was removed.
+// The look noise turns about a point this far above the grenade, near the
+// middle of a cloud on open floor.
+static constexpr float NEO_VOLSMOKE_SPIN_HEIGHT = 8 * CNeoSmokeFill::CELL_SIZE;
+
+// Path lengths are stored up to this length, or up to the front when it is
+// farther, so a short field keeps its precision.
 static constexpr float NEO_VOLSMOKE_DIST_RANGE = 64 * CNeoSmokeFill::CELL_SIZE;
 
 // The atlas changes only while the fill, the bloom light or a regrow runs;
@@ -210,9 +212,28 @@ static float VolSmokeFade( float age )
 	return 0.5f + 0.5f * cosf( M_PI_F * f );
 }
 
-static float VolSmokeCellVariation( int idx )
+static int VolSmokePow2( int n )
 {
-	unsigned int h = (unsigned int)idx;
+	int p = 1;
+	while ( p < n )
+	{
+		p <<= 1;
+	}
+
+	return p;
+}
+
+// The variation is keyed by a cell's place relative to the grenade, laid out
+// as the cell index of a fixed grid around it, so it does not move with the
+// box.
+static constexpr int NEO_VOLSMOKE_VARIATION_SPAN = 128;
+static constexpr int NEO_VOLSMOKE_VARIATION_BELOW = 8;
+
+static float VolSmokeCellVariation( int x, int y, int z )
+{
+	const int half = NEO_VOLSMOKE_VARIATION_SPAN / 2;
+	const int key = ( ( z + NEO_VOLSMOKE_VARIATION_BELOW ) * NEO_VOLSMOKE_VARIATION_SPAN + y + half ) * NEO_VOLSMOKE_VARIATION_SPAN + x + half;
+	unsigned int h = (unsigned int)key;
 	h ^= h >> 16;
 	h *= 0x7feb352dU;
 	h ^= h >> 15;
@@ -333,6 +354,7 @@ public:
 		for ( int a = 0; a < 3; ++a )
 		{
 			m_nBoxSize[a] = boxSize[a];
+			m_nDrawOffset[a] = 0;
 			m_nSeedCorner[a] = seedCorner[a];
 			m_nLatticeLo[a] = latticeLo[a];
 			m_nLatticeHi[a] = latticeHi[a];
@@ -404,15 +426,30 @@ public:
 		return blocked;
 	}
 
-	// The world face that blocks the way from an open cell to its neighbor n,
-	// as a plane whose normal points back at the cell. Not part of the fill.
-	bool LinkWall( int x, int y, int z, const int n[3], Vector &normal, float &planeDist )
+	// The client's box, in query coordinates, for LinkWall.
+	void SetDrawBox( const int offset[3], const int size[3] )
 	{
-		if ( !InBox( n[0], n[1], n[2] ) )
+		for ( int a = 0; a < 3; ++a )
+		{
+			m_nDrawOffset[a] = offset[a];
+			m_nBoxSize[a] = size[a];
+		}
+	}
+
+	// The world face that blocks the way from an open cell of the client's
+	// box to its neighbor dn, as a plane whose normal points back at the cell.
+	// Not part of the fill.
+	bool LinkWall( const int c[3], const int dn[3], Vector &normal, float &planeDist )
+	{
+		if ( !InBox( dn[0], dn[1], dn[2] ) )
 		{
 			return false;
 		}
 
+		const int x = c[0] + m_nDrawOffset[0];
+		const int y = c[1] + m_nDrawOffset[1];
+		const int z = c[2] + m_nDrawOffset[2];
+		const int n[3] = { dn[0] + m_nDrawOffset[0], dn[1] + m_nDrawOffset[1], dn[2] + m_nDrawOffset[2] };
 		if ( InEmptyBlock( x, y, z ) && InEmptyBlock( n[0], n[1], n[2] ) )
 		{
 			return false;
@@ -593,7 +630,8 @@ private:
 	}
 
 	Vector m_vecGridMin;
-	int m_nBoxSize[3];
+	int m_nBoxSize[3];      // the client's box, from m_nDrawOffset
+	int m_nDrawOffset[3];
 	int m_nSeedCorner[3];
 	int m_nLatticeLo[3];
 	int m_nLatticeHi[3];
@@ -847,15 +885,16 @@ int C_NeoVolSmoke::s_nNextId = 0;
 // ---------------------------------------------------------------------------
 C_NeoVolSmoke::C_NeoVolSmoke()
 	: m_nId( s_nNextId++ ), m_flSpawnTime( 0 ), m_pWorld( NULL ), m_flFillSeconds( 0 ), m_flFillPeakFrame( 0 ), m_flFillDoneAge( -1.0f ), m_nLagFrames( 0 ),
-	  m_nBounded( 0 ), m_pRegen( NULL ), m_nPacked( 0 ), m_flNextUpload( 0 ), m_flRegrowEnd( -1.0f ), m_flUploadedFront( 0 ), m_bUploadPending( false ), m_nSlabTiles( 0 ), m_nSlabTilesCulled( 0 ), m_bCarveCompact( false ), m_nAtlasCols( 0 ), m_nAtlasW( 0 ), m_nAtlasH( 0 )
+	  m_nBounded( 0 ), m_pRegen( NULL ), m_nPacked( 0 ), m_flNextUpload( 0 ), m_flRegrowEnd( -1.0f ), m_flUploadedFront( 0 ), m_bUploadPending( false ), m_nSlabTiles( 0 ), m_nSlabTilesCulled( 0 ), m_flDistRange( NEO_VOLSMOKE_DIST_RANGE ), m_nAtlasCols( 0 ), m_nAtlasW( 0 ), m_nAtlasH( 0 )
 {
 	for ( int a = 0; a < 3; ++a )
 	{
 		m_nBox[a] = 0;
 		m_nSeedCorner[a] = 0;
+		m_nBoxOffset[a] = 0;
 	}
 
-	SetDefLessFunc( m_CarveByCell );
+	m_bFitted = false;
 }
 
 C_NeoVolSmoke::~C_NeoVolSmoke()
@@ -983,12 +1022,56 @@ void C_NeoVolSmoke::Init( const Vector &origin, float spawnTime )
 	m_pWorld = new CNeoVolSmokeWorld( m_vecGridMin, m_nBox, seedCorner, latticeLo, latticeHi );
 	m_Fill.Start( m_pWorld );
 
+	m_vecQueryMin = m_vecGridMin;
 	m_vecColor = SampleColor( origin );
+}
 
-	// GPU resources
-	m_nAtlasCols = NEO_VOLSMOKE_ATLAS_COLS;
-	m_nAtlasW = m_nAtlasCols * m_nBox[0];
-	m_nAtlasH = ( m_nBox[2] + m_nAtlasCols - 1 ) / m_nAtlasCols * m_nBox[1];
+// A cell's center, from the corner of the box the fill queries in: the same
+// point whatever box the volume is drawn in.
+Vector C_NeoVolSmoke::CellCenter( const int c[3] ) const
+{
+	const float cell = CNeoSmokeFill::CELL_SIZE;
+	return m_vecQueryMin + Vector( ( c[0] + m_nBoxOffset[0] + 0.5f ) * cell, ( c[1] + m_nBoxOffset[1] + 0.5f ) * cell,
+		( c[2] + m_nBoxOffset[2] + 0.5f ) * cell );
+}
+
+// Once the fill is done: the box, the bounds and the atlas fitted to the field.
+// Nothing is drawn before, because the atlas layout depends on the box.
+void C_NeoVolSmoke::FitToField()
+{
+	m_bFitted = true;
+	m_Fill.BoxSize( m_nBox );
+	m_Fill.BoxSeedCorner( m_nSeedCorner );
+	m_Fill.BoxOffset( m_nBoxOffset );
+	const float cell = CNeoSmokeFill::CELL_SIZE;
+	for ( int a = 0; a < 3; ++a )
+	{
+		m_vecGridMin[a] = m_vecSpawn[a] - m_nSeedCorner[a] * cell;
+		m_vecGridMax[a] = m_vecSpawn[a] + ( m_nBox[a] - m_nSeedCorner[a] ) * cell;
+		m_SmokeLo[a] = m_nBox[a];
+		m_SmokeHi[a] = -1;
+	}
+
+	SetCollisionBounds( m_vecGridMin - m_vecSpawn, m_vecGridMax - m_vecSpawn );
+	m_pWorld->SetDrawBox( m_nBoxOffset, m_nBox );
+	m_flDistRange = MAX( NEO_VOLSMOKE_DIST_RANGE, CNeoSmokeFill::DistToUnits( m_Fill.FrontDist() ) );
+
+	m_CarveTime.SetCount( m_Fill.FinalizedCount() );
+	for ( int k = 0; k < m_CarveTime.Count(); ++k )
+	{
+		m_CarveTime[k] = -1.0f;
+	}
+
+	CreateAtlas();
+}
+
+void C_NeoVolSmoke::CreateAtlas()
+{
+	// As many tiles to a row as fit the atlas size; both sides a power of two.
+	m_nAtlasCols = MAX( 1, CNeoSmokeFill::ATLAS_SIZE / m_nBox[0] );
+	const int rows = ( m_nBox[2] + m_nAtlasCols - 1 ) / m_nAtlasCols;
+	m_nAtlasW = VolSmokePow2( m_nAtlasCols * m_nBox[0] );
+	m_nAtlasH = VolSmokePow2( rows * m_nBox[1] );
 	const int atlasW = m_nAtlasW;
 	const int atlasH = m_nAtlasH;
 
@@ -1277,53 +1360,6 @@ C_NeoVolSmoke *C_NeoVolSmoke::UploadTurn()
 	return s_pTurn;
 }
 
-// While the fill runs, a finalized cell has no rank yet, so its carve time is
-// kept by cell. Once the fill is done the times move to one slot per
-// finalized cell.
-void C_NeoVolSmoke::CompactCarveTimes()
-{
-	if ( m_bCarveCompact )
-	{
-		return;
-	}
-
-	m_CarveTime.SetCount( m_Fill.FinalizedCount() );
-	for ( int k = 0; k < m_CarveTime.Count(); ++k )
-	{
-		m_CarveTime[k] = -1.0f;
-	}
-
-	FOR_EACH_MAP_FAST( m_CarveByCell, i )
-	{
-		m_CarveTime[m_Fill.FinalRank( m_CarveByCell.Key( i ) )] = m_CarveByCell.Element( i );
-	}
-
-	m_CarveByCell.Purge();
-	m_bCarveCompact = true;
-}
-
-float C_NeoVolSmoke::CarveTime( int idx ) const
-{
-	if ( m_bCarveCompact )
-	{
-		return m_CarveTime[m_Fill.FinalRank( idx )];
-	}
-
-	const CUtlMap< int, float >::IndexType_t i = m_CarveByCell.Find( idx );
-	return m_CarveByCell.IsValidIndex( i ) ? m_CarveByCell.Element( i ) : -1.0f;
-}
-
-void C_NeoVolSmoke::SetCarveTime( int idx, float time )
-{
-	if ( m_bCarveCompact )
-	{
-		m_CarveTime[m_Fill.FinalRank( idx )] = time;
-		return;
-	}
-
-	m_CarveByCell.InsertOrReplace( idx, time );
-}
-
 // Distance of the expanding front from the grenade, along the gas path.
 // Never past the cells the shader has: a volume whose fill or upload is late
 // grows as far as it has filled instead of showing a cut-off shape.
@@ -1434,7 +1470,9 @@ float C_NeoVolSmoke::CellWeight( int idx, float now ) const
 		hole = hole * hole; // slow start, then refill
 	}
 
-	return VolSmokeCellVariation( idx ) * hole;
+	int c[3];
+	CellCoords( idx, c[0], c[1], c[2] );
+	return VolSmokeCellVariation( c[0] - m_nSeedCorner[0], c[1] - m_nSeedCorner[1], c[2] - m_nSeedCorner[2] ) * hole;
 }
 
 static unsigned char VolSmokeByte( float v )
@@ -1496,7 +1534,7 @@ bool C_NeoVolSmoke::PackNewCells( float now )
 	for ( ; m_nPacked < count; ++m_nPacked )
 	{
 		const int i = m_Fill.FinalizedCell( m_nPacked );
-		const unsigned char dist = VolSmokeByte( CNeoSmokeFill::DistToUnits( m_Fill.Dist( i ) ) / NEO_VOLSMOKE_DIST_RANGE );
+		const unsigned char dist = VolSmokeByte( CNeoSmokeFill::DistToUnits( m_Fill.Dist( i ) ) / m_flDistRange );
 		unsigned char *texel = bits + AtlasOffset( i );
 		texel[VOLSMOKE_BYTE_DIST] = dist;
 		texel[VOLSMOKE_BYTE_WEIGHT] = VolSmokeByte( CellWeight( i, now ) );
@@ -1513,14 +1551,14 @@ bool C_NeoVolSmoke::PackNewCells( float now )
 		{
 			int n[3] = { c[0], c[1], c[2] };
 			n[link >> 1] += ( link & 1 ) ? 1 : -1;
-			if ( m_pWorld->LinkWall( c[0], c[1], c[2], n, wallNormal[walls], wallDist[walls] ) )
+			if ( m_pWorld->LinkWall( c, n, wallNormal[walls], wallDist[walls] ) )
 			{
 				++walls;
 			}
 		}
 
 		const float cell = CNeoSmokeFill::CELL_SIZE;
-		const Vector center = m_vecGridMin + Vector( ( c[0] + 0.5f ) * cell, ( c[1] + 0.5f ) * cell, ( c[2] + 0.5f ) * cell );
+		const Vector center = CellCenter( c );
 		float ownWall = NEO_VOLSMOKE_WALL_CAP;
 		for ( int w = 0; w < walls; ++w )
 		{
@@ -1724,6 +1762,12 @@ void C_NeoVolSmoke::SweepLight( float now )
 
 void C_NeoVolSmoke::Carve( const Vector &start, const Vector &end, float radius )
 {
+	// Before the field is fitted nothing is drawn, so there is nothing to carve.
+	if ( !m_bFitted )
+	{
+		return;
+	}
+
 	// Quick reject against the AABB (expanded by radius).
 	Vector mins = m_vecGridMin - Vector( radius, radius, radius );
 	Vector maxs = m_vecGridMax + Vector( radius, radius, radius );
@@ -1766,7 +1810,7 @@ void C_NeoVolSmoke::Carve( const Vector &start, const Vector &end, float radius 
 				const Vector closest = start + seg * t;
 				if ( ( c - closest ).LengthSqr() <= r2 )
 				{
-					SetCarveTime( i, now );
+					m_CarveTime[m_Fill.FinalRank( i )] = now;
 					touched = true;
 				}
 			}
@@ -1817,7 +1861,12 @@ unsigned long long C_NeoVolSmoke::LatticeFieldHash() const
 	{
 		int c[3];
 		m_Fill.LatticeCell( i, c[0], c[1], c[2] );
-		hash += VolSmokeCellKey( c[0] - m_nSeedCorner[0], c[1] - m_nSeedCorner[1], c[2] - m_nSeedCorner[2], (unsigned int)m_Fill.LatticeDist( i ) );
+		for ( int a = 0; a < 3; ++a )
+		{
+			c[a] -= m_nSeedCorner[a] + m_nBoxOffset[a];
+		}
+
+		hash += VolSmokeCellKey( c[0], c[1], c[2], (unsigned int)m_Fill.LatticeDist( i ) );
 	}
 
 	return hash;
@@ -1898,7 +1947,7 @@ void C_NeoVolSmoke::PrintStats() const
 		CNeoSmokeFill::DistToUnits( m_Fill.FrontDist() ), m_Fill.WorldQueries(), traces,
 		m_flFillSeconds * 1000.0, queryMs, m_flFillPeakFrame * 1000.0, hash, m_nLagFrames );
 	const int fillBytes = m_Fill.MemoryBytes();
-	const int carveBytes = m_CarveTime.Count() * (int)sizeof( float ) + m_CarveByCell.Count() * ( (int)sizeof( int ) + (int)sizeof( float ) );
+	const int carveBytes = m_CarveTime.Count() * (int)sizeof( float );
 	const int worldBytes = m_pWorld ? m_pWorld->MemoryBytes() : 0;
 	const int atlasBytes = m_pRegen ? m_pRegen->MemoryBytes() : 0;
 	Msg( "neo_volsmoke_stats: volume %d field %016llx lattice %016llx (%d cells, front %.1f, dropped %d) atlas %016llx\n",
@@ -1930,9 +1979,14 @@ void C_NeoVolSmoke::ClientThink()
 	{
 		CVolSmokePerfScope perf( VOLSMOKE_PERF_FILL );
 		StepFills();
-		if ( m_Fill.IsDone() )
+		if ( !m_bFitted )
 		{
-			CompactCarveTimes();
+			if ( !m_Fill.IsDone() )
+			{
+				return;
+			}
+
+			FitToField();
 		}
 	}
 
@@ -2109,8 +2163,7 @@ float C_NeoVolSmoke::SmokeSphere( Vector &center ) const
 {
 	int c[3];
 	CellCoords( m_Fill.FinalizedCell( 0 ), c[0], c[1], c[2] );
-	const float cell = CNeoSmokeFill::CELL_SIZE;
-	center = m_vecGridMin + Vector( ( c[0] + 0.5f ) * cell, ( c[1] + 0.5f ) * cell, ( c[2] + 0.5f ) * cell );
+	center = CellCenter( c );
 	return FrontRadius( gpGlobals->curtime - m_flSpawnTime ) + NEO_VOLSMOKE_SPHERE_MARGIN;
 }
 
@@ -2127,13 +2180,14 @@ void C_NeoVolSmoke::SetDrawParams( IMaterial *pMat ) const
 	const float sphereRadius = SmokeSphere( seed );
 	SetVec4Var( pMat, "$smokesphere", seed.x, seed.y, seed.z, sphereRadius );
 	// Slices along z, one tile of the box's x by y cells each.
-	SetVec3Var( pMat, "$gridparams", Vector( (float)m_nBox[2], (float)m_nAtlasCols, (float)( m_nAtlasH / m_nBox[1] ) ) );
+	SetVec4Var( pMat, "$gridparams", (float)m_nBox[2], (float)m_nAtlasCols, (float)m_nAtlasW / (float)m_nBox[0], (float)m_nAtlasH / (float)m_nBox[1] );
 	SetVec2Var( pMat, "$tilecells", (float)m_nBox[0], (float)m_nBox[1] );
+	SetVec3Var( pMat, "$spincenter", m_vecSpawn + Vector( 0.0f, 0.0f, NEO_VOLSMOKE_SPIN_HEIGHT ) );
 	SetVec3Var( pMat, "$ambient", amb );
 	SetVec3Var( pMat, "$lightcolor", lightCol );
 	const float age = gpGlobals->curtime - m_flSpawnTime;
 	SetFloatVar( pMat, "$extinction", DrawExtinction() );
-	SetVec3Var( pMat, "$front", Vector( FrontRadius( age ), NEO_VOLSMOKE_DIST_RANGE, 1.0f / NEO_VOLSMOKE_EDGE ) );
+	SetVec3Var( pMat, "$front", Vector( FrontRadius( age ), m_flDistRange, 1.0f / NEO_VOLSMOKE_EDGE ) );
 	SetFloatVar( pMat, "$noiseamp", neo_volsmoke_noise_amp.GetFloat() );
 	SetFloatVar( pMat, "$age", age );
 	SetIntVar( pMat, "$jitter", neo_volsmoke_jitter.GetInt() );
@@ -2331,7 +2385,7 @@ float C_NeoVolSmoke::DensityLowerBound( const Vector &pos, float front, float bi
 	SampleAtlas( pos, dist, weight, wallCut );
 	weight *= wallCut;
 
-	const float depth = front - dist * NEO_VOLSMOKE_DIST_RANGE - bite;
+	const float depth = front - dist * m_flDistRange - bite;
 	if ( weight <= 0.001f || depth <= 0.0f )
 	{
 		return 0.0f;

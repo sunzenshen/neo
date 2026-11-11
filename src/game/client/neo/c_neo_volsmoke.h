@@ -20,7 +20,6 @@
 #include "materialsystem/itexture.h"
 #include "materialsystem/MaterialSystemUtil.h"
 #include "utlvector.h"
-#include "utlmap.h"
 #include "neo_smoke_fill.h"
 
 class CNeoVolSmokeRegenerator;
@@ -83,9 +82,10 @@ private:
 	static void StepFills();
 	static C_NeoVolSmoke *UploadTurn();
 	double StepFill( double budget );
-	void CompactCarveTimes();
-	float CarveTime( int idx ) const;
-	void SetCarveTime( int idx, float time );
+	void FitToField();
+	void CreateAtlas();
+	Vector CellCenter( const int c[3] ) const;
+	float CarveTime( int idx ) const { return m_CarveTime[m_Fill.FinalRank( idx )]; }
 
 	// Cells of the volume's box
 	int  CellIndex( int x, int y, int z ) const { return ( z * m_nBox[1] + y ) * m_nBox[0] + x; }
@@ -136,6 +136,9 @@ private:
 	int    m_nId;
 	int    m_nBox[3];          // the volume's box of cells, from the fill
 	int    m_nSeedCorner[3];   // the cell corner the grenade sits on, in the box
+	int    m_nBoxOffset[3];    // the box's low corner in the fill's query coordinates
+	bool   m_bFitted;          // the fill is done and the box fits its field
+	Vector m_vecQueryMin;      // corner of the box the fill's world queries are in
 	Vector m_vecGridMin;
 	Vector m_vecGridMax;
 	Vector m_vecSpawn;
@@ -154,11 +157,7 @@ private:
 	int    m_nLagFrames;       // frames the fill or the upload held the bloom front back
 
 	// Per-cell state
-	// curtime of the last carve per finalized cell, by cell while the fill runs,
-	// then by FinalRank; a cell not listed was never carved.
-	CUtlMap< int, float >       m_CarveByCell;
-	CUtlVector< float >         m_CarveTime;  // by FinalRank once compact, <0 = never
-	bool   m_bCarveCompact;
+	CUtlVector< float >         m_CarveTime;  // curtime of the last carve by FinalRank, <0 = never
 	int    m_SmokeLo[3];       // cell bounds of m_vecSmokeMin / Max
 	int    m_SmokeHi[3];
 	int    m_nBounded;         // finalized cells inside the drawn box
@@ -168,6 +167,7 @@ private:
 	CNeoVolSmokeRegenerator *m_pRegen;
 	CMaterialReference       m_Material;     // near pass: box far faces, clipped in the shader
 	CMaterialReference       m_SlabMaterial; // far slabs: hardware depth test
+	float m_flDistRange;       // path length at atlas value 1
 	int   m_nAtlasCols;        // tiles per atlas row, one tile per z slice
 	int   m_nAtlasW;
 	int   m_nAtlasH;
