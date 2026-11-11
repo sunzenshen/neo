@@ -1372,6 +1372,55 @@ int C_NeoVolSmoke::DrawModel( int flags )
 	return 1;
 }
 
+// Screen rectangle, as view-space x / z and y / z, of the part of a box
+// between view depths lo and hi: the box corners inside that range and the
+// points where the box edges cross its two ends. Rays outside it meet no
+// smoke in that slab.
+static void SlabScreenRect( const Vector view[8], float lo, float hi, float &xMin, float &xMax, float &yMin, float &yMax )
+{
+	xMin = yMin = FLT_MAX;
+	xMax = yMax = -FLT_MAX;
+
+	const auto addPoint = [&]( const Vector &p )
+	{
+		xMin = MIN( xMin, p.x / p.z );
+		xMax = MAX( xMax, p.x / p.z );
+		yMin = MIN( yMin, p.y / p.z );
+		yMax = MAX( yMax, p.y / p.z );
+	};
+
+	for ( int i = 0; i < 8; ++i )
+	{
+		if ( view[i].z >= lo && view[i].z <= hi )
+		{
+			addPoint( view[i] );
+		}
+
+		// Each edge once: from corner i to the corner that differs in one bit.
+		for ( int bit = 1; bit < 8; bit <<= 1 )
+		{
+			const int j = i | bit;
+			if ( j == i )
+			{
+				continue;
+			}
+
+			const Vector &a = view[i];
+			const Vector &b = view[j];
+			const float ends[2] = { lo, hi };
+			for ( const float z : ends )
+			{
+				if ( ( a.z - z ) * ( b.z - z ) > 0.0f || a.z == b.z )
+				{
+					continue;
+				}
+
+				addPoint( a + ( b - a ) * ( ( z - a.z ) / ( b.z - a.z ) ) );
+			}
+		}
+	}
+}
+
 // The part of the volume beyond NEAR_RANGE, as view-parallel quads at the
 // middle depth of each slab. The depth test hides a slab behind geometry, so
 // smoke behind a surface the dest-alpha depth cannot see is wrong by at most
@@ -1386,36 +1435,17 @@ void C_NeoVolSmoke::DrawFarSlabs( IMatRenderContext *pRenderContext )
 	const Vector &a = m_vecSmokeMin;
 	const Vector &b = m_vecSmokeMax;
 
-	// View depth range of the box, and its screen rectangle as view-space
-	// x / z and y / z. A corner at or behind the eye makes the rectangle the
-	// whole view.
+	// The box corners in view space: x right, y up, z depth.
+	Vector view[8];
 	float zMin = FLT_MAX;
 	float zMax = -FLT_MAX;
-	float xMin = NEO_VOLSMOKE_SLAB_MAX_TAN;
-	float xMax = -NEO_VOLSMOKE_SLAB_MAX_TAN;
-	float yMin = NEO_VOLSMOKE_SLAB_MAX_TAN;
-	float yMax = -NEO_VOLSMOKE_SLAB_MAX_TAN;
-	bool bWholeView = false;
 	for ( int i = 0; i < 8; ++i )
 	{
 		const Vector corner( ( i & 1 ) ? b.x : a.x, ( i & 2 ) ? b.y : a.y, ( i & 4 ) ? b.z : a.z );
 		const Vector rel = corner - eye;
-		const float z = DotProduct( rel, fwd );
-		zMin = MIN( zMin, z );
-		zMax = MAX( zMax, z );
-
-		if ( z < 1.0f )
-		{
-			bWholeView = true;
-			continue;
-		}
-
-		const float x = DotProduct( rel, right ) / z;
-		const float y = DotProduct( rel, up ) / z;
-		xMin = MIN( xMin, x );
-		xMax = MAX( xMax, x );
-		yMin = MIN( yMin, y );
-		yMax = MAX( yMax, y );
+		view[i].Init( DotProduct( rel, right ), DotProduct( rel, up ), DotProduct( rel, fwd ) );
+		zMin = MIN( zMin, view[i].z );
+		zMax = MAX( zMax, view[i].z );
 	}
 
 	if ( zMax <= NEO_VOLSMOKE_NEAR_RANGE || neo_volsmoke_slabs.GetInt() == 0 )
@@ -1423,16 +1453,6 @@ void C_NeoVolSmoke::DrawFarSlabs( IMatRenderContext *pRenderContext )
 		return;
 	}
 	const float testAt = neo_volsmoke_slabs.GetInt() == 2 ? 1.0f : 0.5f;
-
-	if ( bWholeView )
-	{
-		xMin = yMin = -NEO_VOLSMOKE_SLAB_MAX_TAN;
-		xMax = yMax = NEO_VOLSMOKE_SLAB_MAX_TAN;
-	}
-	xMin = MAX( xMin, -NEO_VOLSMOKE_SLAB_MAX_TAN );
-	yMin = MAX( yMin, -NEO_VOLSMOKE_SLAB_MAX_TAN );
-	xMax = MIN( xMax, NEO_VOLSMOKE_SLAB_MAX_TAN );
-	yMax = MIN( yMax, NEO_VOLSMOKE_SLAB_MAX_TAN );
 
 	// Slab ends are whole units: the shader rounds the range it is given, and
 	// the near pass ends at NEAR_RANGE exactly.
@@ -1464,6 +1484,20 @@ void C_NeoVolSmoke::DrawFarSlabs( IMatRenderContext *pRenderContext )
 		const float hi = bounds[s + 1];
 		const float zc = lo + testAt * ( hi - lo );
 		const Vector center = eye + fwd * zc;
+
+		float xMin, xMax, yMin, yMax;
+		SlabScreenRect( view, lo, hi, xMin, xMax, yMin, yMax );
+		if ( xMin > xMax )
+		{
+			// The vertex count is already set: a quad of no area draws nothing.
+			xMin = xMax = yMin = yMax = 0.0f;
+		}
+
+		xMin = MAX( xMin, -NEO_VOLSMOKE_SLAB_MAX_TAN );
+		yMin = MAX( yMin, -NEO_VOLSMOKE_SLAB_MAX_TAN );
+		xMax = MIN( xMax, NEO_VOLSMOKE_SLAB_MAX_TAN );
+		yMax = MIN( yMax, NEO_VOLSMOKE_SLAB_MAX_TAN );
+
 		const float xs[4] = { xMin, xMax, xMax, xMin };
 		const float ys[4] = { yMin, yMin, yMax, yMax };
 		for ( int i = 0; i < 4; ++i )
