@@ -331,7 +331,7 @@ int C_NeoVolSmoke::s_nNextId = 0;
 // ---------------------------------------------------------------------------
 C_NeoVolSmoke::C_NeoVolSmoke()
 	: m_nId( s_nNextId++ ), m_flSpawnTime( 0 ), m_pWorld( NULL ), m_flFillSeconds( 0 ), m_flFillPeakFrame( 0 ), m_flFillDoneAge( -1.0f ), m_nLagFrames( 0 ),
-	  m_nBounded( 0 ), m_pRegen( NULL ), m_nPacked( 0 ), m_flNextUpload( 0 ), m_flRegrowEnd( -1.0f ), m_flSweptFront( -1.0f )
+	  m_nBounded( 0 ), m_pRegen( NULL ), m_nPacked( 0 ), m_flNextUpload( 0 ), m_flRegrowEnd( -1.0f ), m_flSweptFront( -1.0f ), m_bUploadPending( false )
 {
 }
 
@@ -903,7 +903,11 @@ void C_NeoVolSmoke::ClientThink()
 		changed = true;
 	}
 
-	if ( !changed )
+	m_bUploadPending = m_bUploadPending || changed;
+
+	// One upload a frame across all volumes: an upload can stall the frame.
+	static int s_nUploadFrame = -1;
+	if ( !m_bUploadPending || s_nUploadFrame == gpGlobals->framecount )
 	{
 		return;
 	}
@@ -911,6 +915,8 @@ void C_NeoVolSmoke::ClientThink()
 	CVolSmokePerfScope perf( VOLSMOKE_PERF_DOWNLOAD );
 	m_Atlas->Download();
 	++s_VolSmokePerf.uploads;
+	s_nUploadFrame = gpGlobals->framecount;
+	m_bUploadPending = false;
 	m_flNextUpload = now + 1.0f / NEO_VOLSMOKE_UPLOAD_HZ;
 }
 
