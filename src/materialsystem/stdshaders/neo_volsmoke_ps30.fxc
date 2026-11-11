@@ -21,6 +21,7 @@
 
 sampler AtlasSampler : register( s0 ); // atlas: R = cell weight, G = light, B = gas path length
 sampler DepthSampler : register( s1 ); // frame buffer copy, depth in .a
+sampler NoiseSampler : register( s2 ); // tiled value noise: R = lattice layer z, G = layer z + 1, wraps
 
 const float4 g_EyePos       : register( c0 ); // xyz eye, w unused
 const float4 g_VolMin       : register( c1 ); // xyz, w = extinction per unit at density 1
@@ -51,6 +52,11 @@ const float4 g_SmokeSphere  : register( c10 ); // xyz gas seed, w radius that ho
 #define PUFF_SPIN   0.035f  // radians per second about the vertical axis
 #define PUFF_RISE   1.5f    // world units per second
 #define PUFF_SHADE  0.45f   // light lost in a crevice, where the noise bites
+
+// Noise texture layout, set by the client: layer z of the lattice is the
+// texture shifted by z times NOISE_Z_SHIFT texels.
+#define NOISE_SIZE    64.0f
+#define NOISE_Z_SHIFT float2( 37.0f, 17.0f )
 
 struct PS_INPUT
 {
@@ -89,36 +95,20 @@ float3 SampleVolume( float3 uvw )
 }
 
 // ---------------------------------------------------------------------------
-// Cheap procedural 3D value noise for the billows. Takes coordinates relative
-// to the volume, so the sine hash keeps its precision on large maps.
+// 3D value noise for the billows from one bilinear fetch: the hardware
+// interpolates x and y inside two lattice layers at once, the shader along z.
+// A texture lookup stays continuous where a sine hash of the lattice point
+// jumps with the last bit of its input.
 // ---------------------------------------------------------------------------
-float Hash3( float3 p )
-{
-	return frac( sin( dot( p, float3( 12.9898f, 78.233f, 37.719f ) ) ) * 43758.5453f );
-}
-
 float ValueNoise3( float3 p )
 {
 	float3 i = floor( p );
 	float3 f = frac( p );
 	f = f * f * ( 3.0f - 2.0f * f );
 
-	float n000 = Hash3( i + float3( 0, 0, 0 ) );
-	float n100 = Hash3( i + float3( 1, 0, 0 ) );
-	float n010 = Hash3( i + float3( 0, 1, 0 ) );
-	float n110 = Hash3( i + float3( 1, 1, 0 ) );
-	float n001 = Hash3( i + float3( 0, 0, 1 ) );
-	float n101 = Hash3( i + float3( 1, 0, 1 ) );
-	float n011 = Hash3( i + float3( 0, 1, 1 ) );
-	float n111 = Hash3( i + float3( 1, 1, 1 ) );
-
-	float nx00 = lerp( n000, n100, f.x );
-	float nx10 = lerp( n010, n110, f.x );
-	float nx01 = lerp( n001, n101, f.x );
-	float nx11 = lerp( n011, n111, f.x );
-	float nxy0 = lerp( nx00, nx10, f.y );
-	float nxy1 = lerp( nx01, nx11, f.y );
-	return lerp( nxy0, nxy1, f.z );
+	float2 uv = ( i.xy + NOISE_Z_SHIFT * i.z + f.xy + 0.5f ) / NOISE_SIZE;
+	float2 layers = tex2Dlod( NoiseSampler, float4( uv, 0, 0 ) ).rg;
+	return lerp( layers.x, layers.y, f.z );
 }
 
 // Premultiplied output for blending in gamma space. The draws of one volume

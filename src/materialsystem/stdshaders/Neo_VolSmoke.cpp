@@ -32,6 +32,7 @@ BEGIN_SHADER_PARAMS
 	SHADER_PARAM( JITTER,     SHADER_PARAM_TYPE_INTEGER, "1",             "Per-pixel step jitter (grain instead of banding)" )
 	SHADER_PARAM( DEBUGMODE,  SHADER_PARAM_TYPE_INTEGER, "0",             "0 off, 1 coverage, 2 scene depth, 3 box hit" )
 	SHADER_PARAM( SLAB,       SHADER_PARAM_TYPE_INTEGER, "0",             "1 = far slabs: hardware depth test, no culling" )
+	SHADER_PARAM( NOISETEXTURE, SHADER_PARAM_TYPE_TEXTURE, "",            "Tiled value noise for the look: R = a lattice layer, G = the next layer up" )
 	SHADER_PARAM( FRONT,      SHADER_PARAM_TYPE_VEC3,    "[0 288 0.037]", "x = bloom front path length, y = path length at atlas value 1, z = 1 / edge width" )
 END_SHADER_PARAMS
 
@@ -47,6 +48,11 @@ SHADER_INIT
 	if ( params[BASETEXTURE]->IsDefined() )
 	{
 		LoadTexture( BASETEXTURE );
+	}
+
+	if ( params[NOISETEXTURE]->IsDefined() )
+	{
+		LoadTexture( NOISETEXTURE );
 	}
 }
 
@@ -90,7 +96,9 @@ SHADER_DRAW
 		pShaderShadow->EnableTexture( SHADER_SAMPLER0, true ); // atlas (data, not sRGB)
 		pShaderShadow->EnableTexture( SHADER_SAMPLER1, true ); // frame buffer / depth
 		pShaderShadow->EnableSRGBRead( SHADER_SAMPLER0, false );
+		pShaderShadow->EnableTexture( SHADER_SAMPLER2, true ); // look noise (data)
 		pShaderShadow->EnableSRGBRead( SHADER_SAMPLER1, false );
+		pShaderShadow->EnableSRGBRead( SHADER_SAMPLER2, false );
 		// The pixel shader writes gamma itself (see BlendOutput).
 		pShaderShadow->EnableSRGBWrite( false );
 
@@ -107,6 +115,7 @@ SHADER_DRAW
 	{
 		BindTexture( SHADER_SAMPLER0, BASETEXTURE );
 		pShaderAPI->BindStandardTexture( SHADER_SAMPLER1, TEXTURE_FRAME_BUFFER_FULL_DEPTH );
+		BindTexture( SHADER_SAMPLER2, NOISETEXTURE );
 
 		float c[4];
 
