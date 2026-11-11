@@ -36,6 +36,10 @@ enum NeoSmokeOcc_t
 
 static const int NEO_SMOKE_OCC_CELL_SHIFT = 0;
 
+// Move code ( dx + 1 ) + 3 * ( dy + 1 ) + 9 * ( dz + 1 ) of no move. A move and
+// its reverse sum to twice this.
+static const int NEO_SMOKE_MOVE_SELF = 13;
+
 static int NeoSmokeOccLinkShift( int axis )
 {
 	return 2 + 2 * axis;
@@ -72,6 +76,7 @@ CNeoSmokeFill::CNeoSmokeFill()
 	: m_pWorld( NULL ), m_nHeapCount( 0 ), m_nFinalized( 0 ), m_nFrontDist( 0 ), m_nQueries( 0 ), m_bDone( true )
 {
 	m_pOcc = new unsigned char[CELLS];
+	m_pMoveMemo = new unsigned int[CELLS];
 	m_pState = new unsigned char[CELLS];
 	m_pDist = new int[CELLS];
 	m_pAnchor = new int[CELLS];
@@ -83,6 +88,7 @@ CNeoSmokeFill::CNeoSmokeFill()
 CNeoSmokeFill::~CNeoSmokeFill()
 {
 	delete[] m_pOcc;
+	delete[] m_pMoveMemo;
 	delete[] m_pState;
 	delete[] m_pDist;
 	delete[] m_pAnchor;
@@ -103,6 +109,7 @@ void CNeoSmokeFill::Start( INeoSmokeFillWorld *pWorld )
 	for ( int i = 0; i < CELLS; ++i )
 	{
 		m_pOcc[i] = 0;
+		m_pMoveMemo[i] = 0;
 		m_pState[i] = STATE_NONE;
 		m_pDist[i] = NEO_SMOKE_FILL_UNREACHED;
 		m_pAnchor[i] = -1;
@@ -197,34 +204,39 @@ void CNeoSmokeFill::Relax( int cell )
 					continue;
 				}
 
+				// Measure straight from the anchor while it can see the cell, so
+				// open space fills as a sphere. Behind a corner the corner cell
+				// becomes the new anchor and the gas turns it as a sphere section.
+				const int a = m_pAnchor[cell];
+				int ac[3];
+				Coords( a, ac[0], ac[1], ac[2] );
+				const int ex = ac[0] - n[0];
+				const int ey = ac[1] - n[1];
+				const int ez = ac[2] - n[2];
+				const int lineDist = m_pDist[a] + NeoSmokeISqrt( DIST_SCALE * DIST_SCALE * ( ex * ex + ey * ey + ez * ez ) );
+				const int step = ( axes == 1 ) ? NEO_SMOKE_FILL_STEP_FACE
+					: ( ( axes == 2 ) ? NEO_SMOKE_FILL_STEP_EDGE : NEO_SMOKE_FILL_STEP_CORNER );
+				const int stepDist = m_pDist[cell] + step;
+
+				// Only these two values can be written, so when neither improves
+				// the neighbor no world answer can change the field.
+				if ( MIN( lineDist, stepDist ) >= m_pDist[next] )
+				{
+					continue;
+				}
+
 				// No corner cutting: the whole block the move spans must be open.
 				if ( !BlockOpen( c, n ) )
 				{
 					continue;
 				}
 
-				// Measure straight from the anchor while it can see the cell, so
-				// open space fills as a sphere. Behind a corner the corner cell
-				// becomes the new anchor and the gas turns it as a sphere section.
-				int dist;
-				int anchor;
-				const int a = m_pAnchor[cell];
+				int dist = stepDist;
+				int anchor = cell;
 				if ( LineOpen( a, next ) )
 				{
-					int ac[3];
-					Coords( a, ac[0], ac[1], ac[2] );
-					const int ex = ac[0] - n[0];
-					const int ey = ac[1] - n[1];
-					const int ez = ac[2] - n[2];
-					dist = m_pDist[a] + NeoSmokeISqrt( DIST_SCALE * DIST_SCALE * ( ex * ex + ey * ey + ez * ez ) );
+					dist = lineDist;
 					anchor = a;
-				}
-				else
-				{
-					const int step = ( axes == 1 ) ? NEO_SMOKE_FILL_STEP_FACE
-						: ( ( axes == 2 ) ? NEO_SMOKE_FILL_STEP_EDGE : NEO_SMOKE_FILL_STEP_CORNER );
-					dist = m_pDist[cell] + step;
-					anchor = cell;
 				}
 
 				if ( dist >= m_pDist[next] )
@@ -284,10 +296,36 @@ bool CNeoSmokeFill::LinkOpen( int x, int y, int z, int axis )
 	return state == NEO_SMOKE_OCC_OPEN;
 }
 
-// p and q differ by at most one cell per axis. Every cell of the block they
-// span must be open, and so must every link inside it, so gas cannot slip
-// through a wall thinner than a cell or around a corner.
+// p and q differ by at most one cell per axis. The answer depends only on the
+// cached occupancy, so it is remembered per cell and move: two bits for each
+// of the 13 moves, a move and its reverse sharing one entry.
 bool CNeoSmokeFill::BlockOpen( const int p[3], const int q[3] )
+{
+	int move = ( q[0] - p[0] + 1 ) + 3 * ( q[1] - p[1] + 1 ) + 9 * ( q[2] - p[2] + 1 );
+	const int *base = p;
+	if ( move < NEO_SMOKE_MOVE_SELF )
+	{
+		move = 2 * NEO_SMOKE_MOVE_SELF - move;
+		base = q;
+	}
+
+	const int shift = 2 * ( move - NEO_SMOKE_MOVE_SELF - 1 );
+	unsigned int &memo = m_pMoveMemo[Index( base[0], base[1], base[2] )];
+	const int known = ( memo >> shift ) & NEO_SMOKE_OCC_MASK;
+	if ( known != NEO_SMOKE_OCC_UNKNOWN )
+	{
+		return known == NEO_SMOKE_OCC_OPEN;
+	}
+
+	const bool open = BlockOpenUncached( p, q );
+	memo |= (unsigned int)( open ? NEO_SMOKE_OCC_OPEN : NEO_SMOKE_OCC_BLOCKED ) << shift;
+	return open;
+}
+
+// Every cell of the block p and q span must be open, and so must every link
+// inside it, so gas cannot slip through a wall thinner than a cell or around
+// a corner.
+bool CNeoSmokeFill::BlockOpenUncached( const int p[3], const int q[3] )
 {
 	int lo[3];
 	int hi[3];
