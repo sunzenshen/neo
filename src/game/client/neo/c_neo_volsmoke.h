@@ -102,6 +102,8 @@ private:
 	CNeoVolSmokeWorld *m_pWorld;
 	double m_flFillSeconds;    // CPU time spent in the fill
 	double m_flFillPeakFrame;  // longest single fill slice
+	float  m_flFillDoneAge;    // age when the fill finished, <0 = not yet
+	int    m_nLagFrames;       // frames the bloom front was past the filled cells
 
 	// Per-cell state
 	CUtlVector< float >         m_CarveTime;  // curtime of last carve, <0 = never
