@@ -19,7 +19,7 @@
 
 #include "common_ps_fxc.h"
 
-sampler AtlasSampler : register( s0 ); // density atlas (R = density, G = light)
+sampler AtlasSampler : register( s0 ); // atlas: R = cell weight, G = light, B = gas path length
 sampler DepthSampler : register( s1 ); // frame buffer copy, depth in .a
 
 const float4 g_EyePos       : register( c0 ); // xyz eye, w unused
@@ -28,8 +28,8 @@ const float4 g_VolMax       : register( c2 ); // xyz, w unused
 const float4 g_Grid         : register( c3 ); // x = N, y = atlas cols, z = atlas rows, w = 1/N
 const float4 g_Ambient      : register( c4 ); // rgb ambient light, w = jitter enable
 const float4 g_Light        : register( c5 ); // rgb directional light, w = time
-const float4 g_Misc         : register( c6 ); // x = noise amp, y = noise scale, z = unused, w = debug mode
-const float4 g_ScreenParams : register( c7 ); // xy = half texel
+const float4 g_Misc         : register( c6 ); // x = noise amp, y = noise scale, z = bloom front path length, w = debug mode
+const float4 g_ScreenParams : register( c7 ); // xy = half texel, z = path length at atlas value 1, w = 1 / edge width
 
 #define STEP_LEN  8.0f
 #define MAX_STEPS 64
@@ -53,7 +53,7 @@ float2 SliceUV( float2 uv, float slice )
 	return ( float2( col, row ) + uv ) / g_Grid.yz;
 }
 
-float2 SampleVolume( float3 uvw )
+float3 SampleVolume( float3 uvw )
 {
 	// Keep xy inside the tile by half a texel so bilinear never bleeds into
 	// the neighbouring slice.
@@ -65,8 +65,8 @@ float2 SampleVolume( float3 uvw )
 	float z1 = min( z0 + 1.0f, g_Grid.x - 1.0f );
 	float fz = z - z0;
 
-	float2 s0 = tex2Dlod( AtlasSampler, float4( SliceUV( uv, z0 ), 0, 0 ) ).rg;
-	float2 s1 = tex2Dlod( AtlasSampler, float4( SliceUV( uv, z1 ), 0, 0 ) ).rg;
+	float3 s0 = tex2Dlod( AtlasSampler, float4( SliceUV( uv, z0 ), 0, 0 ) ).rgb;
+	float3 s1 = tex2Dlod( AtlasSampler, float4( SliceUV( uv, z1 ), 0, 0 ) ).rgb;
 	return lerp( s0, s1, fz );
 }
 
@@ -211,8 +211,9 @@ float4 main( PS_INPUT i ) : COLOR
 			float3 p   = ro + rd * ( 0.5f * ( c0 + c1 ) );
 			float3 uvw = ( p - g_VolMin.xyz ) / volSize;
 
-			float2 v = SampleVolume( uvw );
-			float d  = v.r;
+			// Density: the cell weight behind a soft edge at the bloom front.
+			float3 v = SampleVolume( uvw );
+			float d  = v.r * smoothstep( 0.0f, 1.0f, saturate( ( g_Misc.z - v.b * g_ScreenParams.z ) * g_ScreenParams.w ) );
 
 			if ( d > 0.001f )
 			{

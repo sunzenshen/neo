@@ -29,6 +29,7 @@ BEGIN_SHADER_PARAMS
 	SHADER_PARAM( JITTER,     SHADER_PARAM_TYPE_INTEGER, "1",             "Per-pixel step jitter (grain instead of banding)" )
 	SHADER_PARAM( DEBUGMODE,  SHADER_PARAM_TYPE_INTEGER, "0",             "0 off, 1 coverage, 2 scene depth, 3 box hit" )
 	SHADER_PARAM( SLAB,       SHADER_PARAM_TYPE_INTEGER, "0",             "1 = far slabs: hardware depth test, no culling" )
+	SHADER_PARAM( FRONT,      SHADER_PARAM_TYPE_VEC3,    "[0 288 0.037]", "x = bloom front path length, y = path length at atlas value 1, z = 1 / edge width" )
 END_SHADER_PARAMS
 
 SHADER_INIT_PARAMS()
@@ -136,19 +137,23 @@ SHADER_DRAW
 		c[3] = pShaderAPI->CurrentTime();
 		pShaderAPI->SetPixelShaderConstant( 5, c );
 
-		// c6: noise + debug
+		float front[3];
+		params[FRONT]->GetVecValue( front, 3 );
+
+		// c6: noise, bloom front, debug
 		c[0] = params[NOISEAMP]->GetFloatValue();
 		c[1] = params[NOISESCALE]->GetFloatValue();
-		c[2] = 0.0f;
+		c[2] = front[0];
 		c[3] = (float)params[DEBUGMODE]->GetIntValue();
 		pShaderAPI->SetPixelShaderConstant( 6, c );
 
-		// c7: half-texel offset for the frame buffer lookup
+		// c7: half-texel offset for the frame buffer lookup, path length decode
 		int w, h;
 		pShaderAPI->GetBackBufferDimensions( w, h );
 		c[0] = 0.5f / (float)MAX( w, 1 );
 		c[1] = 0.5f / (float)MAX( h, 1 );
-		c[2] = 0.0f; c[3] = 0.0f;
+		c[2] = front[1];
+		c[3] = front[2];
 		pShaderAPI->SetPixelShaderConstant( 7, c );
 
 		DECLARE_DYNAMIC_VERTEX_SHADER( neo_volsmoke_vs30 );
