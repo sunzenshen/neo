@@ -1874,6 +1874,13 @@ int C_NeoVolSmoke::DrawModel( int flags )
 		return 0;
 	}
 
+	// An opaque inside overlay hides the whole view, so the march would only
+	// cost frame time.
+	if ( SmokeFogOverlayCoversView() )
+	{
+		return 0;
+	}
+
 	// Nothing to draw before the first cell fills.
 	if ( m_vecSmokeMax.x <= m_vecSmokeMin.x )
 	{
