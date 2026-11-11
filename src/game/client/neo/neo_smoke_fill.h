@@ -65,25 +65,19 @@ public:
 	bool IsDone() const { return m_bDone; }
 	int  FinalizedCount() const { return m_nFinalized; }
 	int  FinalizedCell( int i ) const { return m_pOrder[i]; }
-	bool IsFinalized( int idx ) const
-	{
-		if ( m_pState )
-		{
-			return m_pState[idx] == STATE_FINAL;
-		}
-
-		return m_pFinalBits && ( ( m_pFinalBits[idx >> 6] >> ( idx & 63 ) ) & 1 ) != 0;
-	}
+	bool IsFinalized( int idx ) const;
 
 	// Path length of a finalized cell, in 1/DIST_SCALE cells.
-	int  Dist( int idx ) const { return m_pState ? m_pDist[idx] : m_pFinalDist[FinalRank( idx )]; }
+	int  Dist( int idx ) const;
 
 	// Once done: the position of a finalized cell among the finalized cells
 	// in grid order, 0 to FinalizedCount() - 1.
 	int  FinalRank( int idx ) const;
 
-	// Heap bytes held now. The work arrays are freed when the fill is done.
+	// Heap bytes held now, and the most held at once while filling. The work
+	// arrays are freed when the fill is done.
 	int  MemoryBytes() const;
+	int  PeakMemoryBytes() const { return m_nPeakBytes; }
 
 	// Path length of the last finalized cell (the final radius once done).
 	int  FrontDist() const { return m_nFrontDist; }
@@ -111,6 +105,41 @@ private:
 		STATE_FINAL,
 	};
 
+	// The work arrays live in cubes of BRICK_SIZE cells, allocated when a cell
+	// in them is first written, so a fill holds memory for the cells it
+	// touches, not for the whole grid.
+	static constexpr int BRICK_SHIFT = 3;
+	static constexpr int BRICK_SIZE = 1 << BRICK_SHIFT;
+	static constexpr int BRICK_CELLS = BRICK_SIZE * BRICK_SIZE * BRICK_SIZE;
+	static constexpr int BRICKS_XY = GRID_XY / BRICK_SIZE;
+	static constexpr int BRICKS_Z = GRID_Z / BRICK_SIZE;
+	static constexpr int BRICKS = BRICKS_XY * BRICKS_XY * BRICKS_Z;
+
+	struct Brick_t
+	{
+		int dist[BRICK_CELLS];
+		int anchor[BRICK_CELLS];    // a cell with an open straight line to this one
+		int heapPos[BRICK_CELLS];
+		unsigned int moveMemo[BRICK_CELLS]; // cached BlockOpen answers, per cell and move
+		unsigned char occ[BRICK_CELLS];     // cached world answers: cell and +x/+y/+z links
+		unsigned char state[BRICK_CELLS];   // CellState_t
+	};
+
+	// The heap keeps each cell's distance beside it, so ordering reads no brick.
+	struct HeapEntry_t
+	{
+		int dist;
+		int cell;
+	};
+
+	static int BrickOf( int cell );
+	static int BrickSlot( int cell );
+	const Brick_t *FindBrick( int cell ) const;
+	Brick_t &TouchBrick( int cell );
+	int  CellState( int cell ) const;
+	int  CellDist( int cell ) const;
+	void NoteMemory();
+
 	bool CellOpen( int x, int y, int z );
 	bool LinkOpen( int x, int y, int z, int axis );
 	bool BlockOpen( const int p[3], const int q[3] );
@@ -126,22 +155,23 @@ private:
 	void FreeWork();
 	void Finish();
 
-	bool HeapLess( int a, int b ) const;
-	void HeapPush( int cell );
-	void HeapUpdate( int cell );
-	int  HeapPop();
+	static bool HeapLess( const HeapEntry_t &a, const HeapEntry_t &b );
+	void HeapPush( int cell, int dist );
+	void HeapUpdate( int cell, int dist );
+	void HeapPop();
+	void HeapPlace( int pos, const HeapEntry_t &entry );
 	void SiftUp( int pos );
 	void SiftDown( int pos );
 
 	INeoSmokeFillWorld *m_pWorld;
 
-	unsigned char *m_pOcc;     // cached world answers: cell and +x/+y/+z links
-	unsigned int *m_pMoveMemo; // cached BlockOpen answers, per cell and move
-	unsigned char *m_pState;   // CellState_t
-	int *m_pDist;
-	int *m_pAnchor;            // a cell with an open straight line to this one
-	int *m_pHeap;
-	int *m_pHeapPos;
+	int *m_pBrickDir;          // brick number + 1 per brick of the grid, 0 = none
+	Brick_t **m_ppBricks;
+	int m_nBricks;
+	int m_nBrickCap;
+
+	HeapEntry_t *m_pHeap;
+	int m_nHeapCap;
 	int *m_pOrder;             // finalized cells, in order
 
 	// The finished field: a bit per cell, the finalized cells before each
@@ -154,6 +184,7 @@ private:
 	int  m_nFinalized;
 	int  m_nFrontDist;
 	int  m_nQueries;
+	int  m_nPeakBytes;
 	bool m_bDone;
 	bool m_bBegun;     // work arrays allocated and the seed placed
 };
