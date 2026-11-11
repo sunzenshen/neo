@@ -1832,6 +1832,48 @@ void C_NeoVolSmoke::GetRenderBounds( Vector &mins, Vector &maxs )
 	maxs = m_vecSmokeMax - GetRenderOrigin();
 }
 
+// A volume is one renderable that a player can stand inside. Sorted by its
+// center, a cloaked player between the camera and the center draws after the
+// smoke and its tint outlines it through the smoke in front of it. By the
+// nearest corner, everything inside the box draws first and the smoke covers
+// it, while a translucent in clear air in front of the box still draws over
+// the smoke.
+bool C_NeoVolSmoke::SortDepth( IClientRenderable *pRenderable, const Vector &viewOrigin, const Vector &viewForward, float &depth )
+{
+	IClientUnknown *pUnknown = pRenderable->GetIClientUnknown();
+	C_BaseEntity *pEntity = pUnknown ? pUnknown->GetBaseEntity() : nullptr;
+	if ( !pEntity )
+	{
+		return false;
+	}
+
+	const C_NeoVolSmoke *pVolume = nullptr;
+	for ( const C_NeoVolSmoke *p : s_Volumes )
+	{
+		if ( p == pEntity )
+		{
+			pVolume = p;
+			break;
+		}
+	}
+
+	if ( !pVolume || pVolume->m_vecSmokeMax.x <= pVolume->m_vecSmokeMin.x )
+	{
+		return false;
+	}
+
+	// The nearest corner along the view direction: per axis, the box side
+	// that faces the camera.
+	Vector nearest;
+	for ( int axis = 0; axis < 3; ++axis )
+	{
+		nearest[axis] = viewForward[axis] >= 0.0f ? pVolume->m_vecSmokeMin[axis] : pVolume->m_vecSmokeMax[axis];
+	}
+
+	depth = DotProduct( nearest - viewOrigin, viewForward );
+	return true;
+}
+
 static void SetVec3Var( IMaterial *pMat, const char *name, const Vector &v )
 {
 	bool found = false;

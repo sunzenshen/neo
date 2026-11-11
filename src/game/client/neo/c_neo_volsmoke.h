@@ -53,6 +53,11 @@ public:
 	static void RemoveExpired();
 
 	static void PrintAllStats();
+
+	// The translucent sort key of a volume: the view depth of the nearest
+	// corner of its smoke box. False when the renderable is not a volume.
+	static bool SortDepth( IClientRenderable *pRenderable, const Vector &viewOrigin, const Vector &viewForward, float &depth );
+
 	static int  LiveCount() { return s_Volumes.Count(); }
 	static int  NextId() { return s_nNextId; }
 
