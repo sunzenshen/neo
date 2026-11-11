@@ -94,7 +94,7 @@ static constexpr float NEO_VOLSMOKE_EXTINCTION = 0.06f;
 static constexpr float NEO_VOLSMOKE_NEAR_RANGE = 172.0f;
 static constexpr float NEO_VOLSMOKE_SLAB_MIN = 24.0f;
 static constexpr float NEO_VOLSMOKE_SLAB_GROWTH = 0.08f; // of the slab's view depth
-static constexpr int NEO_VOLSMOKE_MAX_SLABS = 24;
+static constexpr int NEO_VOLSMOKE_MAX_SLABS = 32;
 
 // View depth range of a whole-volume march; farther than any volume is drawn.
 static constexpr float NEO_VOLSMOKE_MAX_DEPTH = 65536.0f;
