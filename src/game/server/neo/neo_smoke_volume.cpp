@@ -63,6 +63,13 @@ void CNEOSmokeVolumeEnt::SetFieldHash( unsigned long long hash )
 // servers or a client, and a fill still ends long before the bloom.
 static constexpr int NEO_SMOKE_SERVER_FILL_MAX_WORKERS = 2;
 
+// Game time after detonation at which the queries switch from the nominal
+// dome to the field. A fixed tick, not the moment a worker finishes, keeps
+// sight the same at any host_timescale and machine load; a fill still
+// running then is waited for on the tick. A fill takes well under 0.1 s on
+// a worker, and the dome front is small at this age.
+static constexpr float NEO_SMOKE_FIELD_LIVE_DELAY = 0.5f;
+
 // Without workers, fill work a tick, in finalized cells: each pending fill
 // may take up to PER_FILL, oldest first, until the tick's total reaches the
 // cap. A slice also stops after this many world queries per cell, which
@@ -110,6 +117,13 @@ public:
 	bool CollectJob();
 
 	bool IsDone() const { return !m_pFillJob && m_Fill.IsDone(); }
+
+	// Whether the queries read the field; from a fixed tick on.
+	bool IsLive() const { return m_bLive; }
+	bool LiveDue() const { return !m_bLive && gpGlobals->tickcount >= m_nLiveTick; }
+
+	// Ends the fill on this thread if needed, then lets the queries read it.
+	void GoLive();
 	bool Expired() const;
 	unsigned long long LatticeHash() const;
 	void Print() const;
@@ -146,6 +160,8 @@ private:
 	CHandle< CNEOSmokeVolumeEnt > m_hNetworked;
 	CNeoSmokeFill m_Fill;
 	CNeoSmokeWorld *m_pWorld; // freed once the fill is done
+	int m_nLiveTick;
+	bool m_bLive;
 	int m_nTraces;
 	double m_flFillSeconds;
 	double m_flWorstSlice;
@@ -182,9 +198,11 @@ static CUtlVector< CNeoSmokeVolume * > s_SmokeVolumes;
 static double s_flWorstTick = 0.0;
 static double s_flTickSum = 0.0;
 static int s_nFillTicks = 0;
+static int s_nLateJoins = 0;
 
 CNeoSmokeVolume::CNeoSmokeVolume( const Vector &origin, CBaseEntity *pGrenade )
 	: m_nId( s_nNextId++ ), m_vecOrigin( origin ), m_flStartTime( gpGlobals->curtime ), m_hGrenade( pGrenade ), m_pWorld( NULL ),
+	  m_nLiveTick( gpGlobals->tickcount + TIME_TO_TICKS( NEO_SMOKE_FIELD_LIVE_DELAY ) ), m_bLive( false ),
 	  m_nTraces( 0 ), m_flFillSeconds( 0.0 ), m_flWorstSlice( 0.0 ), m_nSlices( 0 ), m_flDoneAge( -1.0f ), m_nPeakBytes( 0 ), m_nWorldBytes( 0 ),
 	  m_pFillJob( NULL ), m_flJobSeconds( 0.0 ), m_flFrontUnits( 0.0f ), m_flDistRange( 0.0f ), m_nFieldHash( 0 )
 {
@@ -294,6 +312,27 @@ bool CNeoSmokeVolume::CollectJob()
 	}
 
 	return true;
+}
+
+void CNeoSmokeVolume::GoLive()
+{
+	if ( m_pFillJob )
+	{
+		NEOSmokeFillJoin( m_pFillJob );
+		++s_nLateJoins;
+		if ( m_Fill.IsDone() )
+		{
+			FinishFill();
+		}
+	}
+
+	while ( !m_Fill.IsDone() )
+	{
+		++s_nLateJoins;
+		Step( NEO_SMOKE_SERVER_CELLS_PER_TICK );
+	}
+
+	m_bLive = true;
 }
 
 // The query reads the finished field only; the world cache goes.
@@ -447,7 +486,7 @@ float CNeoSmokeVolume::DomeDensity( const Vector &pos, float front ) const
 
 bool CNeoSmokeVolume::CurrentBox( Vector &boxMin, Vector &boxMax, float &front ) const
 {
-	const bool filled = IsDone();
+	const bool filled = IsLive();
 	front = ( filled ? m_flFrontUnits : CNeoSmokeFill::DOME_RADIUS ) * VolSmokeBloom( gpGlobals->curtime - m_flStartTime );
 	if ( front <= 0.0f )
 	{
@@ -496,7 +535,7 @@ bool CNeoSmokeVolume::SightSpan( const Vector &from, const Vector &unit, float l
 
 	const float age = gpGlobals->curtime - m_flStartTime;
 	span.pVolume = this;
-	span.filled = IsDone();
+	span.filled = IsLive();
 	span.scale = NEO_VOLSMOKE_EXTINCTION * VolSmokeBloom( age ) * VolSmokeFade( age );
 	return span.scale > 0.0f;
 }
@@ -535,7 +574,7 @@ float CNeoSmokeVolume::PathOpticalDepth( const Vector &from, const Vector &to ) 
 
 bool CNeoSmokeVolume::SmokeBox( Vector &mins, Vector &maxs ) const
 {
-	if ( !IsDone() )
+	if ( !IsLive() )
 	{
 		return false;
 	}
@@ -621,7 +660,15 @@ public:
 
 		const double start = Plat_FloatTime();
 		IThreadPool *pPool = NEOSmokeFillPool( NEO_SMOKE_SERVER_FILL_MAX_WORKERS );
-		const bool worked = pPool ? StepJobs( pPool ) : StepOnMainThread();
+		bool worked = pPool ? StepJobs( pPool ) : StepOnMainThread();
+		for ( CNeoSmokeVolume *pVol : s_SmokeVolumes )
+		{
+			if ( pVol->LiveDue() )
+			{
+				pVol->GoLive();
+				worked = true;
+			}
+		}
 
 		if ( !worked )
 		{
@@ -818,10 +865,11 @@ CON_COMMAND_F( neo_smoke_server_stats, "Print the server's smoke fields, and the
 	}
 
 	IThreadPool *pPool = NEOSmokeFillPool( NEO_SMOKE_SERVER_FILL_MAX_WORKERS );
-	Msg( "neo_smoke_server_stats: live %d; fill ticks %d, mean %.3f ms, worst %.3f ms (%d fill workers)\n",
+	Msg( "neo_smoke_server_stats: live %d; fill ticks %d, mean %.3f ms, worst %.3f ms (%d fill workers), late fills %d\n",
 		s_SmokeVolumes.Count(), s_nFillTicks, s_nFillTicks > 0 ? s_flTickSum * 1000.0 / s_nFillTicks : 0.0,
-		s_flWorstTick * 1000.0, pPool ? pPool->NumThreads() : 0 );
+		s_flWorstTick * 1000.0, pPool ? pPool->NumThreads() : 0, s_nLateJoins );
 	s_flWorstTick = 0.0;
 	s_flTickSum = 0.0;
 	s_nFillTicks = 0;
+	s_nLateJoins = 0;
 }
