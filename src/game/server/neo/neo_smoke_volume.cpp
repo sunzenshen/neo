@@ -10,6 +10,50 @@
 #include "vstdlib/jobthread.h"
 #include "igamesystem.h"
 
+// The networked half of a smoke field: what a client needs to fill the same
+// field and draw it at the same age, sent to every client so smoke around a
+// corner draws too. The origin is sent unscaled, so it arrives bit-exact.
+class CNEOSmokeVolumeEnt : public CBaseEntity
+{
+	DECLARE_CLASS( CNEOSmokeVolumeEnt, CBaseEntity );
+	DECLARE_SERVERCLASS();
+
+public:
+	virtual void Spawn() override;
+	virtual int UpdateTransmitState() override { return SetTransmitState( FL_EDICT_ALWAYS ); }
+
+	void SetStartTime( float time ) { m_flStartTime = time; }
+	void SetFieldHash( unsigned long long hash );
+
+private:
+	CNetworkVar( float, m_flStartTime );
+	CNetworkVar( int, m_nFieldHashLo );
+	CNetworkVar( int, m_nFieldHashHi );
+};
+
+IMPLEMENT_SERVERCLASS_ST( CNEOSmokeVolumeEnt, DT_NEOSmokeVolumeEnt )
+	SendPropTime( SENDINFO( m_flStartTime ) ),
+	SendPropInt( SENDINFO( m_nFieldHashLo ), 32, SPROP_UNSIGNED ),
+	SendPropInt( SENDINFO( m_nFieldHashHi ), 32, SPROP_UNSIGNED ),
+END_SEND_TABLE()
+
+LINK_ENTITY_TO_CLASS( neo_smoke_volume, CNEOSmokeVolumeEnt );
+
+void CNEOSmokeVolumeEnt::Spawn()
+{
+	BaseClass::Spawn();
+	SetMoveType( MOVETYPE_NONE );
+	SetSolid( SOLID_NONE );
+	AddEffects( EF_NODRAW );
+}
+
+// Zero until the field is filled.
+void CNEOSmokeVolumeEnt::SetFieldHash( unsigned long long hash )
+{
+	m_nFieldHashLo = (int)( hash & 0xffffffffull );
+	m_nFieldHashHi = (int)( hash >> 32 );
+}
+
 // memdbgon must be the last include file in a .cpp file!!!
 #include "tier0/memdbgon.h"
 
@@ -60,6 +104,7 @@ public:
 
 private:
 	void RunFill();
+	void PrepareField();
 	void FinishFill();
 	float Density( const Vector &pos, float front ) const;
 	float DomeDensity( const Vector &pos, float front ) const;
@@ -69,6 +114,7 @@ private:
 	Vector m_vecOrigin;
 	float m_flStartTime;
 	EHANDLE m_hGrenade;
+	CHandle< CNEOSmokeVolumeEnt > m_hNetworked;
 	CNeoSmokeFill m_Fill;
 	CNeoSmokeWorld *m_pWorld; // freed once the fill is done
 	int m_nTraces;
@@ -93,6 +139,7 @@ private:
 	Vector m_vecSmokeMax;
 	float m_flFrontUnits;
 	float m_flDistRange;
+	unsigned long long m_nFieldHash;
 
 	static int s_nNextId;
 };
@@ -110,7 +157,7 @@ static int s_nFillTicks = 0;
 CNeoSmokeVolume::CNeoSmokeVolume( const Vector &origin, CBaseEntity *pGrenade )
 	: m_nId( s_nNextId++ ), m_vecOrigin( origin ), m_flStartTime( gpGlobals->curtime ), m_hGrenade( pGrenade ), m_pWorld( NULL ),
 	  m_nTraces( 0 ), m_flFillSeconds( 0.0 ), m_flWorstSlice( 0.0 ), m_nSlices( 0 ), m_flDoneAge( -1.0f ), m_nPeakBytes( 0 ), m_nWorldBytes( 0 ),
-	  m_pFillJob( NULL ), m_flJobSeconds( 0.0 )
+	  m_pFillJob( NULL ), m_flJobSeconds( 0.0 ), m_flFrontUnits( 0.0f ), m_flDistRange( 0.0f ), m_nFieldHash( 0 )
 {
 	// The same box and lattice as the client's volume, so the queries and
 	// the field are the same.
@@ -131,6 +178,15 @@ CNeoSmokeVolume::CNeoSmokeVolume( const Vector &origin, CBaseEntity *pGrenade )
 	m_Fill.LatticeBounds( latticeLo, latticeHi );
 	m_pWorld = new CNeoSmokeWorld( gridMin, box, seedCorner, latticeLo, latticeHi );
 	m_Fill.Start( m_pWorld );
+
+	CNEOSmokeVolumeEnt *pEnt = static_cast< CNEOSmokeVolumeEnt * >( CreateEntityByName( "neo_smoke_volume" ) );
+	if ( pEnt )
+	{
+		pEnt->SetAbsOrigin( origin );
+		pEnt->SetStartTime( m_flStartTime );
+		DispatchSpawn( pEnt );
+		m_hNetworked = pEnt;
+	}
 }
 
 int CNeoSmokeVolume::Step( int cells )
@@ -152,6 +208,7 @@ int CNeoSmokeVolume::Step( int cells )
 	const int taken = MAX( 1, MAX( m_Fill.LatticeCount() - cellsBefore, queryCells ) );
 	if ( m_Fill.IsDone() )
 	{
+		PrepareField();
 		FinishFill();
 	}
 
@@ -164,6 +221,11 @@ CNeoSmokeVolume::~CNeoSmokeVolume()
 	m_nFillCancel = 1;
 	NEOSmokeFillJoin( m_pFillJob );
 	delete m_pWorld;
+
+	if ( m_hNetworked.Get() )
+	{
+		UTIL_Remove( m_hNetworked.Get() );
+	}
 }
 
 void CNeoSmokeVolume::StartJob( IThreadPool *pPool )
@@ -176,6 +238,11 @@ void CNeoSmokeVolume::RunFill()
 {
 	const double start = Plat_FloatTime();
 	NEOSmokeFillRun( m_Fill, m_nFillCancel );
+	if ( m_Fill.IsDone() )
+	{
+		PrepareField();
+	}
+
 	m_flJobSeconds += Plat_FloatTime() - start;
 }
 
@@ -209,7 +276,16 @@ void CNeoSmokeVolume::FinishFill()
 	delete m_pWorld;
 	m_pWorld = NULL;
 	m_flDoneAge = gpGlobals->curtime - m_flStartTime;
+	if ( m_hNetworked.Get() )
+	{
+		m_hNetworked->SetFieldHash( m_nFieldHash );
+	}
+}
 
+// What the query and the clients need from the finished field. Runs on the
+// fill's worker, so the tick does not pay for the scan of the field.
+void CNeoSmokeVolume::PrepareField()
+{
 	m_Fill.BoxSize( m_nBox );
 	m_Fill.BoxSeedCorner( m_nSeedCorner );
 	m_flFrontUnits = CNeoSmokeFill::DistToUnits( m_Fill.FrontDist() );
@@ -238,6 +314,8 @@ void CNeoSmokeVolume::FinishFill()
 		m_vecSmokeMin[a] = MAX( m_vecGridMin[a], m_vecGridMin[a] + ( lo[a] - 1 ) * cell );
 		m_vecSmokeMax[a] = MIN( gridMax, m_vecGridMin[a] + ( hi[a] + 2 ) * cell );
 	}
+
+	m_nFieldHash = LatticeHash();
 }
 
 // A box cell's path length and weight as the client's atlas holds them: a

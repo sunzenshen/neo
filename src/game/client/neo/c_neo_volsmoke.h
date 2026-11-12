@@ -88,6 +88,10 @@ public:
 	unsigned long long LatticeFieldHash() const;
 	unsigned long long AtlasHash() const;
 
+	// Compares the filled field with the server's lattice hash and counts a
+	// mismatch. False while the field is filling.
+	bool CheckServerHash( unsigned long long serverHash ) const;
+
 private:
 	void Init( const Vector &origin, float spawnTime );
 	void Shutdown();

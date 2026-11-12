@@ -22,7 +22,6 @@
 
 #ifdef NEO
 #include "c_neo_player.h"
-#include "neo/c_neo_volsmoke.h"
 #endif
 
 // memdbgon must be the last include file in a .cpp file!!!
@@ -30,7 +29,7 @@
 
 #ifdef NEO
 // Prototype: replace the legacy billboard smoke with a raymarched voxel volume.
-static ConVar neo_volsmoke_hook_grenade( "neo_volsmoke_hook_grenade", "0", FCVAR_CHEAT,
+ConVar neo_volsmoke_hook_grenade( "neo_volsmoke_hook_grenade", "0", FCVAR_CHEAT,
 	"1 = smoke grenades spawn a volumetric smoke (C_NeoVolSmoke) instead of the legacy particle smoke." );
 #endif
 
@@ -352,12 +351,10 @@ void C_ParticleSmokeGrenade::OnDataChanged( DataUpdateType_t updateType )
 	if(updateType == DATA_UPDATE_CREATED )
 	{
 #ifdef NEO
+		// The server's smoke volume entity draws the cloud instead.
 		if ( neo_volsmoke_hook_grenade.GetBool() )
 		{
-			// Bloom and fade run from the server's spawn time, so a client that
-			// sees the grenade late gets the same cloud as everyone else.
-			C_NeoVolSmoke::CreateForGrenade( GetAbsOrigin(), m_flSpawnTime, this );
-			return; // skip the legacy particle system entirely
+			return;
 		}
 #endif
 		Start(ParticleMgr(), NULL);

@@ -1670,6 +1670,27 @@ unsigned long long C_NeoVolSmoke::ClientFieldHash() const
 	return hash;
 }
 
+static int s_nServerHashChecks = 0;
+static int s_nServerHashMismatches = 0;
+
+bool C_NeoVolSmoke::CheckServerHash( unsigned long long serverHash ) const
+{
+	if ( !m_bFillDone )
+	{
+		return false;
+	}
+
+	++s_nServerHashChecks;
+	const unsigned long long hash = LatticeFieldHash();
+	if ( hash != serverHash )
+	{
+		++s_nServerHashMismatches;
+		Warning( "neo_volsmoke: volume %d field %016llx differs from the server's %016llx\n", m_nId, hash, serverHash );
+	}
+
+	return true;
+}
+
 unsigned long long C_NeoVolSmoke::LatticeFieldHash() const
 {
 	unsigned long long hash = 0;
@@ -3092,8 +3113,8 @@ CON_COMMAND_F( neo_volsmoke_stats, "Print live volumes and the atlas textures st
 		textures += materials->IsTextureLoaded( name ) ? 1 : 0;
 	}
 
-	Msg( "neo_volsmoke_stats: live %d, created %d, atlas textures loaded %d\n",
-		C_NeoVolSmoke::LiveCount(), C_NeoVolSmoke::NextId(), textures );
+	Msg( "neo_volsmoke_stats: live %d, created %d, atlas textures loaded %d, server hash checks %d, mismatches %d\n",
+		C_NeoVolSmoke::LiveCount(), C_NeoVolSmoke::NextId(), textures, s_nServerHashChecks, s_nServerHashMismatches );
 	C_NeoVolSmoke::PrintAllStats();
 }
 
