@@ -563,6 +563,7 @@ struct VolSmokeRetired_t
 {
 	IMaterial *pMaterials[2];
 	ITexture  *pAtlas;
+	CNeoVolSmokeWorld *pWorld; // the fill's world cache, large enough to stall a frame when many are freed
 	int        nFrame;
 };
 
@@ -570,6 +571,8 @@ static CUtlVector< VolSmokeRetired_t > s_VolSmokeRetired;
 
 static void VolSmokeDeleteRetired( const VolSmokeRetired_t &retired )
 {
+	delete retired.pWorld;
+
 	// The materials reference the atlas, so they go first.
 	for ( IMaterial *pMat : retired.pMaterials )
 	{
@@ -595,9 +598,9 @@ enum VolSmokeRetireWait_t
 };
 
 // Deleting a volume's materials and atlas is the heavy part of its teardown;
-// a round restart or a clear retires many at once, so a frame deletes only a
-// few of them and the rest wait for later frames.
-static constexpr int NEO_VOLSMOKE_RETIRE_PER_FRAME = 2;
+// a round restart or a clear retires many at once, so a frame deletes only
+// one of them and the rest wait for later frames.
+static constexpr int NEO_VOLSMOKE_RETIRE_PER_FRAME = 1;
 
 static void VolSmokeDeleteRetired( VolSmokeRetireWait_t wait )
 {
@@ -943,7 +946,10 @@ void C_NeoVolSmoke::Shutdown()
 	}
 	m_pRegen = NULL; // the atlas owns it
 
-	if ( retired.pMaterials[0] || retired.pMaterials[1] || retired.pAtlas )
+	retired.pWorld = m_pWorld;
+	m_pWorld = NULL;
+
+	if ( retired.pMaterials[0] || retired.pMaterials[1] || retired.pAtlas || retired.pWorld )
 	{
 		s_VolSmokeRetired.AddToTail( retired );
 	}
