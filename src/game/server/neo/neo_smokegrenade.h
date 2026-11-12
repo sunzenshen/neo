@@ -37,6 +37,7 @@ public:
 private:
 	bool TryDetonate(void);
 	void SetupParticles(size_t number);
+	void BecomeDebris();
 
 protected:
 	bool	m_inSolid;
