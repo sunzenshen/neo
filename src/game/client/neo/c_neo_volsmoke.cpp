@@ -210,6 +210,18 @@ static constexpr float NEO_VOLSMOKE_DLIGHT_LINEAR = 1.9f;
 static constexpr float NEO_VOLSMOKE_DLIGHT_MARGIN = SMOKEPARTICLE_SIZE;
 static constexpr int NEO_VOLSMOKE_MAX_DLIGHTS = 2;
 
+// A muzzle flash lights only the smoke close to the gun: hot at the muzzle,
+// gone by about the feet of a standing shooter, so it reads as a flash and
+// two shooters in one cloud show two glows. The gain makes up for the
+// smaller lit area at the core.
+static constexpr float NEO_VOLSMOKE_FLASH_REACH = 64.0f;
+static constexpr float NEO_VOLSMOKE_FLASH_GAIN = 2.0f;
+
+static bool IsMuzzleFlashLight( const dlight_t *pLight )
+{
+	return pLight->key >= LIGHT_INDEX_MUZZLEFLASH && pLight->key < LIGHT_INDEX_MUZZLEFLASH + MAX_EDICTS;
+}
+
 // A muzzle flash is far brighter than the display range, so it shows through
 // smoke that hides a surface: it sees this share of the smoke's optical depth.
 // The flash point and the firing player's silhouette draw after the volume,
@@ -2247,7 +2259,8 @@ static int CollectDynamicLights( const Vector &boxMin, const Vector &boxMax, Vol
 			continue;
 		}
 
-		const float reach = pLight->radius + NEO_VOLSMOKE_DLIGHT_MARGIN;
+		const bool muzzle = IsMuzzleFlashLight( pLight );
+		const float reach = muzzle ? NEO_VOLSMOKE_FLASH_REACH : pLight->radius + NEO_VOLSMOKE_DLIGHT_MARGIN;
 		const float distSqr = CalcSqrDistanceToAABB( boxMin, boxMax, pLight->origin );
 		if ( distSqr >= reach * reach )
 		{
@@ -2267,7 +2280,7 @@ static int CollectDynamicLights( const Vector &boxMin, const Vector &boxMax, Vol
 			light.color /= brightest;
 		}
 
-		light.color *= NEO_VOLSMOKE_DLIGHT_LINEAR;
+		light.color *= NEO_VOLSMOKE_DLIGHT_LINEAR * ( muzzle ? NEO_VOLSMOKE_FLASH_GAIN : 1.0f );
 		light.origin = pLight->origin;
 		light.invReachSqr = 1.0f / ( reach * reach );
 		light.score = MAX( light.color.x, MAX( light.color.y, light.color.z ) ) * ( 1.0f - distSqr * light.invReachSqr );
@@ -2803,7 +2816,7 @@ static void DrawSilhouette( C_BasePlayer *pPlayer, float alpha )
 // the local view model's flash.
 static C_BasePlayer *MuzzleFlashOwner( const dlight_t *pLight )
 {
-	if ( pLight->key < LIGHT_INDEX_MUZZLEFLASH || pLight->key >= LIGHT_INDEX_MUZZLEFLASH + MAX_EDICTS )
+	if ( !IsMuzzleFlashLight( pLight ) )
 	{
 		return nullptr;
 	}
@@ -2852,7 +2865,7 @@ void C_NeoVolSmoke::DrawRevealed( IMatRenderContext *pRenderContext )
 			DrawFlashPoint( pRenderContext, pLight->origin, point );
 		}
 
-		const float reachSqr = Square( pLight->radius + NEO_VOLSMOKE_DLIGHT_MARGIN );
+		const float reachSqr = Square( NEO_VOLSMOKE_FLASH_REACH );
 		for ( int p = 1; p <= gpGlobals->maxClients && p <= MAX_PLAYERS; ++p )
 		{
 			C_BasePlayer *pPlayer = UTIL_PlayerByIndex( p );
