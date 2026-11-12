@@ -35,6 +35,11 @@ BEGIN_SHADER_PARAMS
 	SHADER_PARAM( DEBUGMODE,  SHADER_PARAM_TYPE_INTEGER, "0",             "0 off, 1 coverage, 2 scene depth, 3 box hit" )
 	SHADER_PARAM( SLAB,       SHADER_PARAM_TYPE_INTEGER, "0",             "1 = far slabs: hardware depth test, no culling" )
 	SHADER_PARAM( NOISETEXTURE, SHADER_PARAM_TYPE_TEXTURE, "",            "Tiled value noise for the look: R = a lattice layer, G = the next layer up" )
+	SHADER_PARAM( DLIGHTCOUNT, SHADER_PARAM_TYPE_INTEGER, "0",            "Dynamic lights that reach the smoke, 0 to 2" )
+	SHADER_PARAM( DLIGHT0POS, SHADER_PARAM_TYPE_VEC4,    "[0 0 0 0]",     "xyz = first dynamic light, w = 1 / reach squared" )
+	SHADER_PARAM( DLIGHT0COLOR, SHADER_PARAM_TYPE_VEC3,  "[0 0 0]",       "Light the first dynamic light adds at its center (linear)" )
+	SHADER_PARAM( DLIGHT1POS, SHADER_PARAM_TYPE_VEC4,    "[0 0 0 0]",     "As $dlight0pos, second light" )
+	SHADER_PARAM( DLIGHT1COLOR, SHADER_PARAM_TYPE_VEC3,  "[0 0 0]",       "As $dlight0color, second light" )
 	SHADER_PARAM( FRONT,      SHADER_PARAM_TYPE_VEC3,    "[0 288 0.037]", "x = bloom front path length, y = path length at atlas value 1, z = 1 / edge width" )
 END_SHADER_PARAMS
 
@@ -197,10 +202,34 @@ SHADER_DRAW
 		c[3] = 0.0f;
 		pShaderAPI->SetPixelShaderConstant( 12, c );
 
+		// c13 - c16: the dynamic lights that reach the smoke. Without one the
+		// shader runs the combo that has no light term.
+		const int nDLights = clamp( params[DLIGHTCOUNT]->GetIntValue(), 0, 2 );
+		if ( nDLights > 0 )
+		{
+			params[DLIGHT0POS]->GetVecValue( c, 4 );
+			pShaderAPI->SetPixelShaderConstant( 13, c );
+
+			params[DLIGHT0COLOR]->GetVecValue( c, 3 );
+			c[3] = 0.0f;
+			pShaderAPI->SetPixelShaderConstant( 14, c );
+		}
+
+		if ( nDLights > 1 )
+		{
+			params[DLIGHT1POS]->GetVecValue( c, 4 );
+			pShaderAPI->SetPixelShaderConstant( 15, c );
+
+			params[DLIGHT1COLOR]->GetVecValue( c, 3 );
+			c[3] = 0.0f;
+			pShaderAPI->SetPixelShaderConstant( 16, c );
+		}
+
 		DECLARE_DYNAMIC_VERTEX_SHADER( neo_volsmoke_vs30 );
 		SET_DYNAMIC_VERTEX_SHADER( neo_volsmoke_vs30 );
 
 		DECLARE_DYNAMIC_PIXEL_SHADER( neo_volsmoke_ps30 );
+		SET_DYNAMIC_PIXEL_SHADER_COMBO( DLIGHTS, nDLights );
 		SET_DYNAMIC_PIXEL_SHADER( neo_volsmoke_ps30 );
 	}
 
