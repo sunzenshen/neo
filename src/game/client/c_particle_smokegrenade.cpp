@@ -27,12 +27,6 @@
 // memdbgon must be the last include file in a .cpp file!!!
 #include "tier0/memdbgon.h"
 
-#ifdef NEO
-// Prototype: replace the legacy billboard smoke with a raymarched voxel volume.
-ConVar neo_volsmoke_hook_grenade( "neo_volsmoke_hook_grenade", "0", FCVAR_CHEAT,
-	"1 = smoke grenades spawn a volumetric smoke (C_NeoVolSmoke) instead of the legacy particle smoke." );
-#endif
-
 // ------------------------------------------------------------------------- //
 // Definitions
 // ------------------------------------------------------------------------- //
@@ -350,13 +344,6 @@ void C_ParticleSmokeGrenade::OnDataChanged( DataUpdateType_t updateType )
 
 	if(updateType == DATA_UPDATE_CREATED )
 	{
-#ifdef NEO
-		// The server's smoke volume entity draws the cloud instead.
-		if ( neo_volsmoke_hook_grenade.GetBool() )
-		{
-			return;
-		}
-#endif
 		Start(ParticleMgr(), NULL);
 	}
 }
