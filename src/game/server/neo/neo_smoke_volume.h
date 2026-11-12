@@ -26,8 +26,8 @@ void NEOSmokeVolume_Create( const Vector &origin, CBaseEntity *pGrenade );
 // smoke is the nominal dome.
 float NEOSmoke_OpticalDepth( const Vector &from, const Vector &to );
 
-// Optical depth at which smoke hides a player. Not measured yet: start value
-// from the design (1.8 % of the light gets through).
+// Optical depth at which smoke hides a player: about where a human stops
+// seeing a player behind smoke in a lit scene.
 static constexpr float NEO_SMOKE_SIGHT_BLOCK_DEPTH = 4.0f;
 
 // The share of the segment from `from` that stays in sight: 1 when the smoke

@@ -39,7 +39,6 @@ public:
 	virtual bool SeedInWater() override;
 	virtual bool CellWater( int x, int y, int z ) override;
 
-	double QuerySeconds() const { return m_flQuerySeconds; }
 	int Traces() const { return m_nTraces; }
 	int MemoryBytes() const { return m_Coarse.Count() * (int)sizeof( int ) + m_Fine.Count(); }
 	int AuditChecks() const { return m_nAuditChecks; }
@@ -64,9 +63,8 @@ protected:
 	}
 
 	Vector m_vecGridMin;
-	int m_nBoxSize[3];      // the client's box, from m_nDrawOffset
+	int m_nBoxSize[3];      // the drawn box, from m_nDrawOffset
 	int m_nDrawOffset[3];
-	double m_flQuerySeconds;
 	int m_nTraces;
 	CUtlVector<NeoSmokeAuditCell_t> m_AuditCells; // the first disagreements
 
