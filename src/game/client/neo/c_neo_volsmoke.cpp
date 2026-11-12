@@ -283,11 +283,9 @@ struct VolSmokePerf_t
 
 static VolSmokePerf_t s_VolSmokePerf;
 
-// Opaque sheet: the render the last sheet was drawn in, and its tiles.
+// Opaque sheet: the render the last sheet was drawn in.
 static int s_nSheetSerial = 0;
 static int s_nSheetFrame = -1;
-static int s_nSheetTiles = 0;
-static int s_nSheetTilesOpaque = 0;
 
 // The shared ray grid of the last sheet march, with each volume's own opaque
 // depth at every grid corner, for the per-volume slab cull.
@@ -354,11 +352,9 @@ class CNeoVolSmokeWorld final : public CNEOSmokeWorld
 {
 public:
 	CNeoVolSmokeWorld( const Vector &gridMin, const int boxSize[3], const int seedCorner[3], const int latticeLo[3], const int latticeHi[3] )
-		: CNEOSmokeWorld( gridMin, boxSize, seedCorner, latticeLo, latticeHi ), m_nWallTraces( 0 )
+		: CNEOSmokeWorld( gridMin, boxSize, seedCorner, latticeLo, latticeHi )
 	{
 	}
-
-	int WallTraces() const { return m_nWallTraces; }
 
 	// The client's box, in query coordinates, for LinkWall.
 	void SetDrawBox( const int offset[3], const int size[3] )
@@ -389,8 +385,6 @@ public:
 			return false;
 		}
 
-		++m_nTraces;
-		++m_nWallTraces;
 		Ray_t ray;
 		ray.Init( Center( x, y, z ), Center( n[0], n[1], n[2] ) );
 		CTraceFilterWorldOnly filter;
@@ -427,8 +421,6 @@ public:
 
 private:
 	virtual bool Auditing() const override { return neo_volsmoke_fill_audit.GetBool(); }
-
-	int m_nWallTraces;
 };
 
 // ---------------------------------------------------------------------------
@@ -446,7 +438,6 @@ public:
 	}
 
 	unsigned char *Bits() { return m_Bits.Base(); }
-	int MemoryBytes() const { return m_Bits.Count(); }
 	int Pitch() const { return m_nWidth * 4; }
 
 	virtual void RegenerateTextureBits( ITexture *pTexture, IVTFTexture *pVTFTexture, Rect_t *pRect ) override
@@ -692,8 +683,8 @@ int C_NeoVolSmoke::s_nNextId = 0;
 
 // ---------------------------------------------------------------------------
 C_NeoVolSmoke::C_NeoVolSmoke()
-	: m_nId( s_nNextId++ ), m_bHasGrenade( false ), m_flSpawnTime( 0 ), m_pWorld( nullptr ), m_pFillJob( nullptr ), m_bFillDone( false ), m_flFillSeconds( 0 ), m_flFillPeakFrame( 0 ), m_flFillDoneAge( -1.0f ), m_nLagFrames( 0 ), m_bCellBytes( false ), m_flCellBytesSeconds( 0 ),
-	  m_nBounded( 0 ), m_pRegen( nullptr ), m_nPacked( 0 ), m_flNextUpload( 0 ), m_flRegrowEnd( -1.0f ), m_flUploadedFront( 0 ), m_bUploadPending( false ), m_nSlabTiles( 0 ), m_nSlabTilesCulled( 0 ), m_flDistRange( NEO_VOLSMOKE_DIST_RANGE ), m_nAtlasCols( 0 ), m_nAtlasW( 0 ), m_nAtlasH( 0 ), m_nRenderSerial( -1 )
+	: m_nId( s_nNextId++ ), m_bHasGrenade( false ), m_flSpawnTime( 0 ), m_pWorld( nullptr ), m_pFillJob( nullptr ), m_bFillDone( false ), m_bCellBytes( false ),
+	  m_nBounded( 0 ), m_pRegen( nullptr ), m_nPacked( 0 ), m_flNextUpload( 0 ), m_flRegrowEnd( -1.0f ), m_flUploadedFront( 0 ), m_bUploadPending( false ), m_flDistRange( NEO_VOLSMOKE_DIST_RANGE ), m_nAtlasCols( 0 ), m_nAtlasW( 0 ), m_nAtlasH( 0 ), m_nRenderSerial( -1 )
 {
 	for ( int a = 0; a < 3; ++a )
 	{
@@ -754,15 +745,6 @@ C_NeoVolSmoke *C_NeoVolSmoke::CreateForGrenade( const Vector &origin, float spaw
 	DevMsg( "neo_volsmoke: grenade at (%.9g %.9g %.9g) spawned volume %d, age %.2f\n",
 		origin.x, origin.y, origin.z, pVol ? pVol->m_nId : -1, gpGlobals->curtime - spawnTime );
 	return pVol;
-}
-
-void C_NeoVolSmoke::PrintAllStats()
-{
-	Msg( "neo_volsmoke_stats: opaque sheet last render %d of %d tiles\n", s_nSheetTilesOpaque, s_nSheetTiles );
-	for ( int i = 0; i < s_Volumes.Count(); ++i )
-	{
-		s_Volumes[i]->PrintStats();
-	}
 }
 
 void C_NeoVolSmoke::RemoveAll()
@@ -1066,7 +1048,6 @@ void C_NeoVolSmoke::StepFills()
 		pVol->m_pFillJob->Release();
 		pVol->m_pFillJob = nullptr;
 		pVol->m_bFillDone = pVol->m_Fill.IsDone();
-		pVol->m_flFillDoneAge = gpGlobals->curtime - pVol->m_flSpawnTime;
 	}
 
 	const int slots = pPool ? pPool->NumThreads() : 1;
@@ -1116,41 +1097,28 @@ void C_NeoVolSmoke::StepFills()
 }
 
 // Works on this volume's fill on the main thread for up to `budget` seconds.
-// Returns the time spent.
-double C_NeoVolSmoke::StepFill( double budget )
+void C_NeoVolSmoke::StepFill( double budget )
 {
 	const double start = Plat_FloatTime();
-	double spent = 0.0;
-	while ( !m_Fill.IsDone() && spent < budget )
+	while ( !m_Fill.IsDone() && Plat_FloatTime() - start < budget )
 	{
 		m_Fill.Step( NEO_SMOKE_FILL_CHUNK_CELLS, NEO_SMOKE_FILL_CHUNK_QUERIES );
-		spent = Plat_FloatTime() - start;
 	}
 
-	m_flFillSeconds += spent;
-	m_flFillPeakFrame = Max( m_flFillPeakFrame, spent );
 	if ( m_Fill.IsDone() )
 	{
 		m_bFillDone = true;
-		m_flFillDoneAge = gpGlobals->curtime - m_flSpawnTime;
 	}
-
-	return spent;
 }
 
-// The fill job, on a worker. It touches only the fill, its world and the
-// fill time; the chunks let StopFill cancel it quickly.
+// The fill job, on a worker. It touches only the fill and its world; the
+// chunks let StopFill cancel it quickly.
 void C_NeoVolSmoke::RunFill()
 {
-	const double start = Plat_FloatTime();
 	NEOSmokeFillRun( m_Fill, m_nFillCancel );
-	const double filled = Plat_FloatTime();
-	m_flFillSeconds += filled - start;
-
 	if ( m_Fill.IsDone() )
 	{
 		BuildCellBytes();
-		m_flCellBytesSeconds = Plat_FloatTime() - filled;
 	}
 }
 
@@ -1765,168 +1733,6 @@ void C_NeoVolSmoke::Carve( const Vector &start, const Vector &end, float radius 
 	}
 }
 
-// ---------------------------------------------------------------------------
-// Field and atlas hashes for neo_volsmoke_stats. Each is a sum over cells of a
-// mix of the cell's place relative to the grenade and its value, so it does
-// not depend on the box or the atlas layout: equal fields give equal hashes
-// across builds. The key is the offline fill prototype's (VolSmokeCellKey).
-
-unsigned long long C_NeoVolSmoke::ClientFieldHash() const
-{
-	unsigned long long hash = 0;
-	for ( int i = 0; i < m_Fill.FinalizedCount(); ++i )
-	{
-		const int cell = m_Fill.FinalizedCell( i );
-		int c[3];
-		CellCoords( cell, c[0], c[1], c[2] );
-		hash += VolSmokeCellKey( c[0] - m_nSeedCorner[0], c[1] - m_nSeedCorner[1], c[2] - m_nSeedCorner[2], (unsigned int)m_Fill.Dist( cell ) );
-	}
-
-	return hash;
-}
-
-static int s_nServerHashChecks = 0;
-static int s_nServerHashMismatches = 0;
-
-bool C_NeoVolSmoke::CheckServerHash( unsigned long long serverHash ) const
-{
-	if ( !m_bFillDone )
-	{
-		return false;
-	}
-
-	++s_nServerHashChecks;
-	const unsigned long long hash = LatticeFieldHash();
-	if ( hash != serverHash )
-	{
-		++s_nServerHashMismatches;
-		Warning( "neo_volsmoke: volume %d field %016llx differs from the server's %016llx\n", m_nId, hash, serverHash );
-	}
-
-	return true;
-}
-
-unsigned long long C_NeoVolSmoke::LatticeFieldHash() const
-{
-	unsigned long long hash = 0;
-	for ( int i = 0; i < m_Fill.LatticeCount(); ++i )
-	{
-		int c[3];
-		m_Fill.LatticeCell( i, c[0], c[1], c[2] );
-		for ( int a = 0; a < 3; ++a )
-		{
-			c[a] -= m_nSeedCorner[a] + m_nBoxOffset[a];
-		}
-
-		hash += VolSmokeCellKey( c[0], c[1], c[2], (unsigned int)m_Fill.LatticeDist( i ) );
-	}
-
-	return hash;
-}
-
-// Over the texels a lookup near the gas reads (the gas cells and one cell
-// around them) that differ from a cleared one.
-unsigned long long C_NeoVolSmoke::AtlasHash() const
-{
-	if ( !m_pRegen || m_Fill.FinalizedCount() == 0 )
-	{
-		return 0;
-	}
-
-	int lo[3] = { m_nBox[0], m_nBox[1], m_nBox[2] };
-	int hi[3] = { -1, -1, -1 };
-	for ( int k = 0; k < m_Fill.FinalizedCount(); ++k )
-	{
-		int c[3];
-		CellCoords( m_Fill.FinalizedCell( k ), c[0], c[1], c[2] );
-		for ( int a = 0; a < 3; ++a )
-		{
-			lo[a] = Min( lo[a], c[a] );
-			hi[a] = Max( hi[a], c[a] );
-		}
-	}
-
-	for ( int a = 0; a < 3; ++a )
-	{
-		lo[a] = Max( 0, lo[a] - 1 );
-		hi[a] = Min( m_nBox[a] - 1, hi[a] + 1 );
-	}
-
-	const unsigned char *bits = m_pRegen->Bits();
-	unsigned long long hash = 0;
-	for ( int z = lo[2]; z <= hi[2]; ++z )
-	{
-		for ( int y = lo[1]; y <= hi[1]; ++y )
-		{
-			for ( int x = lo[0]; x <= hi[0]; ++x )
-			{
-				const unsigned char *t = bits + AtlasOffset( x, y, z );
-				const unsigned int texel = (unsigned int)t[0] | ( (unsigned int)t[1] << 8 ) | ( (unsigned int)t[2] << 16 ) | ( (unsigned int)t[3] << 24 );
-				const bool cleared = t[VOLSMOKE_BYTE_DIST] == 255 && t[VOLSMOKE_BYTE_LIGHT] == 255 && t[VOLSMOKE_BYTE_WEIGHT] == 0 && t[VOLSMOKE_BYTE_ALPHA] == 255;
-				if ( cleared )
-				{
-					continue;
-				}
-
-				hash += VolSmokeCellKey( x - m_nSeedCorner[0], y - m_nSeedCorner[1], z - m_nSeedCorner[2], texel );
-			}
-		}
-	}
-
-	return hash;
-}
-
-// ---------------------------------------------------------------------------
-void C_NeoVolSmoke::PrintStats() const
-{
-	if ( m_pFillJob )
-	{
-		Msg( "neo_volsmoke_stats: volume %d age %.2f done 0 (filling on a worker)\n", m_nId, gpGlobals->curtime - m_flSpawnTime );
-		return;
-	}
-
-	// FNV-1a over the finalized cells and their path lengths: equal hashes mean
-	// equal fields.
-	unsigned int hash = 2166136261u;
-	for ( int i = 0; i < m_Fill.FinalizedCount(); ++i )
-	{
-		const int cell = m_Fill.FinalizedCell( i );
-		const unsigned int words[2] = { (unsigned int)cell, (unsigned int)m_Fill.Dist( cell ) };
-		for ( unsigned int word : words )
-		{
-			hash = ( hash ^ word ) * 16777619u;
-		}
-	}
-
-	const int traces = m_pWorld ? m_pWorld->Traces() : 0;
-	Msg( "neo_volsmoke_stats: volume %d age %.2f done %d (at age %.2f) cells %d radius %.1f queries %d traces %d fill %.1f ms (peak frame %.2f ms), hash %08x, front ahead of the fill in %d frames\n",
-		m_nId, gpGlobals->curtime - m_flSpawnTime, FillDone() ? 1 : 0, m_flFillDoneAge, m_Fill.FinalizedCount(),
-		CNEOSmokeFill::DistToUnits( m_Fill.FrontDist() ), m_Fill.WorldQueries(), traces,
-		m_flFillSeconds * 1000.0, m_flFillPeakFrame * 1000.0, hash, m_nLagFrames );
-	const int fillBytes = m_Fill.MemoryBytes();
-	const int carveBytes = m_CarveTime.Count() * (int)sizeof( float );
-	const int worldBytes = m_pWorld ? m_pWorld->MemoryBytes() : 0;
-	const int atlasBytes = m_pRegen ? m_pRegen->MemoryBytes() : 0;
-	Msg( "neo_volsmoke_stats: volume %d field %016llx lattice %016llx (%d cells, front %.1f, dropped %d) atlas %016llx\n",
-		m_nId, ClientFieldHash(), LatticeFieldHash(), m_Fill.LatticeCount(), CNEOSmokeFill::DistToUnits( m_Fill.LatticeFrontDist() ),
-		m_Fill.DroppedCount(), AtlasHash() );
-	Msg( "neo_volsmoke_stats: volume %d memory %d KB (fill %d KB, carve times %d KB, world cache %d KB, atlas copy %d KB)\n",
-		m_nId, ( fillBytes + carveBytes + worldBytes + atlasBytes ) / 1024, fillBytes / 1024, carveBytes / 1024,
-		worldBytes / 1024, atlasBytes / 1024 );
-	Msg( "neo_volsmoke_stats: volume %d wall link traces %d (cell bytes %.1f ms on the fill job)\n", m_nId, m_pWorld ? m_pWorld->WallTraces() : 0,
-		m_flCellBytesSeconds * 1000.0 );
-	Msg( "neo_volsmoke_stats: volume %d far slab tiles last frame %d, behind opaque smoke %d\n", m_nId, m_nSlabTiles, m_nSlabTilesCulled );
-	if ( m_pWorld && m_pWorld->AuditChecks() > 0 )
-	{
-		Msg( "neo_volsmoke_stats: volume %d audit: %d block answers checked, %d disagreements\n",
-			m_nId, m_pWorld->AuditChecks(), m_pWorld->AuditDisagreements() );
-		if ( m_bFillDone )
-		{
-			m_pWorld->PrintAudit( m_nId );
-		}
-	}
-}
-
 void C_NeoVolSmoke::ClientThink()
 {
 	const float now = gpGlobals->curtime;
@@ -1958,10 +1764,6 @@ void C_NeoVolSmoke::ClientThink()
 	}
 
 	const float front = FrontRadius( now - m_flSpawnTime );
-	if ( front < BloomRadius( now - m_flSpawnTime ) )
-	{
-		++m_nLagFrames;
-	}
 
 	{
 		CVolSmokePerfScope perf( VOLSMOKE_PERF_DENSITY );
@@ -2933,8 +2735,6 @@ float C_NeoVolSmoke::SheetOpaqueDepth( const VolSmokeSheetVolume_t *vols, int nV
 
 void C_NeoVolSmoke::BuildOpaqueSheet( IMatRenderContext *pRenderContext )
 {
-	s_nSheetTiles = 0;
-	s_nSheetTilesOpaque = 0;
 	s_CullVolumes.RemoveAll();
 	if ( !neo_volsmoke_sheet.GetBool() )
 	{
@@ -3091,8 +2891,6 @@ void C_NeoVolSmoke::BuildOpaqueSheet( IMatRenderContext *pRenderContext )
 	{
 		for ( int i = 0; i < cols; ++i )
 		{
-			++s_nSheetTiles;
-
 			const float depth = tileDepth[j][i];
 			if ( depth == FLT_MAX )
 			{
@@ -3100,7 +2898,6 @@ void C_NeoVolSmoke::BuildOpaqueSheet( IMatRenderContext *pRenderContext )
 			}
 
 			s_flSheetDepth[j][i] = depth;
-			++s_nSheetTilesOpaque;
 		}
 	}
 }
@@ -3187,8 +2984,6 @@ void C_NeoVolSmoke::DrawFarSlabs( IMatRenderContext *pRenderContext )
 	const Vector seedRel = seed - eye;
 	const Vector sphereView( DotProduct( seedRel, right ), DotProduct( seedRel, up ), DotProduct( seedRel, fwd ) );
 
-	m_nSlabTiles = 0;
-	m_nSlabTilesCulled = 0;
 	if ( zMax <= NEO_VOLSMOKE_NEAR_RANGE )
 	{
 		return;
@@ -3237,8 +3032,6 @@ void C_NeoVolSmoke::DrawFarSlabs( IMatRenderContext *pRenderContext )
 	const auto collect = [&]( bool useCull )
 	{
 		quads.RemoveAll();
-		m_nSlabTiles = 0;
-		m_nSlabTilesCulled = 0;
 		for ( int s = nSlabs - 1; s >= 0; --s )
 		{
 			const float lo = bounds[s];
@@ -3270,11 +3063,6 @@ void C_NeoVolSmoke::DrawFarSlabs( IMatRenderContext *pRenderContext )
 				for ( int i = 0; i <= grid.cols; ++i )
 				{
 					const bool keep = i < grid.cols && lo < grid.depth[j][i];
-					if ( i < grid.cols && grid.xs[i + 1] > xMin && grid.xs[i] < xMax )
-					{
-						++m_nSlabTiles;
-						m_nSlabTilesCulled += keep ? 0 : 1;
-					}
 
 					if ( keep && runStart < 0 )
 					{
@@ -3466,22 +3254,6 @@ CON_COMMAND_F( neo_volsmoke_depth, "Print the smoke optical depth on a segment, 
 	const Vector from( atof( args[1] ), atof( args[2] ), atof( args[3] ) );
 	const Vector to( atof( args[4] ), atof( args[5] ), atof( args[6] ) );
 	C_NeoVolSmoke::PrintOpticalDepth( from, to );
-}
-
-// A volume material holds its atlas, so a leaked material also shows up here.
-CON_COMMAND_F( neo_volsmoke_stats, "Print live volumes and the atlas textures still loaded.", FCVAR_CHEAT )
-{
-	int textures = 0;
-	for ( int id = 0; id < C_NeoVolSmoke::NextId(); ++id )
-	{
-		char name[64];
-		Q_snprintf( name, sizeof( name ), "_neo_volsmoke_%d", id );
-		textures += materials->IsTextureLoaded( name ) ? 1 : 0;
-	}
-
-	Msg( "neo_volsmoke_stats: live %d, created %d, atlas textures loaded %d, server hash checks %d, mismatches %d\n",
-		C_NeoVolSmoke::LiveCount(), C_NeoVolSmoke::NextId(), textures, s_nServerHashChecks, s_nServerHashMismatches );
-	C_NeoVolSmoke::PrintAllStats();
 }
 
 CON_COMMAND_F( neo_volsmoke_perf, "Print the smoke's CPU time per frame by stage since the last reset. Args: [reset]", FCVAR_CHEAT )

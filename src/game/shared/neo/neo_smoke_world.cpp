@@ -29,7 +29,7 @@ enum NEOSmokeBlockState_t
 };
 
 CNEOSmokeWorld::CNEOSmokeWorld( const Vector &gridMin, const int boxSize[3], const int seedCorner[3], const int latticeLo[3], const int latticeHi[3] )
-	: m_vecGridMin( gridMin ), m_nTraces( 0 ), m_nAuditChecks( 0 ), m_nAuditDisagree( 0 )
+	: m_vecGridMin( gridMin ), m_nAuditChecks( 0 ), m_nAuditDisagree( 0 )
 {
 	int blocks = 1;
 	for ( int a = 0; a < 3; ++a )
@@ -68,7 +68,6 @@ bool CNEOSmokeWorld::CellSolid( int x, int y, int z )
 	const bool inEmpty = InEmptyBlock( x, y, z );
 	if ( !inEmpty || Auditing() )
 	{
-		++m_nTraces;
 		solid = PointSolid( Center( x, y, z ) );
 	}
 
@@ -89,7 +88,6 @@ bool CNEOSmokeWorld::LinkBlocked( int x, int y, int z, int axis )
 	bool blocked = false;
 	if ( !inEmpty || Auditing() )
 	{
-		++m_nTraces;
 		Ray_t ray;
 		ray.Init( Center( x, y, z ), Center( n[0], n[1], n[2] ) );
 		CTraceFilterWorldOnly filter;
@@ -108,7 +106,6 @@ bool CNEOSmokeWorld::LinkBlocked( int x, int y, int z, int axis )
 
 bool CNEOSmokeWorld::SeedBlocked( int x, int y, int z )
 {
-	++m_nTraces;
 	Ray_t ray;
 	ray.Init( Grenade(), Center( x, y, z ) );
 	CTraceFilterWorldOnly filter;
@@ -119,13 +116,11 @@ bool CNEOSmokeWorld::SeedBlocked( int x, int y, int z )
 
 bool CNEOSmokeWorld::SeedInWater()
 {
-	++m_nTraces;
 	return PointIn( Grenade(), NEO_VOLSMOKE_WATER_MASK );
 }
 
 bool CNEOSmokeWorld::CellWater( int x, int y, int z )
 {
-	++m_nTraces;
 	return PointIn( Center( x, y, z ), NEO_VOLSMOKE_WATER_MASK );
 }
 
@@ -202,7 +197,6 @@ bool CNEOSmokeWorld::InEmptyBlock( int x, int y, int z )
 // Does the cube of b cells whose low corner is cell (x, y, z) touch the world?
 bool CNEOSmokeWorld::BoxTouchesWorld( int x, int y, int z, int b )
 {
-	++m_nTraces;
 	const float c = CNEOSmokeFill::CELL_SIZE;
 	const float size = b * c;
 	const Vector lo = m_vecGridMin + Vector( x * c, y * c, z * c );

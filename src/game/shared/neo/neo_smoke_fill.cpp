@@ -337,14 +337,6 @@ void CNEOSmokeFill::BoxOffset( int offset[3] ) const
 	}
 }
 
-void CNEOSmokeFill::LatticeCell( int i, int &x, int &y, int &z ) const
-{
-	LatticeCoords( m_pOrder[i], x, y, z );
-	x -= BOX_SHIFT_XY;
-	y -= BOX_SHIFT_XY;
-	z -= BOX_SHIFT_Z;
-}
-
 bool CNEOSmokeFill::IsFinalized( int idx ) const
 {
 	return m_pFinalBits && ( ( m_pFinalBits[idx >> 6] >> ( idx & 63 ) ) & 1 ) != 0;
@@ -360,24 +352,6 @@ int CNEOSmokeFill::FinalRank( int idx ) const
 	const int w = idx >> 6;
 	const unsigned long long below = ( 1ull << ( idx & 63 ) ) - 1;
 	return m_pWordRank[w] + NeoSmokePopCount( m_pFinalBits[w] & below );
-}
-
-int CNEOSmokeFill::MemoryBytes() const
-{
-	int bytes = 0;
-	if ( m_pBrickDir )
-	{
-		bytes += BRICKS * (int)sizeof( int ) + m_nBrickCap * (int)sizeof( Brick_t * ) + m_nBricks * (int)sizeof( Brick_t );
-		bytes += m_nHeapCap * (int)sizeof( HeapEntry_t ) + 3 * NEO_SMOKE_FILL_BUDGET * (int)sizeof( int );
-	}
-	else if ( m_pFinalBits )
-	{
-		bytes += m_nWords * (int)( sizeof( *m_pFinalBits ) + sizeof( *m_pWordRank ) );
-		bytes += m_nBoxFinalized * (int)( sizeof( *m_pFinalDist ) + sizeof( *m_pBoxOrder ) );
-		bytes += m_nFinalized * (int)( sizeof( *m_pOrder ) + sizeof( *m_pOrderDist ) );
-	}
-
-	return bytes;
 }
 
 void CNEOSmokeFill::Start( INEOSmokeFillWorld *pWorld )

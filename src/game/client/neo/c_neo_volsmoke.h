@@ -63,7 +63,6 @@ public:
 	// it runs.
 	static void RemoveExpired();
 
-	static void PrintAllStats();
 	static void PrintOpticalDepth( const Vector &from, const Vector &to );
 
 	// The translucent sort key of a volume: the view depth of the nearest
@@ -71,7 +70,6 @@ public:
 	static bool SortDepth( IClientRenderable *pRenderable, const Vector &viewOrigin, const Vector &viewForward, float &depth );
 
 	static int  LiveCount() { return s_Volumes.Count(); }
-	static int  NextId() { return s_nNextId; }
 
 	// C_BaseEntity
 	virtual void ClientThink() override;
@@ -82,25 +80,13 @@ public:
 	virtual int  DrawModel( int flags ) override;
 
 private:
-	void PrintStats() const;
-	unsigned long long ClientFieldHash() const;
-	unsigned long long LatticeFieldHash() const;
-	unsigned long long AtlasHash() const;
-
-	// The networked volume entity checks its cloud against the server's field.
-	friend class C_NEOSmokeVolumeEnt;
-
-	// Compares the filled field with the server's lattice hash and counts a
-	// mismatch. False while the field is filling.
-	bool CheckServerHash( unsigned long long serverHash ) const;
-
 	void Init( const Vector &origin, float spawnTime );
 	void Shutdown();
 
 	// Simulation
 	static void StepFills();
 	static C_NeoVolSmoke *UploadTurn();
-	double StepFill( double budget );
+	void StepFill( double budget );
 	void RunFill();
 	void BuildCellBytes();
 	float DistRange() const;
@@ -187,21 +173,16 @@ private:
 	// Gas fill and the world it queries
 	CNEOSmokeFill      m_Fill;
 	CNeoVolSmokeWorld *m_pWorld;
-	// While a job runs, the worker owns m_Fill, m_pWorld and m_flFillSeconds;
-	// the main thread reads them only after the job is finished.
+	// While a job runs, the worker owns m_Fill and m_pWorld; the main thread
+	// reads them only after the job is finished.
 	CJob  *m_pFillJob;
 	CInterlockedInt m_nFillCancel;
 	bool   m_bFillDone;        // the fill is done and the main thread has seen it
-	double m_flFillSeconds;    // CPU time spent in the fill
-	double m_flFillPeakFrame;  // longest fill slice a frame paid for
-	float  m_flFillDoneAge;    // age when the fill finished, <0 = not yet
-	int    m_nLagFrames;       // frames the fill or the upload held the bloom front back
 
 	// The atlas's path length and wall distance per box cell, built by the
 	// fill job; kept until the first pack copies them.
 	CUtlVector< unsigned char > m_CellBytes;
 	bool   m_bCellBytes;
-	double m_flCellBytesSeconds; // fill job time spent building them
 
 	// Per-cell state
 	CUtlVector< float >         m_CarveTime;  // curtime of the last carve by FinalRank, <0 = never
@@ -223,8 +204,6 @@ private:
 	float m_flRegrowEnd;       // curtime when the last carved cell has refilled
 	float m_flUploadedFront;   // path length of the last cell the uploaded atlas holds
 	bool  m_bUploadPending;    // atlas changed, upload waits for a free frame
-	int   m_nSlabTiles;        // far slab tiles last frame, and those behind opaque smoke
-	int   m_nSlabTilesCulled;
 	int   m_nRenderSerial;     // the render this volume last drew in
 };
 

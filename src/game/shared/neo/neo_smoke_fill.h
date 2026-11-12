@@ -83,20 +83,12 @@ public:
 	// in grid order, 0 to FinalizedCount() - 1.
 	int  FinalRank( int idx ) const;
 
-	// Heap bytes held now. The work arrays are freed when the fill is done.
-	int  MemoryBytes() const;
-
 	// Path length of the last finalized cell in the box (the final radius
 	// once done).
 	int  FrontDist() const { return m_nBoxFront; }
 
-	// The whole field, in fill order, in query coordinates, and the cells the
-	// atlas fit dropped.
+	// Cells of the whole field, and the world queries made so far.
 	int  LatticeCount() const { return m_nFinalized; }
-	void LatticeCell( int i, int &x, int &y, int &z ) const;
-	int  LatticeDist( int i ) const { return m_pOrderDist[i]; }
-	int  LatticeFrontDist() const { return m_nFrontDist; }
-	int  DroppedCount() const { return m_nDropped; }
 	int  WorldQueries() const { return m_nQueries; }
 
 	// The box the finalized cells are listed in: its size in cells, the cell
