@@ -13,7 +13,7 @@
 // memdbgon must be the last include file in a .cpp file!!!
 #include "tier0/memdbgon.h"
 
-static IThreadPool *s_pSmokeFillPool = NULL;
+static IThreadPool *s_pSmokeFillPool = nullptr;
 static bool s_bSmokeFillPoolTried = false;
 
 static int SmokeFillWorkers()
@@ -49,7 +49,7 @@ IThreadPool *NEOSmokeFillPool()
 			DestroyThreadPool( pPool );
 		}
 
-		return NULL;
+		return nullptr;
 	}
 
 	DevMsg( "neo_smoke: %d fill workers\n", pPool->NumThreads() );
@@ -68,7 +68,7 @@ void NEOSmokeFillPoolShutdown()
 
 	s_pSmokeFillPool->Stop();
 	DestroyThreadPool( s_pSmokeFillPool );
-	s_pSmokeFillPool = NULL;
+	s_pSmokeFillPool = nullptr;
 }
 
 void NEOSmokeFillRun( CNEOSmokeFill &fill, const CInterlockedInt &cancel )
@@ -98,5 +98,5 @@ void NEOSmokeFillJoin( CJob *&pJob )
 	}
 
 	pJob->Release();
-	pJob = NULL;
+	pJob = nullptr;
 }
