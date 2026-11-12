@@ -44,8 +44,22 @@ extern ConVar muzzleflash_light;
 #define TENT_WIND_ACCEL 50
 
 #ifdef NEO
-// Debris is cosmetic: keep it only long enough to be seen settling.
-static constexpr float NEO_TE_DEBRIS_FADE_DELAY = 4.0f;
+// Debris lies where it fell until the round restarts.
+static CUtlVector< CHandle< C_PhysPropClientside > > s_NeoDebris;
+
+void NEO_RemoveTempEntDebris()
+{
+	for ( int i = 0; i < s_NeoDebris.Count(); ++i )
+	{
+		C_PhysPropClientside *pDebris = s_NeoDebris[i];
+		if ( pDebris )
+		{
+			pDebris->Release();
+		}
+	}
+
+	s_NeoDebris.Purge();
+}
 
 #endif // NEO
 //Precache the effects
@@ -1182,7 +1196,7 @@ C_PhysPropClientside *CTempEnts::PhysicsProp( const model_t *model, int skin, co
 	if ( physFlags & TE_PHYSPROPFLAG_DEBRIS )
 	{
 		pEntity->SetCollisionGroup( COLLISION_GROUP_DEBRIS );
-		pEntity->StartFadeOut( NEO_TE_DEBRIS_FADE_DELAY );
+		s_NeoDebris.AddToTail( pEntity );
 	}
 
 #endif // NEO

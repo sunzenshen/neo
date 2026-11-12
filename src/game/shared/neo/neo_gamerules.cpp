@@ -18,6 +18,7 @@
 #include "hltvcamera.h"
 #include "hud_crosshair.h"
 #include "ui/neo_hud_deathnotice.h"
+#include "c_te_legacytempents.h"
 #else
 #include "neo_player.h"
 #include "team.h"
@@ -1930,6 +1931,7 @@ void CNEORules::FireGameEvent(IGameEvent* event)
 	{
 #ifdef CLIENT_DLL
 		engine->ClientCmd("r_cleardecals");
+		NEO_RemoveTempEntDebris();
 		engine->ClientCmd("classmenu");
 
 		if (!engine->IsRecordingDemo() && sv_neo_client_autorecord.GetBool() && cl_neo_client_autorecord_allow.GetBool())

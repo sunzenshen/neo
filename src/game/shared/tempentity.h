@@ -21,7 +21,7 @@
 #define TE_EXPLFLAG_NOFIREBALLSMOKE	0x80	// do not draw smoke with the fireball
 
 #ifdef NEO
-#define TE_PHYSPROPFLAG_DEBRIS	0x2	// physics prop collides only with the world and fades out soon
+#define TE_PHYSPROPFLAG_DEBRIS	0x2	// physics prop collides only with the world, stays until the round restarts
 
 #endif // NEO
 #define	TE_BEAMPOINTS		0		// beam effect between two points
