@@ -42,12 +42,10 @@ public:
 	virtual ~C_NeoVolSmoke();
 
 	// Spawns a client-only volume for a grenade resting at `origin` that
-	// detonated at `spawnTime` (server time). Bloom and fade follow that time.
-	static C_NeoVolSmoke *Create( const Vector &origin, float spawnTime );
-
-	// As Create, but at most one volume per grenade, and none once its time is
-	// over. The volume dies with `pGrenade`, as the legacy particles do, so a
-	// round restart that removes the grenade also removes its smoke.
+	// detonated at `spawnTime` (server time), or none once its time is over.
+	// Bloom and fade follow that time. The volume dies with `pGrenade`,
+	// as the legacy particles do, so a round restart that removes the grenade
+	// also removes its smoke.
 	static C_NeoVolSmoke *CreateForGrenade( const Vector &origin, float spawnTime, C_BaseEntity *pGrenade );
 
 	// Cancels and joins every running fill job.
@@ -71,6 +69,7 @@ public:
 	virtual int  DrawModel( int flags ) override;
 
 private:
+	static C_NeoVolSmoke *Create( const Vector &origin, float spawnTime );
 	void Init( const Vector &origin, float spawnTime );
 	void Shutdown();
 
@@ -141,8 +140,7 @@ private:
 	static int s_nNextId;
 
 	int    m_nId;
-	EHANDLE m_hGrenade;        // the grenade entity the volume belongs to, if any
-	bool   m_bHasGrenade;
+	EHANDLE m_hGrenade;        // the grenade entity the volume belongs to
 	int    m_nBox[3];          // the volume's box of cells, from the fill
 	int    m_nSeedCorner[3];   // the cell corner the grenade sits on, in the box
 	int    m_nBoxOffset[3];    // the box's low corner in the fill's query coordinates

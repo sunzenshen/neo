@@ -513,7 +513,7 @@ enum VolSmokeRetireWait_t
 };
 
 // Deleting a volume's materials and atlas is the heavy part of its teardown;
-// a round restart or a clear retires many at once, so a frame deletes only
+// a round restart retires many at once, so a frame deletes only
 // one of them and the rest wait for later frames.
 static constexpr int NEO_VOLSMOKE_RETIRE_PER_FRAME = 1;
 
@@ -575,8 +575,10 @@ int C_NeoVolSmoke::s_nNextId = 0;
 
 // ---------------------------------------------------------------------------
 C_NeoVolSmoke::C_NeoVolSmoke()
-	: m_nId( s_nNextId++ ), m_bHasGrenade( false ), m_flSpawnTime( 0 ), m_pWorld( nullptr ), m_pFillJob( nullptr ), m_bFillDone( false ), m_bCellBytes( false ),
-	  m_nBounded( 0 ), m_pRegen( nullptr ), m_nPacked( 0 ), m_flNextUpload( 0 ), m_flUploadedFront( 0 ), m_bUploadPending( false ), m_flDistRange( NEO_VOLSMOKE_DIST_RANGE ), m_nAtlasCols( 0 ), m_nAtlasW( 0 ), m_nAtlasH( 0 ), m_nRenderSerial( -1 )
+	: m_nId( s_nNextId++ ), m_bFitted( false ), m_flSpawnTime( 0 ), m_pWorld( nullptr ), m_pFillJob( nullptr ), m_bFillDone( false ),
+	  m_bCellBytes( false ), m_nBounded( 0 ), m_pRegen( nullptr ), m_flDistRange( NEO_VOLSMOKE_DIST_RANGE ), m_nAtlasCols( 0 ),
+	  m_nAtlasW( 0 ), m_nAtlasH( 0 ), m_nPacked( 0 ), m_flNextUpload( 0 ), m_flUploadedFront( 0 ), m_bUploadPending( false ),
+	  m_nRenderSerial( -1 )
 {
 	for ( int a = 0; a < 3; ++a )
 	{
@@ -584,8 +586,6 @@ C_NeoVolSmoke::C_NeoVolSmoke()
 		m_nSeedCorner[a] = 0;
 		m_nBoxOffset[a] = 0;
 	}
-
-	m_bFitted = false;
 }
 
 C_NeoVolSmoke::~C_NeoVolSmoke()
@@ -622,7 +622,6 @@ C_NeoVolSmoke *C_NeoVolSmoke::CreateForGrenade( const Vector &origin, float spaw
 	if ( pVol )
 	{
 		pVol->m_hGrenade = pGrenade;
-		pVol->m_bHasGrenade = true;
 	}
 
 	return pVol;
@@ -634,7 +633,7 @@ void C_NeoVolSmoke::RemoveExpired()
 	for ( int i = s_Volumes.Count() - 1; i >= 0; --i )
 	{
 		const C_NeoVolSmoke *pVol = s_Volumes[i];
-		const bool grenadeGone = pVol->m_bHasGrenade && !pVol->m_hGrenade.Get();
+		const bool grenadeGone = !pVol->m_hGrenade.Get();
 		if ( grenadeGone || now - pVol->m_flSpawnTime > NEO_VOLSMOKE_FADE_END )
 		{
 			s_Volumes[i]->Release();
