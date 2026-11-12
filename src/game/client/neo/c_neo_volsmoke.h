@@ -50,9 +50,6 @@ public:
 	// round restart that removes the grenade also removes its smoke.
 	static C_NeoVolSmoke *CreateForGrenade( const Vector &origin, float spawnTime, C_BaseEntity *pGrenade );
 
-	// Carves a capsule out of every live volume (bullet trace / explosion).
-	static void CarveAll( const Vector &start, const Vector &end, float radius );
-
 	// Cancels and joins every running fill job.
 	static void StopAllFills();
 
@@ -90,7 +87,6 @@ private:
 	void FitToField();
 	void CreateAtlas();
 	Vector CellCenter( const int c[3] ) const;
-	float CarveTime( int idx ) const { return m_CarveTime[m_Fill.FinalRank( idx )]; }
 
 	// Cells of the volume's box
 	int  CellIndex( int x, int y, int z ) const { return ( z * m_nBox[1] + y ) * m_nBox[0] + x; }
@@ -106,8 +102,8 @@ private:
 	}
 	float FrontRadius( float age ) const;
 	float BloomRadius( float age ) const;
-	float CellWeight( int idx, float now ) const;
-	float DensityAt( const Vector &pos, float front, float now ) const;
+	float CellWeight( int idx ) const;
+	float DensityAt( const Vector &pos, float front ) const;
 	void AddInsideOverlay( float front, float now );
 	void UpdateBounds( float front );
 
@@ -115,14 +111,11 @@ private:
 	int  AtlasOffset( int x, int y, int z ) const;
 	int  AtlasOffset( int idx ) const;
 	void ClearAtlas();
-	bool IsRegrowing( float now ) const;
-	bool ShapeChanged( float now ) const;
-	bool PackNewCells( float now );
-	void PackWeights( float now );
-	void SweepLight( float now );
+	bool ShapeChanged() const;
+	bool PackNewCells();
+	void SweepLight();
 	Vector SampleColor() const;
 	bool GasReached( const Vector &pos ) const;
-	void Carve( const Vector &start, const Vector &end, float radius );
 
 	// Rendering
 	float DrawExtinction() const;
@@ -179,7 +172,6 @@ private:
 	bool   m_bCellBytes;
 
 	// Per-cell state
-	CUtlVector< float >         m_CarveTime;  // curtime of the last carve by FinalRank, <0 = never
 	int    m_SmokeLo[3];       // cell bounds of m_vecSmokeMin / Max
 	int    m_SmokeHi[3];
 	int    m_nBounded;         // finalized cells inside the drawn box
@@ -195,7 +187,6 @@ private:
 	int   m_nAtlasH;
 	int   m_nPacked;           // finalized cells written to the atlas
 	float m_flNextUpload;
-	float m_flRegrowEnd;       // curtime when the last carved cell has refilled
 	float m_flUploadedFront;   // path length of the last cell the uploaded atlas holds
 	bool  m_bUploadPending;    // atlas changed, upload waits for a free frame
 	int   m_nRenderSerial;     // the render this volume last drew in
