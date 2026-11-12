@@ -120,7 +120,8 @@ private:
 	bool PackNewCells( float now );
 	void PackWeights( float now );
 	void SweepLight( float now );
-	static Vector SampleColor( const Vector &origin );
+	Vector SampleColor() const;
+	bool GasReached( const Vector &pos ) const;
 	void Carve( const Vector &start, const Vector &end, float radius );
 
 	// Rendering

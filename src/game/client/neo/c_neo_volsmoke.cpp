@@ -1083,7 +1083,7 @@ void C_NeoVolSmoke::Init( const Vector &origin, float spawnTime )
 	m_Fill.Start( m_pWorld );
 
 	m_vecQueryMin = m_vecGridMin;
-	m_vecColor = SampleColor( origin );
+	m_vecColor.Init();
 }
 
 // A cell's center, from the corner of the box the fill queries in: the same
@@ -1122,6 +1122,9 @@ void C_NeoVolSmoke::FitToField()
 		m_CarveTime[k] = -1.0f;
 	}
 
+	// Nothing draws before the fit, and from here the light samples can be
+	// kept to where the gas went.
+	m_vecColor = SampleColor();
 	CreateAtlas();
 }
 
@@ -1227,7 +1230,7 @@ void C_NeoVolSmoke::Shutdown()
 // ---------------------------------------------------------------------------
 // Simulation
 // ---------------------------------------------------------------------------
-Vector C_NeoVolSmoke::SampleColor( const Vector &origin )
+Vector C_NeoVolSmoke::SampleColor() const
 {
 	const float out = NEO_VOLSMOKE_LIGHT_SAMPLE_OUT;
 	const Vector offsets[] =
@@ -1239,8 +1242,15 @@ Vector C_NeoVolSmoke::SampleColor( const Vector &origin )
 	int samples = 0;
 	for ( int i = 0; i < ARRAYSIZE( offsets ); ++i )
 	{
-		const Vector pos = origin + offsets[i] + Vector( 0, 0, NEO_VOLSMOKE_LIGHT_SAMPLE_UP );
-		if ( i > 0 && CNeoVolSmokeWorld::PointSolid( pos ) )
+		Vector pos = m_vecSpawn + offsets[i] + Vector( 0, 0, NEO_VOLSMOKE_LIGHT_SAMPLE_UP );
+		if ( i == 0 && CNeoVolSmokeWorld::PointSolid( pos ) )
+		{
+			pos = m_vecSpawn;
+		}
+
+		// Only where the gas went: a point past a thin wall sees the light
+		// of a room the smoke never reaches.
+		if ( i > 0 && ( CNeoVolSmokeWorld::PointSolid( pos ) || !GasReached( pos ) ) )
 		{
 			continue;
 		}
@@ -1266,6 +1276,14 @@ Vector C_NeoVolSmoke::SampleColor( const Vector &origin )
 	}
 
 	return color;
+}
+
+// Whether the fill reached the cell holding the point.
+bool C_NeoVolSmoke::GasReached( const Vector &pos ) const
+{
+	const Vector g = ( pos - m_vecGridMin ) / CNeoSmokeFill::CELL_SIZE;
+	const int c[3] = { (int)floorf( g.x ), (int)floorf( g.y ), (int)floorf( g.z ) };
+	return InBox( c[0], c[1], c[2] ) && m_Fill.IsFinalized( CellIndex( c[0], c[1], c[2] ) );
 }
 
 // Runs the frame's fill work for all volumes, once a frame. One fill at a
