@@ -1037,7 +1037,7 @@ int C_NeoVolSmoke::s_nNextId = 0;
 
 // ---------------------------------------------------------------------------
 C_NeoVolSmoke::C_NeoVolSmoke()
-	: m_nId( s_nNextId++ ), m_flSpawnTime( 0 ), m_pWorld( NULL ), m_pFillJob( NULL ), m_bFillDone( false ), m_flFillSeconds( 0 ), m_flFillPeakFrame( 0 ), m_flFillDoneAge( -1.0f ), m_nLagFrames( 0 ),
+	: m_nId( s_nNextId++ ), m_bHasGrenade( false ), m_flSpawnTime( 0 ), m_pWorld( NULL ), m_pFillJob( NULL ), m_bFillDone( false ), m_flFillSeconds( 0 ), m_flFillPeakFrame( 0 ), m_flFillDoneAge( -1.0f ), m_nLagFrames( 0 ),
 	  m_nBounded( 0 ), m_pRegen( NULL ), m_nPacked( 0 ), m_flNextUpload( 0 ), m_flRegrowEnd( -1.0f ), m_flUploadedFront( 0 ), m_bUploadPending( false ), m_nSlabTiles( 0 ), m_nSlabTilesCulled( 0 ), m_flDistRange( NEO_VOLSMOKE_DIST_RANGE ), m_nAtlasCols( 0 ), m_nAtlasW( 0 ), m_nAtlasH( 0 )
 {
 	for ( int a = 0; a < 3; ++a )
@@ -1088,7 +1088,7 @@ void C_NeoVolSmoke::CarveAll( const Vector &start, const Vector &end, float radi
 static constexpr float NEO_VOLSMOKE_SAME_GRENADE_DIST = 16.0f;
 static constexpr float NEO_VOLSMOKE_SAME_GRENADE_TIME = 0.1f;
 
-C_NeoVolSmoke *C_NeoVolSmoke::CreateForGrenade( const Vector &origin, float spawnTime )
+C_NeoVolSmoke *C_NeoVolSmoke::CreateForGrenade( const Vector &origin, float spawnTime, C_BaseEntity *pGrenade )
 {
 	if ( gpGlobals->curtime - spawnTime >= NEO_VOLSMOKE_FADE_END )
 	{
@@ -1108,6 +1108,12 @@ C_NeoVolSmoke *C_NeoVolSmoke::CreateForGrenade( const Vector &origin, float spaw
 	}
 
 	C_NeoVolSmoke *pVol = Create( origin, spawnTime );
+	if ( pVol )
+	{
+		pVol->m_hGrenade = pGrenade;
+		pVol->m_bHasGrenade = true;
+	}
+
 	DevMsg( "neo_volsmoke: grenade at (%.1f %.1f %.1f) spawned volume %d, age %.2f\n",
 		origin.x, origin.y, origin.z, pVol ? pVol->m_nId : -1, gpGlobals->curtime - spawnTime );
 	return pVol;
@@ -1135,7 +1141,9 @@ void C_NeoVolSmoke::RemoveExpired()
 	const float now = gpGlobals->curtime;
 	for ( int i = s_Volumes.Count() - 1; i >= 0; --i )
 	{
-		if ( now - s_Volumes[i]->m_flSpawnTime > NEO_VOLSMOKE_FADE_END )
+		const C_NeoVolSmoke *pVol = s_Volumes[i];
+		const bool grenadeGone = pVol->m_bHasGrenade && !pVol->m_hGrenade.Get();
+		if ( grenadeGone || now - pVol->m_flSpawnTime > NEO_VOLSMOKE_FADE_END )
 		{
 			s_Volumes[i]->Release();
 		}

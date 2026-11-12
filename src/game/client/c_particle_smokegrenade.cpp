@@ -356,7 +356,7 @@ void C_ParticleSmokeGrenade::OnDataChanged( DataUpdateType_t updateType )
 		{
 			// Bloom and fade run from the server's spawn time, so a client that
 			// sees the grenade late gets the same cloud as everyone else.
-			C_NeoVolSmoke::CreateForGrenade( GetAbsOrigin(), m_flSpawnTime );
+			C_NeoVolSmoke::CreateForGrenade( GetAbsOrigin(), m_flSpawnTime, this );
 			return; // skip the legacy particle system entirely
 		}
 #endif
