@@ -46,8 +46,8 @@ extern ConVar muzzleflash_light;
 #ifdef NEO
 // Debris is cosmetic: keep it only long enough to be seen settling.
 static constexpr float NEO_TE_DEBRIS_FADE_DELAY = 4.0f;
-#endif // NEO
 
+#endif // NEO
 //Precache the effects
 #ifndef TF_CLIENT_DLL
 CLIENTEFFECT_REGISTER_BEGIN( PrecacheEffectMuzzleFlash )
@@ -1184,8 +1184,8 @@ C_PhysPropClientside *CTempEnts::PhysicsProp( const model_t *model, int skin, co
 		pEntity->SetCollisionGroup( COLLISION_GROUP_DEBRIS );
 		pEntity->StartFadeOut( NEO_TE_DEBRIS_FADE_DELAY );
 	}
-#endif // NEO
 
+#endif // NEO
 	return pEntity;
 }
 

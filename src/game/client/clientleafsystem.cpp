@@ -1782,8 +1782,8 @@ void CClientLeafSystem::SortEntities( const Vector &vecRenderOrigin, const Vecto
 		{
 			continue;
 		}
-#endif // NEO
 
+#endif // NEO
 		// Compute the center of the object (needed for translucent brush models)
 		Vector boxcenter;
 		Vector mins,maxs;
