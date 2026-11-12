@@ -137,6 +137,8 @@ private:
 	// What shows through the smoke after the volume draws
 	static float OpticalDepth( const Vector &eye, const Vector &point );
 	float PathOpticalDepth( const Vector &eye, const Vector &point ) const;
+	static C_NeoVolSmoke *Owner( const Vector &point );
+	void DrawRevealed( IMatRenderContext *pRenderContext );
 
 private:
 	static CUtlVector< C_NeoVolSmoke * > s_Volumes;
