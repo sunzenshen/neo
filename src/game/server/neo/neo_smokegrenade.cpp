@@ -85,6 +85,11 @@ int CNEOGrenadeSmoke::OnTakeDamage(const CTakeDamageInfo& inputInfo)
 
 void CNEOGrenadeSmoke::Splash()
 {
+	if (!sv_neo_smoke_volumetric.GetBool())
+	{
+		return;
+	}
+
 	// Without this the grenade sinks to the pool floor and the smoke starts there.
 	// Holding it just under the surface keeps the cloud where the grenade went in.
 	const Vector vecOrigin = GetAbsOrigin();
@@ -175,7 +180,15 @@ void CNEOGrenadeSmoke::Detonate(void)
 	}
 	else if (gpGlobals->curtime - m_flSmokeBloomTime >= sv_neo_smoke_bloom_duration.GetFloat())
 	{
-		BecomeDebris();
+		if (sv_neo_smoke_volumetric.GetBool())
+		{
+			BecomeDebris();
+		}
+		else
+		{
+			SetNextThink(TICK_NEVER_THINK);
+		}
+
 		return;
 	}
 	
