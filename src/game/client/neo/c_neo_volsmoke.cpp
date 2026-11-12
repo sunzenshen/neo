@@ -705,29 +705,11 @@ void C_NeoVolSmoke::CarveAll( const Vector &start, const Vector &end, float radi
 	}
 }
 
-// The server spawns several particle entities per grenade at the same spot
-// and time; they share one volume. The client can see their origins a
-// little apart, so the match allows less than two cells.
-static constexpr float NEO_VOLSMOKE_SAME_GRENADE_DIST = 16.0f;
-static constexpr float NEO_VOLSMOKE_SAME_GRENADE_TIME = 0.1f;
-
 C_NeoVolSmoke *C_NeoVolSmoke::CreateForGrenade( const Vector &origin, float spawnTime, C_BaseEntity *pGrenade )
 {
 	if ( gpGlobals->curtime - spawnTime >= NEO_VOLSMOKE_FADE_END )
 	{
 		return NULL;
-	}
-
-	for ( int i = 0; i < s_Volumes.Count(); ++i )
-	{
-		const C_NeoVolSmoke *pVol = s_Volumes[i];
-		if ( fabsf( pVol->m_flSpawnTime - spawnTime ) <= NEO_VOLSMOKE_SAME_GRENADE_TIME
-			&& pVol->m_vecSpawn.DistToSqr( origin ) <= NEO_VOLSMOKE_SAME_GRENADE_DIST * NEO_VOLSMOKE_SAME_GRENADE_DIST )
-		{
-			DevMsg( "neo_volsmoke: grenade at (%.1f %.1f %.1f) shares volume %d (%.1f u apart)\n",
-				origin.x, origin.y, origin.z, pVol->m_nId, pVol->m_vecSpawn.DistTo( origin ) );
-			return NULL;
-		}
 	}
 
 	C_NeoVolSmoke *pVol = Create( origin, spawnTime );
