@@ -11,7 +11,7 @@
 ConVar sv_neo_smoke_volumetric( "sv_neo_smoke_volumetric", "0", FCVAR_REPLICATED | FCVAR_NOTIFY,
 	"Smoke grenades: 0 = legacy particle smoke, 1 = volumetric smoke. Applies from the next detonation.", true, 0.0f, true, 1.0f );
 
-static constexpr int NEO_SMOKE_COARSE_BLOCK = CNeoSmokeFill::BLOCK_ALIGN; // cells
+static constexpr int NEO_SMOKE_COARSE_BLOCK = CNEOSmokeFill::BLOCK_ALIGN; // cells
 static constexpr int NEO_SMOKE_FINE_BLOCK = 2;                            // cells
 static constexpr int NEO_SMOKE_FINE_PER_AXIS = NEO_SMOKE_COARSE_BLOCK / NEO_SMOKE_FINE_BLOCK;
 static constexpr int NEO_SMOKE_FINE_PER_COARSE = NEO_SMOKE_FINE_PER_AXIS * NEO_SMOKE_FINE_PER_AXIS * NEO_SMOKE_FINE_PER_AXIS;
@@ -24,14 +24,14 @@ static constexpr int NEO_SMOKE_COARSE_EMPTY = -1;
 
 static constexpr int NEO_SMOKE_AUDIT_MAX_WARNINGS = 10; // per volume
 
-enum NeoSmokeBlockState_t
+enum NEOSmokeBlockState_t
 {
 	NEO_SMOKE_BLOCK_UNKNOWN = 0,
 	NEO_SMOKE_BLOCK_EMPTY,
 	NEO_SMOKE_BLOCK_TOUCHED,
 };
 
-CNeoSmokeWorld::CNeoSmokeWorld( const Vector &gridMin, const int boxSize[3], const int seedCorner[3], const int latticeLo[3], const int latticeHi[3] )
+CNEOSmokeWorld::CNEOSmokeWorld( const Vector &gridMin, const int boxSize[3], const int seedCorner[3], const int latticeLo[3], const int latticeHi[3] )
 	: m_vecGridMin( gridMin ), m_nTraces( 0 ), m_nAuditChecks( 0 ), m_nAuditDisagree( 0 )
 {
 	int blocks = 1;
@@ -50,7 +50,7 @@ CNeoSmokeWorld::CNeoSmokeWorld( const Vector &gridMin, const int boxSize[3], con
 	Q_memset( m_Coarse.Base(), 0, m_Coarse.Count() * sizeof( int ) );
 }
 
-bool CNeoSmokeWorld::PointIn( const Vector &pos, int mask )
+bool CNEOSmokeWorld::PointIn( const Vector &pos, int mask )
 {
 	Ray_t ray;
 	ray.Init( pos, pos );
@@ -60,12 +60,12 @@ bool CNeoSmokeWorld::PointIn( const Vector &pos, int mask )
 	return tr.startsolid;
 }
 
-bool CNeoSmokeWorld::PointSolid( const Vector &pos )
+bool CNEOSmokeWorld::PointSolid( const Vector &pos )
 {
 	return PointIn( pos, NEO_VOLSMOKE_FILL_MASK );
 }
 
-bool CNeoSmokeWorld::CellSolid( int x, int y, int z )
+bool CNEOSmokeWorld::CellSolid( int x, int y, int z )
 {
 	bool solid = false;
 	const bool inEmpty = InEmptyBlock( x, y, z );
@@ -83,7 +83,7 @@ bool CNeoSmokeWorld::CellSolid( int x, int y, int z )
 	return solid;
 }
 
-bool CNeoSmokeWorld::LinkBlocked( int x, int y, int z, int axis )
+bool CNEOSmokeWorld::LinkBlocked( int x, int y, int z, int axis )
 {
 	int n[3] = { x, y, z };
 	++n[axis];
@@ -109,7 +109,7 @@ bool CNeoSmokeWorld::LinkBlocked( int x, int y, int z, int axis )
 	return blocked;
 }
 
-bool CNeoSmokeWorld::SeedBlocked( int x, int y, int z )
+bool CNEOSmokeWorld::SeedBlocked( int x, int y, int z )
 {
 	++m_nTraces;
 	Ray_t ray;
@@ -120,13 +120,13 @@ bool CNeoSmokeWorld::SeedBlocked( int x, int y, int z )
 	return tr.startsolid || tr.fraction < 1.0f;
 }
 
-bool CNeoSmokeWorld::SeedInWater()
+bool CNEOSmokeWorld::SeedInWater()
 {
 	++m_nTraces;
 	return PointIn( Grenade(), NEO_VOLSMOKE_WATER_MASK );
 }
 
-bool CNeoSmokeWorld::CellWater( int x, int y, int z )
+bool CNEOSmokeWorld::CellWater( int x, int y, int z )
 {
 	++m_nTraces;
 	return PointIn( Center( x, y, z ), NEO_VOLSMOKE_WATER_MASK );
@@ -134,7 +134,7 @@ bool CNeoSmokeWorld::CellWater( int x, int y, int z )
 
 // The block answered "open"; the direct query said otherwise. The direct
 // answer is the one returned, so an audited fill grows the old field.
-void CNeoSmokeWorld::Audit( bool directSolid, int x, int y, int z, int axis )
+void CNEOSmokeWorld::Audit( bool directSolid, int x, int y, int z, int axis )
 {
 	++m_nAuditChecks;
 	if ( !directSolid )
@@ -150,11 +150,11 @@ void CNeoSmokeWorld::Audit( bool directSolid, int x, int y, int z, int axis )
 
 	// May run on a fill worker, so it only records; the owner reports on the
 	// main thread.
-	const NeoSmokeAuditCell_t cell = { { x, y, z }, axis };
+	const NEOSmokeAuditCell_t cell = { { x, y, z }, axis };
 	m_AuditCells.AddToTail( cell );
 }
 
-bool CNeoSmokeWorld::InEmptyBlock( int x, int y, int z )
+bool CNEOSmokeWorld::InEmptyBlock( int x, int y, int z )
 {
 	if ( !InLattice( x, y, z ) )
 	{
@@ -203,10 +203,10 @@ bool CNeoSmokeWorld::InEmptyBlock( int x, int y, int z )
 }
 
 // Does the cube of b cells whose low corner is cell (x, y, z) touch the world?
-bool CNeoSmokeWorld::BoxTouchesWorld( int x, int y, int z, int b )
+bool CNEOSmokeWorld::BoxTouchesWorld( int x, int y, int z, int b )
 {
 	++m_nTraces;
-	const float c = CNeoSmokeFill::CELL_SIZE;
+	const float c = CNEOSmokeFill::CELL_SIZE;
 	const float size = b * c;
 	const Vector lo = m_vecGridMin + Vector( x * c, y * c, z * c );
 	const Vector half( 0.5f * size, 0.5f * size, 0.5f * size );

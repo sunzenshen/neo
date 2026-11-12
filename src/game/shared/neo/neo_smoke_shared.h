@@ -29,7 +29,7 @@ static constexpr float NEO_VOLSMOKE_PATH_STEP = 16.0f;
 
 // Path lengths are stored up to this length, or up to the front when it is
 // farther, so a short field keeps its precision.
-static constexpr float NEO_VOLSMOKE_DIST_RANGE = 64 * CNeoSmokeFill::CELL_SIZE;
+static constexpr float NEO_VOLSMOKE_DIST_RANGE = 64 * CNEOSmokeFill::CELL_SIZE;
 
 // Width of the soft edge behind the expanding front.
 static constexpr float NEO_VOLSMOKE_EDGE = 27.0f;

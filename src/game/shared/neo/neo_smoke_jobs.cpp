@@ -71,7 +71,7 @@ void NEOSmokeFillPoolShutdown()
 	s_pSmokeFillPool = NULL;
 }
 
-void NEOSmokeFillRun( CNeoSmokeFill &fill, const CInterlockedInt &cancel )
+void NEOSmokeFillRun( CNEOSmokeFill &fill, const CInterlockedInt &cancel )
 {
 	while ( !fill.IsDone() && cancel == 0 )
 	{
