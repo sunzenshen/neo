@@ -249,9 +249,6 @@ static constexpr float NEO_VOLSMOKE_PATH_STEP = 16.0f;
 static constexpr float NEO_VOLSMOKE_FIRE_SILHOUETTE = 0.15f;
 static constexpr float NEO_VOLSMOKE_CLOAK_SILHOUETTE = 0.15f;
 
-// The legacy smoke's thermal-vision transparency.
-extern ConVar r_neo_thermal_smoke_alpha;
-
 // World-only: no props or entities, so every client sees the same walls.
 // Gas does not enter water; it spreads over the surface as over a floor.
 static constexpr int NEO_VOLSMOKE_WATER_MASK = CONTENTS_WATER | CONTENTS_SLIME;
@@ -2339,13 +2336,7 @@ static void SetIntVar( IMaterial *pMat, const char *name, int i )
 float C_NeoVolSmoke::DrawExtinction() const
 {
 	const float age = gpGlobals->curtime - m_flSpawnTime;
-	float extinction = NEO_VOLSMOKE_EXTINCTION * VolSmokeBloom( age ) * VolSmokeFade( age );
-	if ( g_SmokeFogOverlayThermalOverride )
-	{
-		extinction *= r_neo_thermal_smoke_alpha.GetFloat();
-	}
-
-	return extinction;
+	return NEO_VOLSMOKE_EXTINCTION * VolSmokeBloom( age ) * VolSmokeFade( age );
 }
 
 // The sphere about the gas seed that holds all smoke. Returns its radius.
@@ -2485,6 +2476,14 @@ int C_NeoVolSmoke::DrawModel( int flags )
 
 	// The scene depth the shader clips against is only current in the main view.
 	if ( CurrentViewID() != VIEW_MAIN )
+	{
+		return 0;
+	}
+
+	// Thermal vision sees through smoke. Any smoke drawn over a hot body
+	// lowers its brightness, which the thermal color ramp turns from white
+	// to yellow.
+	if ( g_SmokeFogOverlayThermalOverride )
 	{
 		return 0;
 	}
@@ -2959,14 +2958,8 @@ static C_BasePlayer *MuzzleFlashOwner( const dlight_t *pLight )
 // What the smoke reveals, drawn over the volume: the point of each muzzle
 // flash, the players the flash lights, and cloaked bodies. Flash and players
 // scale with the smoke between them and the eye, so they fade with depth.
-// Thermal vision shows none of it, as legacy.
 void C_NeoVolSmoke::DrawRevealed( IMatRenderContext *pRenderContext )
 {
-	if ( g_SmokeFogOverlayThermalOverride )
-	{
-		return;
-	}
-
 	const Vector &eye = CurrentViewOrigin();
 	const float overlayClear = 1.0f - clamp( g_SmokeFogOverlayAlpha, 0.0f, 1.0f );
 	float silhouette[MAX_PLAYERS + 1] = {};
@@ -3072,7 +3065,7 @@ bool C_NeoVolSmoke::BuildCullGrid( IMatRenderContext *pRenderContext, const Vect
 		return false;
 	}
 
-	// Thin smoke (bloom, fade, thermal vision) never reaches the opaque depth.
+	// Thin smoke (bloom, fade) never reaches the opaque depth.
 	const float extinction = DrawExtinction();
 	if ( extinction * ( m_vecSmokeMax - m_vecSmokeMin ).Length() < NEO_VOLSMOKE_CULL_OPAQUE )
 	{
