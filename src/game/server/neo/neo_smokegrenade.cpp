@@ -4,6 +4,7 @@
 
 #include "neo_tracefilter_collisiongroupdelta.h"
 #include "particle_smokegrenade.h"
+#include "tempentity.h"
 
 #include "mathlib/vector.h"
 
@@ -159,11 +160,22 @@ void CNEOGrenadeSmoke::Detonate(void)
 	}
 	else if (gpGlobals->curtime - m_flSmokeBloomTime >= sv_neo_smoke_bloom_duration.GetFloat())
 	{
-		SetNextThink(TICK_NEVER_THINK);
+		BecomeDebris();
 		return;
 	}
 	
 	SetNextThink(gpGlobals->curtime + 1.0f);
+}
+
+void CNEOGrenadeSmoke::BecomeDebris()
+{
+	// The spent shell would otherwise stay networked and drawn until the round ends.
+	// Clients replace it with a local physics prop, so it costs no edict.
+	CPVSFilter filter(GetAbsOrigin());
+	te->PhysicsProp(filter, 0.0f, GetModelIndex(), m_nSkin, GetAbsOrigin(), GetAbsAngles(), vec3_origin,
+		TE_PHYSPROPFLAG_DEBRIS, 0);
+
+	UTIL_Remove(this);
 }
 
 void CNEOGrenadeSmoke::SetupParticles(size_t number)
