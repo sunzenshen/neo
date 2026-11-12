@@ -57,8 +57,8 @@ public:
 	static void StopAllFills();
 
 	// Releases the volumes whose time is over or whose grenade is gone. Called
-	// once a frame, outside
-	// the client think, which cannot release the entity it runs.
+	// once a frame, outside the client think, which cannot release the entity
+	// it runs.
 	static void RemoveExpired();
 
 	static void PrintAllStats();
@@ -67,11 +67,6 @@ public:
 	// The translucent sort key of a volume: the view depth of the nearest
 	// corner of its smoke box. False when the renderable is not a volume.
 	static bool SortDepth( IClientRenderable *pRenderable, const Vector &viewOrigin, const Vector &viewForward, float &depth );
-
-	// The share of a bright flash at a point that the smoke of every volume
-	// between the eye and the point lets through: 1 in clear air, toward 0
-	// deep behind smoke.
-	static float FlashFactor( const Vector &eye, const Vector &point );
 
 	static int  LiveCount() { return s_Volumes.Count(); }
 	static int  NextId() { return s_nNextId; }
@@ -84,12 +79,12 @@ public:
 	virtual void GetRenderBounds( Vector &mins, Vector &maxs ) override;
 	virtual int  DrawModel( int flags ) override;
 
+private:
 	void PrintStats() const;
 	unsigned long long ClientFieldHash() const;
 	unsigned long long LatticeFieldHash() const;
 	unsigned long long AtlasHash() const;
 
-private:
 	// The networked volume entity checks its cloud against the server's field.
 	friend class C_NEOSmokeVolumeEnt;
 

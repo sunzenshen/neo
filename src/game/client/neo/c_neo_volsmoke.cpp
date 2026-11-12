@@ -116,6 +116,10 @@ static constexpr float NEO_VOLSMOKE_REGROW_TIME = 4.0f;
 static constexpr float NEO_VOLSMOKE_CARVE_RADIUS = 24.0f;
 static constexpr float NEO_VOLSMOKE_EXPLODE_RADIUS = 110.0f;
 
+// A carve segment shorter than this is a sphere about its start, which
+// keeps the projection onto it from dividing by zero.
+static constexpr float NEO_VOLSMOKE_POINT_CARVE_LEN_SQR = 1e-6f;
+
 // All smoke lies inside a sphere about the gas seed this much wider than the
 // front: a gas path is never shorter than the straight line from the seed,
 // and a trilinear lookup spreads a cell's path length up to sqrt(3) cells.
@@ -452,7 +456,9 @@ public:
 		const int w = pVTFTexture->Width();
 		const int h = pVTFTexture->Height();
 		if ( w != m_nWidth || h != m_nHeight )
+		{
 			return;
+		}
 
 		unsigned char *pDst = pVTFTexture->ImageData( 0, 0, 0 );
 		const int dstPitch = pVTFTexture->RowSizeInBytes( 0 );
@@ -487,7 +493,7 @@ private:
 // ---------------------------------------------------------------------------
 // Look noise texture, shared by all volumes: random values on a lattice that
 // wraps, R one layer and G the layer above it, which the shader finds
-// NEO_VOLSMOKE_NOISE_SHIFT texels away. Must match NOISE_SIZE and
+// NEO_VOLSMOKE_NOISE_SHIFT_X / _Y texels away. Must match NOISE_SIZE and
 // NOISE_Z_SHIFT in neo_volsmoke_ps30.fxc.
 // ---------------------------------------------------------------------------
 static constexpr int NEO_VOLSMOKE_NOISE_SIZE = 64;
@@ -1705,7 +1711,9 @@ void C_NeoVolSmoke::Carve( const Vector &start, const Vector &end, float radius 
 	Ray_t ray;
 	ray.Init( start, end );
 	if ( !IsBoxIntersectingRay( mins, maxs, ray ) )
+	{
 		return;
+	}
 
 	const Vector seg = end - start;
 	const float  segLenSq = seg.LengthSqr();
@@ -1732,12 +1740,17 @@ void C_NeoVolSmoke::Carve( const Vector &start, const Vector &end, float radius 
 			{
 				const int i = CellIndex( x, y, z );
 				if ( !m_Fill.IsFinalized( i ) )
+				{
 					continue;
+				}
 
 				const Vector c = m_vecGridMin + Vector( ( x + 0.5f ) * cell, ( y + 0.5f ) * cell, ( z + 0.5f ) * cell );
 				float t = 0.0f;
-				if ( segLenSq > 1e-6f )
+				if ( segLenSq > NEO_VOLSMOKE_POINT_CARVE_LEN_SQR )
+				{
 					t = clamp( DotProduct( c - start, seg ) / segLenSq, 0.0f, 1.0f );
+				}
+
 				const Vector closest = start + seg * t;
 				if ( ( c - closest ).LengthSqr() <= r2 )
 				{
@@ -2517,11 +2530,6 @@ void C_NeoVolSmoke::PrintOpticalDepth( const Vector &from, const Vector &to )
 {
 	Msg( "neo_volsmoke_depth: (%g %g %g) -> (%g %g %g) depth %.4f (%d volumes)\n",
 		from.x, from.y, from.z, to.x, to.y, to.z, OpticalDepth( from, to ), s_Volumes.Count() );
-}
-
-float C_NeoVolSmoke::FlashFactor( const Vector &eye, const Vector &point )
-{
-	return expf( -NEO_VOLSMOKE_FLASH_DEPTH_SHARE * OpticalDepth( eye, point ) );
 }
 
 // How strongly a flash, or what it lights, shows through smoke of optical
@@ -3386,7 +3394,9 @@ static bool ViewTrace( trace_t &tr, float dist )
 {
 	C_BasePlayer *pPlayer = C_BasePlayer::GetLocalPlayer();
 	if ( !pPlayer )
+	{
 		return false;
+	}
 
 	Vector fwd;
 	pPlayer->EyeVectors( &fwd );
@@ -3398,17 +3408,25 @@ static bool ViewTrace( trace_t &tr, float dist )
 // About where a resting grenade's origin sits above the surface.
 static constexpr float NEO_VOLSMOKE_SPAWN_LIFT = 4.0f;
 
+// How far along the view the debug commands look for a surface.
+static constexpr float NEO_VOLSMOKE_SPAWN_REACH = 2048.0f;
+static constexpr float NEO_VOLSMOKE_CARVE_REACH = 4096.0f;
+
 CON_COMMAND_F( neo_volsmoke_spawn, "Spawn a volumetric smoke at the crosshair, as a grenade resting there. Args: [age in seconds]", FCVAR_CHEAT )
 {
 	trace_t tr;
-	if ( !ViewTrace( tr, 2048.0f ) )
+	if ( !ViewTrace( tr, NEO_VOLSMOKE_SPAWN_REACH ) )
+	{
 		return;
+	}
 
 	const float age = args.ArgC() > 1 ? atof( args[1] ) : 0.0f;
 
 	Vector origin = tr.endpos + tr.plane.normal * NEO_VOLSMOKE_SPAWN_LIFT;
 	if ( tr.fraction >= 1.0f )
+	{
 		origin = tr.endpos;
+	}
 
 	C_NeoVolSmoke *p = C_NeoVolSmoke::Create( origin, gpGlobals->curtime - age );
 	Msg( "neo_volsmoke: %s at (%.0f %.0f %.0f), age %.1f, %d live\n", p ? "spawned" : "FAILED", origin.x, origin.y, origin.z, age, C_NeoVolSmoke::LiveCount() );
@@ -3417,16 +3435,22 @@ CON_COMMAND_F( neo_volsmoke_spawn, "Spawn a volumetric smoke at the crosshair, a
 CON_COMMAND_F( neo_volsmoke_carve, "Carve a bullet-sized hole through smoke along your view.", FCVAR_CHEAT )
 {
 	trace_t tr;
-	if ( !ViewTrace( tr, 4096.0f ) )
+	if ( !ViewTrace( tr, NEO_VOLSMOKE_CARVE_REACH ) )
+	{
 		return;
+	}
+
 	C_NeoVolSmoke::CarveAll( tr.startpos, tr.endpos, NEO_VOLSMOKE_CARVE_RADIUS );
 }
 
 CON_COMMAND_F( neo_volsmoke_explode, "Carve an explosion-sized sphere out of smoke at the crosshair.", FCVAR_CHEAT )
 {
 	trace_t tr;
-	if ( !ViewTrace( tr, 4096.0f ) )
+	if ( !ViewTrace( tr, NEO_VOLSMOKE_CARVE_REACH ) )
+	{
 		return;
+	}
+
 	C_NeoVolSmoke::CarveAll( tr.endpos, tr.endpos, NEO_VOLSMOKE_EXPLODE_RADIUS );
 }
 
