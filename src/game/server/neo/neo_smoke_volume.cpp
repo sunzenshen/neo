@@ -81,14 +81,6 @@ static constexpr int NEO_SMOKE_SERVER_CELLS_PER_FILL = 700;
 static constexpr int NEO_SMOKE_SERVER_CELLS_PER_TICK = 2800;
 static constexpr int NEO_SMOKE_SERVER_QUERIES_PER_CELL = 8;
 
-// The client's step for its CPU smoke path; the same step gives the same
-// sum.
-static constexpr float NEO_SMOKE_PATH_STEP = 16.0f;
-
-// A cell beside the gas without a gas neighbor reads this path length, as
-// the client's empty texel does.
-static constexpr float NEO_SMOKE_DIST_RANGE = 64 * CNeoSmokeFill::CELL_SIZE;
-
 class CNeoSmokeVolume;
 
 // Where a sight line runs through one volume's box, and what scales the
@@ -325,7 +317,7 @@ void CNeoSmokeVolume::PrepareField()
 	m_Fill.BoxSize( m_nBox );
 	m_Fill.BoxSeedCorner( m_nSeedCorner );
 	m_flFrontUnits = CNeoSmokeFill::DistToUnits( m_Fill.FrontDist() );
-	m_flDistRange = MAX( NEO_SMOKE_DIST_RANGE, m_flFrontUnits );
+	m_flDistRange = MAX( NEO_VOLSMOKE_DIST_RANGE, m_flFrontUnits );
 
 	int lo[3] = { m_nBox[0], m_nBox[1], m_nBox[2] };
 	int hi[3] = { -1, -1, -1 };
@@ -531,9 +523,9 @@ float CNeoSmokeVolume::PathOpticalDepth( const Vector &from, const Vector &to ) 
 	}
 
 	float tau = 0.0f;
-	for ( float t = span.t0; t < span.t1; t += NEO_SMOKE_PATH_STEP )
+	for ( float t = span.t0; t < span.t1; t += NEO_VOLSMOKE_PATH_STEP )
 	{
-		const float step = MIN( NEO_SMOKE_PATH_STEP, span.t1 - t );
+		const float step = MIN( NEO_VOLSMOKE_PATH_STEP, span.t1 - t );
 		tau += SpanExtinction( from + unit * ( t + 0.5f * step ), span ) * step;
 	}
 
@@ -731,9 +723,9 @@ float NEOSmoke_SightBlockFraction( const Vector &from, const Vector &to )
 	}
 
 	float tau = 0.0f;
-	for ( float t = start; t < end; t += NEO_SMOKE_PATH_STEP )
+	for ( float t = start; t < end; t += NEO_VOLSMOKE_PATH_STEP )
 	{
-		const float step = MIN( NEO_SMOKE_PATH_STEP, end - t );
+		const float step = MIN( NEO_VOLSMOKE_PATH_STEP, end - t );
 		const float mid = t + 0.5f * step;
 		const Vector pos = from + unit * mid;
 

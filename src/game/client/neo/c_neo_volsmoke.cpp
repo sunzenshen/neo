@@ -62,10 +62,6 @@ enum VolSmokeAtlasByte_t
 // middle of a cloud on open floor.
 static constexpr float NEO_VOLSMOKE_SPIN_HEIGHT = 8 * CNeoSmokeFill::CELL_SIZE;
 
-// Path lengths are stored up to this length, or up to the front when it is
-// farther, so a short field keeps its precision.
-static constexpr float NEO_VOLSMOKE_DIST_RANGE = 64 * CNeoSmokeFill::CELL_SIZE;
-
 // The atlas changes only while the fill, the bloom light or a regrow runs;
 // it is uploaded then, at most this often, and never after.
 static constexpr float NEO_VOLSMOKE_UPLOAD_HZ = 15.0f;
@@ -225,7 +221,6 @@ static constexpr float NEO_VOLSMOKE_FLASH_POINT_RADIUS = 12.0f;
 // The muzzle flash sprite's orange, as the legacy sprite shows it.
 static const Vector NEO_VOLSMOKE_FLASH_POINT_TINT( 1.0f, 0.84f, 0.5f );
 static constexpr float NEO_VOLSMOKE_FLASH_MIN = 1.0f / 255.0f;
-static constexpr float NEO_VOLSMOKE_PATH_STEP = 16.0f;
 
 // Silhouette strength of a player the smoke hides: while a muzzle flash
 // lights them, and for a cloaked body the smoke flows around.
