@@ -70,6 +70,7 @@ const float4 g_DLight1Color : register( c16 ); // as c14, second light
 #define PUFF_SHADE  0.45f   // light lost in a crevice, where the noise bites
 #define FLASH_GRAIN_SCALE 4.0f // grain of a dynamic light's glow, against the billows
 #define FLASH_GRAIN 0.6f       // its strength: the glow varies by this share either way
+#define FLASH_CORE  0.0625f    // (core radius / reach)^2: the glow halves this close to the light
 
 // Noise texture layout, set by the client: layer z of the lattice is the
 // texture shifted by z times NOISE_Z_SHIFT texels.
@@ -142,17 +143,25 @@ float4 BlendOutput( float3 linearColor, float alpha )
 
 // Light the dynamic lights (muzzle flashes, explosions) add at a point, in
 // linear light after the client's darkness factor, so a flash reads stronger
-// in a dark cloud than in a sunlit one. The falloff is the legacy particles'
-// one. The march weights it by the sample's opacity and the transmittance in
-// front, like the rest of the light.
+// in a dark cloud than in a sunlit one. The march weights it by the sample's
+// opacity and the transmittance in front, like the rest of the light.
 #if DLIGHTS > 0
+// Light scattered from a point in dense smoke: an inverse square with a
+// small core, so it is hot at the light and falls steeply, windowed to
+// zero at the reach (x = distance^2 / reach^2).
+float Falloff( float x )
+{
+	float window = saturate( 1.0f - x );
+	return window * window * FLASH_CORE / ( x + FLASH_CORE );
+}
+
 float3 DynamicLight( float3 p )
 {
 	float3 d0 = p - g_DLight0Pos.xyz;
-	float3 add = g_DLight0Color.rgb * saturate( 1.0f - dot( d0, d0 ) * g_DLight0Pos.w );
+	float3 add = g_DLight0Color.rgb * Falloff( dot( d0, d0 ) * g_DLight0Pos.w );
 #if DLIGHTS > 1
 	float3 d1 = p - g_DLight1Pos.xyz;
-	add += g_DLight1Color.rgb * saturate( 1.0f - dot( d1, d1 ) * g_DLight1Pos.w );
+	add += g_DLight1Color.rgb * Falloff( dot( d1, d1 ) * g_DLight1Pos.w );
 #endif
 	return add;
 }
