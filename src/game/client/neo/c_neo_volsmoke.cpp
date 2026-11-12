@@ -135,7 +135,7 @@ static constexpr float NEO_VOLSMOKE_NOMINAL_RADIUS = CNEOSmokeFill::DOME_RADIUS;
 // Look (cosmetic, may differ between clients).
 // The legacy particle color: a 0.5-0.6 gray times the light, desaturated
 // halfway to mid gray. It is a display value; the shader works in linear.
-static constexpr float NEO_VOLSMOKE_GREY = 0.55f;
+static constexpr float NEO_VOLSMOKE_GRAY = 0.55f;
 static constexpr float NEO_VOLSMOKE_DESATURATE = 0.5f;
 static constexpr float NEO_VOLSMOKE_DISPLAY_GAMMA = 2.2f;
 
@@ -592,7 +592,6 @@ C_NeoVolSmoke::~C_NeoVolSmoke()
 {
 	StopFill();
 	Shutdown();
-	delete m_pWorld;
 	s_Volumes.FindAndRemove( this );
 }
 
@@ -863,13 +862,13 @@ Vector C_NeoVolSmoke::SampleColor() const
 	Vector color;
 	for ( int k = 0; k < 3; ++k )
 	{
-		const float display = ( NEO_VOLSMOKE_GREY * clamp( light[k], 0.0f, 1.0f ) + NEO_VOLSMOKE_DESATURATE ) * 0.5f;
+		const float display = ( NEO_VOLSMOKE_GRAY * Clamp( light[k], 0.0f, 1.0f ) + NEO_VOLSMOKE_DESATURATE ) * 0.5f;
 		color[k] = powf( display, NEO_VOLSMOKE_DISPLAY_GAMMA );
 	}
 
-	const Vector clamped( clamp( light.x, 0.0f, 1.0f ), clamp( light.y, 0.0f, 1.0f ), clamp( light.z, 0.0f, 1.0f ) );
+	const Vector clamped( Clamp( light.x, 0.0f, 1.0f ), Clamp( light.y, 0.0f, 1.0f ), Clamp( light.z, 0.0f, 1.0f ) );
 	const float luminance = clamped.Dot( NEO_VOLSMOKE_LUMINANCE );
-	const float dark = clamp( ( luminance + NEO_VOLSMOKE_DARK_FLOOR ) / NEO_VOLSMOKE_DARK_KNEE, 0.0f, 1.0f );
+	const float dark = Clamp( ( luminance + NEO_VOLSMOKE_DARK_FLOOR ) / NEO_VOLSMOKE_DARK_KNEE, 0.0f, 1.0f );
 	if ( dark < 1.0f )
 	{
 		color *= dark;
@@ -1105,7 +1104,7 @@ float C_NeoVolSmoke::DensityAt( const Vector &pos, float front ) const
 			continue;
 		}
 
-		const float edge = clamp( ( front - CNEOSmokeFill::DistToUnits( m_Fill.Dist( i ) ) ) / NEO_VOLSMOKE_EDGE, 0.0f, 1.0f );
+		const float edge = Clamp( ( front - CNEOSmokeFill::DistToUnits( m_Fill.Dist( i ) ) ) / NEO_VOLSMOKE_EDGE, 0.0f, 1.0f );
 		density += w * edge * edge * ( 3.0f - 2.0f * edge ) * CellWeight( i );
 	}
 
@@ -1148,7 +1147,7 @@ void C_NeoVolSmoke::AddInsideOverlay( float front, float now )
 
 	const float age = now - m_flSpawnTime;
 	const float density = sum / ( side * side * side );
-	const float share = clamp( density / NEO_VOLSMOKE_OVERLAY_FULL, 0.0f, 1.0f );
+	const float share = Clamp( density / NEO_VOLSMOKE_OVERLAY_FULL, 0.0f, 1.0f );
 	// The overlay is a display color: the cloud's own, so the view keeps
 	// its brightness on walking in, dark in a dark room.
 	Vector display;
@@ -1170,21 +1169,21 @@ float C_NeoVolSmoke::CellWeight( int idx ) const
 
 static unsigned char VolSmokeByte( float v )
 {
-	return (unsigned char)( clamp( v, 0.0f, 1.0f ) * 255.0f + 0.5f );
+	return (unsigned char)( Clamp( v, 0.0f, 1.0f ) * 255.0f + 0.5f );
 }
 
 static unsigned char VolSmokeWallByte( float distance )
 {
 	// Rounded down: a face is never placed past where it is.
 	const float steps = floorf( distance * NEO_VOLSMOKE_WALL_STEPS_PER_UNIT ) + NEO_VOLSMOKE_WALL_ZERO_BYTE;
-	return (unsigned char)clamp( steps, 0.0f, 255.0f );
+	return (unsigned char)Clamp( steps, 0.0f, 255.0f );
 }
 
 // Smoke left at a point by the wall distance read from the atlas.
 static float VolSmokeWallCut( float wallByte )
 {
 	const float distance = ( wallByte - NEO_VOLSMOKE_WALL_ZERO_BYTE ) / NEO_VOLSMOKE_WALL_STEPS_PER_UNIT;
-	return clamp( distance - NEO_VOLSMOKE_WALL_MARGIN, 0.0f, 1.0f );
+	return Clamp( distance - NEO_VOLSMOKE_WALL_MARGIN, 0.0f, 1.0f );
 }
 
 // Byte offset of a cell's texel: slice z lives in tile ( z % cols, z / cols ).
@@ -1554,7 +1553,6 @@ void C_NeoVolSmoke::ClientThink()
 	}
 
 	PackNewCells();
-
 	SweepLight();
 	m_Atlas->Download();
 	s_nUploadFrame = gpGlobals->framecount;
@@ -1595,6 +1593,11 @@ void C_NeoVolSmoke::GetRenderBounds( Vector &mins, Vector &maxs )
 // the smoke.
 bool C_NeoVolSmoke::SortDepth( IClientRenderable *pRenderable, const Vector &viewOrigin, const Vector &viewForward, float &depth )
 {
+	if ( s_Volumes.Count() == 0 )
+	{
+		return false;
+	}
+
 	IClientUnknown *pUnknown = pRenderable->GetIClientUnknown();
 	C_BaseEntity *pEntity = pUnknown ? pUnknown->GetBaseEntity() : nullptr;
 	if ( !pEntity )
@@ -1634,35 +1637,50 @@ static void SetVec3Var( IMaterial *pMat, const char *name, const Vector &v )
 {
 	bool found = false;
 	IMaterialVar *pVar = pMat->FindVar( name, &found, false );
-	if ( found ) pVar->SetVecValue( v.x, v.y, v.z );
+	if ( found )
+	{
+		pVar->SetVecValue( v.x, v.y, v.z );
+	}
 }
 
 static void SetVec2Var( IMaterial *pMat, const char *name, float x, float y )
 {
 	bool found = false;
 	IMaterialVar *pVar = pMat->FindVar( name, &found, false );
-	if ( found ) pVar->SetVecValue( x, y );
+	if ( found )
+	{
+		pVar->SetVecValue( x, y );
+	}
 }
 
 static void SetVec4Var( IMaterial *pMat, const char *name, float x, float y, float z, float w )
 {
 	bool found = false;
 	IMaterialVar *pVar = pMat->FindVar( name, &found, false );
-	if ( found ) pVar->SetVecValue( x, y, z, w );
+	if ( found )
+	{
+		pVar->SetVecValue( x, y, z, w );
+	}
 }
 
 static void SetFloatVar( IMaterial *pMat, const char *name, float f )
 {
 	bool found = false;
 	IMaterialVar *pVar = pMat->FindVar( name, &found, false );
-	if ( found ) pVar->SetFloatValue( f );
+	if ( found )
+	{
+		pVar->SetFloatValue( f );
+	}
 }
 
 static void SetIntVar( IMaterial *pMat, const char *name, int i )
 {
 	bool found = false;
 	IMaterialVar *pVar = pMat->FindVar( name, &found, false );
-	if ( found ) pVar->SetIntValue( i );
+	if ( found )
+	{
+		pVar->SetIntValue( i );
+	}
 }
 
 // The legacy smoke scales its alpha by the bloom and the fade the same way.
@@ -1963,7 +1981,7 @@ void C_NeoVolSmoke::SampleAtlas( const Vector &pos, float &dist, float &weight, 
 	float frac[3];
 	for ( int a = 0; a < 3; ++a )
 	{
-		const float g = clamp( ( pos[a] - m_vecGridMin[a] ) / CNEOSmokeFill::CELL_SIZE - 0.5f, 0.0f, (float)( size[a] - 1 ) );
+		const float g = Clamp( ( pos[a] - m_vecGridMin[a] ) / CNEOSmokeFill::CELL_SIZE - 0.5f, 0.0f, (float)( size[a] - 1 ) );
 		base[a] = Min( (int)g, size[a] - 2 );
 		frac[a] = g - base[a];
 	}
@@ -2083,7 +2101,7 @@ static float FlashShows( float tau )
 // How strongly the flash point shows through smoke of optical depth tau.
 static float FlashPointShows( float tau )
 {
-	const float depth = clamp( tau / NEO_VOLSMOKE_FLASH_POINT_DEPTH, 0.0f, 1.0f );
+	const float depth = Clamp( tau / NEO_VOLSMOKE_FLASH_POINT_DEPTH, 0.0f, 1.0f );
 	const float through = 1.0f - powf( depth, NEO_VOLSMOKE_FLASH_POINT_FALLOFF );
 	const float beyond = RemapValClamped( tau, NEO_VOLSMOKE_FLASH_POINT_DEPTH, NEO_VOLSMOKE_FLASH_POINT_GONE, 0.0f, 1.0f );
 	const float floorShows = NEO_VOLSMOKE_FLASH_POINT_FLOOR * ( 1.0f - SimpleSpline( beyond ) );
@@ -2155,7 +2173,7 @@ static void DrawFlashPoint( IMatRenderContext *pRenderContext, const Vector &ori
 
 	const Vector right = CurrentViewRight() * NEO_VOLSMOKE_FLASH_POINT_RADIUS;
 	const Vector up = CurrentViewUp() * NEO_VOLSMOKE_FLASH_POINT_RADIUS;
-	const float level = 255.0f * clamp( strength, 0.0f, 1.0f );
+	const float level = 255.0f * Clamp( strength, 0.0f, 1.0f );
 	const unsigned char r = (unsigned char)( level * NEO_VOLSMOKE_FLASH_POINT_TINT.x );
 	const unsigned char g = (unsigned char)( level * NEO_VOLSMOKE_FLASH_POINT_TINT.y );
 	const unsigned char b = (unsigned char)( level * NEO_VOLSMOKE_FLASH_POINT_TINT.z );
@@ -2200,7 +2218,7 @@ static void DrawSilhouette( C_BasePlayer *pPlayer, float alpha )
 	render->GetColorModulation( oldColor );
 	const float oldBlend = render->GetBlend();
 	render->SetColorModulation( black );
-	render->SetBlend( clamp( alpha, 0.0f, 1.0f ) );
+	render->SetBlend( Clamp( alpha, 0.0f, 1.0f ) );
 	modelrender->ForcedMaterialOverride( pMat );
 	pPlayer->DrawModel( STUDIO_RENDER | STUDIO_IGNORE_NEO_EFFECTS );
 
@@ -2244,7 +2262,7 @@ static C_BasePlayer *MuzzleFlashOwner( const dlight_t *pLight )
 void C_NeoVolSmoke::DrawRevealed( IMatRenderContext *pRenderContext )
 {
 	const Vector &eye = CurrentViewOrigin();
-	const float overlayClear = 1.0f - clamp( g_SmokeFogOverlayAlpha, 0.0f, 1.0f );
+	const float overlayClear = 1.0f - Clamp( g_SmokeFogOverlayAlpha, 0.0f, 1.0f );
 	float silhouette[MAX_PLAYERS + 1] = {};
 	bool any = false;
 
@@ -2259,7 +2277,7 @@ void C_NeoVolSmoke::DrawRevealed( IMatRenderContext *pRenderContext )
 			continue;
 		}
 
-		const float life = clamp( ( pLight->die - gpGlobals->curtime ) / NEO_VOLSMOKE_FLASH_LIFE, 0.0f, 1.0f );
+		const float life = Clamp( ( pLight->die - gpGlobals->curtime ) / NEO_VOLSMOKE_FLASH_LIFE, 0.0f, 1.0f );
 		const float point = FlashPointShows( OpticalDepth( eye, pLight->origin ) ) * overlayClear * life;
 		if ( point >= NEO_VOLSMOKE_FLASH_MIN )
 		{
@@ -2554,8 +2572,8 @@ void C_NeoVolSmoke::BuildOpaqueSheet( IMatRenderContext *pRenderContext )
 		return;
 	}
 
-	const int cols = clamp( (int)ceilf( ( x1 - x0 ) / ( 2.0f * tanX ) * width / NEO_VOLSMOKE_CULL_TILE_PX ), 1, NEO_VOLSMOKE_CULL_MAX_COLS );
-	const int rows = clamp( (int)ceilf( ( y1 - y0 ) / ( 2.0f * tanY ) * height / NEO_VOLSMOKE_CULL_TILE_PX ), 1, NEO_VOLSMOKE_CULL_MAX_ROWS );
+	const int cols = Clamp( (int)ceilf( ( x1 - x0 ) / ( 2.0f * tanX ) * width / NEO_VOLSMOKE_CULL_TILE_PX ), 1, NEO_VOLSMOKE_CULL_MAX_COLS );
+	const int rows = Clamp( (int)ceilf( ( y1 - y0 ) / ( 2.0f * tanY ) * height / NEO_VOLSMOKE_CULL_TILE_PX ), 1, NEO_VOLSMOKE_CULL_MAX_ROWS );
 	float xs[NEO_VOLSMOKE_CULL_MAX_COLS + 1];
 	float ys[NEO_VOLSMOKE_CULL_MAX_ROWS + 1];
 	for ( int i = 0; i <= cols; ++i )

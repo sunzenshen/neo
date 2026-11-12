@@ -215,7 +215,7 @@ static SmokeFogOverlayView_t SmokeFogOverlayView()
 	}
 	else if (localPlayer->GetObserverMode() == OBS_MODE_IN_EYE)
 	{
-		auto targetPlayer = dynamic_cast<C_NEO_Player*>(localPlayer->GetObserverTarget());
+		auto targetPlayer = ToNEOPlayer(localPlayer->GetObserverTarget());
 		if (targetPlayer && targetPlayer->IsAlive())
 		{
 			if (targetPlayer->GetClass() == NEO_CLASS_SUPPORT && targetPlayer->IsInVision())
