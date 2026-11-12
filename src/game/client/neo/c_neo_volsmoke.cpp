@@ -20,6 +20,7 @@
 #include "dlight.h"
 #include "iefx.h"
 #include "cdll_util.h"
+#include "c_neo_player.h"
 
 // memdbgon must be the last include file in a .cpp file!!!
 #include "tier0/memdbgon.h"
@@ -223,9 +224,10 @@ static constexpr float NEO_VOLSMOKE_FLASH_POINT_RADIUS = 6.0f;
 static constexpr float NEO_VOLSMOKE_FLASH_MIN = 1.0f / 255.0f;
 static constexpr float NEO_VOLSMOKE_PATH_STEP = 16.0f;
 
-// Silhouette strength of a player the smoke hides while a muzzle flash
-// lights them.
+// Silhouette strength of a player the smoke hides: while a muzzle flash
+// lights them, and for a cloaked body the smoke flows around.
 static constexpr float NEO_VOLSMOKE_FIRE_SILHOUETTE = 0.15f;
+static constexpr float NEO_VOLSMOKE_CLOAK_SILHOUETTE = 0.15f;
 
 // The legacy smoke's thermal-vision transparency.
 extern ConVar r_neo_thermal_smoke_alpha;
@@ -2789,7 +2791,7 @@ static C_BasePlayer *MuzzleFlashOwner( const dlight_t *pLight )
 }
 
 // What the smoke reveals, drawn over the volume: the point of each muzzle
-// flash and the players the flash lights. Flash and players
+// flash, the players the flash lights, and cloaked bodies. Flash and players
 // scale with the smoke between them and the eye, so they fade with depth.
 // Thermal vision shows none of it, as legacy.
 void C_NeoVolSmoke::DrawRevealed( IMatRenderContext *pRenderContext )
@@ -2839,6 +2841,28 @@ void C_NeoVolSmoke::DrawRevealed( IMatRenderContext *pRenderContext )
 			silhouette[p] = MAX( silhouette[p], NEO_VOLSMOKE_FIRE_SILHOUETTE * shown * hidden );
 			any = true;
 		}
+	}
+
+	// Smoke flows around a cloaked body: show a faint shape, the same rule at
+	// every depth and side, weaker than any flash.
+	for ( int p = 1; p <= gpGlobals->maxClients && p <= MAX_PLAYERS; ++p )
+	{
+		C_NEO_Player *pPlayer = ToNEOPlayer( UTIL_PlayerByIndex( p ) );
+		if ( !pPlayer || !pPlayer->IsCloaked() || Owner( pPlayer->WorldSpaceCenter() ) != this )
+		{
+			continue;
+		}
+
+		const float tau = OpticalDepth( eye, pPlayer->WorldSpaceCenter() );
+		if ( tau <= 0.0f )
+		{
+			continue;
+		}
+
+		const float hidden = 1.0f - expf( -tau );
+		const float shown = FlashShows( tau ) * overlayClear;
+		silhouette[p] = MAX( silhouette[p], NEO_VOLSMOKE_CLOAK_SILHOUETTE * shown * hidden );
+		any = true;
 	}
 
 	if ( !any )
