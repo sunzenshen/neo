@@ -86,7 +86,12 @@ void CNEOGrenadeSmoke::Splash()
 	// Without this the grenade sinks to the pool floor and the smoke starts there.
 	// Holding it just under the surface keeps the cloud where the grenade went in.
 	const Vector vecOrigin = GetAbsOrigin();
-	const float flSurfaceZ = UTIL_WaterLevel(vecOrigin, vecOrigin.z, vecOrigin.z + NEO_SMOKE_WATER_SURFACE_SEARCH);
+
+	// Splash() runs as soon as the bottom of the grenade is wet, while its center can still be dry,
+	// so the surface search starts at the bottom: a dry start would be taken as the surface.
+	Vector vecBottom;
+	CollisionProp()->NormalizedToWorldSpace(Vector(0.5f, 0.5f, 0.0f), &vecBottom);
+	const float flSurfaceZ = UTIL_WaterLevel(vecBottom, vecBottom.z, vecBottom.z + NEO_SMOKE_WATER_SURFACE_SEARCH);
 	const Vector vecHold(vecOrigin.x, vecOrigin.y, flSurfaceZ - NEO_SMOKE_WATER_HOLD_DEPTH);
 
 	// Shallow water: the floor stops the grenade above the hold depth.
