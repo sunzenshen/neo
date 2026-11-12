@@ -81,7 +81,7 @@ void DrawSmokeFogOverlay()
 	g_SmokeFogOverlayColor.Init( 0.3, 0.3, 0.3 );
 #ifdef NEO
 	// Volumes in a dark place give the overlay their own darker color; the
-	// legacy smoke's share keeps the grey.
+	// legacy smoke's share keeps the gray.
 	if ( s_nColoredFrame == gpGlobals->framecount && s_flColoredAlpha > 0.0f )
 	{
 		const float colored = MIN( s_flColoredAlpha / g_SmokeFogOverlayAlpha, 1.0f );

@@ -30,7 +30,7 @@ const float4 g_VolMax       : register( c2 ); // xyz, w = 1 in a far slab
 const float4 g_Grid         : register( c3 ); // x = slices, y = tiles per atlas row, zw = atlas size in tiles
 const float4 g_Ambient      : register( c4 ); // rgb ambient light, w = jitter enable
 const float4 g_Light        : register( c5 ); // rgb directional light, w = time
-const float4 g_Misc         : register( c6 ); // x = look noise strength 0..1, y = volume age, z = bloom front path length, w = debug mode
+const float4 g_Misc         : register( c6 ); // x unused, y = volume age, z = bloom front path length, w = debug mode
 const float4 g_ScreenParams : register( c7 ); // xy = half texel, z = path length at atlas value 1, w = 1 / edge width
 const float4 g_SmokeMin     : register( c8 ); // xyz box around the cells that hold smoke, w unused
 const float4 g_SmokeMax     : register( c9 ); // xyz, w unused
@@ -215,7 +215,7 @@ float4 main( PS_INPUT i ) : COLOR
 	int debugMode = (int)g_Misc.w;
 	if ( debugMode == 2 )
 	{
-		// Visualise the depth we think the scene has (grey = closer).
+		// Visualize the depth we think the scene has (gray = closer).
 		float v = saturate( tScene / 2048.0f );
 		return BlendOutput( v.xxx, 1.0f );
 	}
@@ -310,7 +310,7 @@ float4 main( PS_INPUT i ) : COLOR
 				{
 					float detail = ValueNoise3( q * ( PUFF_SCALE * PUFF_DETAIL ) + 17.0f );
 					puff = 0.6f * puff + 0.4f * detail;
-					depth -= g_Misc.x * PUFF_BITE * saturate( 2.2f * puff - 0.8f );
+					depth -= PUFF_BITE * saturate( 2.2f * puff - 0.8f );
 				}
 
 				float d = v.r * wall * smoothstep( 0.0f, 1.0f, saturate( depth * g_ScreenParams.w ) );
@@ -318,7 +318,7 @@ float4 main( PS_INPUT i ) : COLOR
 				float sigma = d * g_VolMin.w * len;
 				float a     = 1.0f - exp( -sigma );
 
-				float shade = 1.0f - g_Misc.x * PUFF_SHADE * puff;
+				float shade = 1.0f - PUFF_SHADE * puff;
 				float3 lit = g_Ambient.rgb + g_Light.rgb * v.g;
 #if DLIGHTS > 0
 				// The billows shade a near light more than the sky, and a finer

@@ -29,7 +29,6 @@ BEGIN_SHADER_PARAMS
 	SHADER_PARAM( AMBIENT,    SHADER_PARAM_TYPE_VEC3,    "[0.6 0.6 0.6]", "Ambient light reaching the smoke (linear)" )
 	SHADER_PARAM( LIGHTCOLOR, SHADER_PARAM_TYPE_VEC3,    "[0.8 0.8 0.8]", "Directional light color (linear), scaled by baked per-voxel light" )
 	SHADER_PARAM( EXTINCTION, SHADER_PARAM_TYPE_FLOAT,   "0.06",          "Extinction per world unit at density 1" )
-	SHADER_PARAM( NOISEAMP,   SHADER_PARAM_TYPE_FLOAT,   "1",             "Look noise strength, 0 (smooth) to 1" )
 	SHADER_PARAM( AGE,        SHADER_PARAM_TYPE_FLOAT,   "0",             "Seconds since the smoke spawned, moves the look noise" )
 	SHADER_PARAM( JITTER,     SHADER_PARAM_TYPE_INTEGER, "1",             "Per-pixel step jitter (grain instead of banding)" )
 	SHADER_PARAM( DEBUGMODE,  SHADER_PARAM_TYPE_INTEGER, "0",             "0 off, 1 coverage, 2 scene depth, 3 box hit" )
@@ -159,8 +158,8 @@ SHADER_DRAW
 		float front[3];
 		params[FRONT]->GetVecValue( front, 3 );
 
-		// c6: noise strength, age, bloom front, debug
-		c[0] = clamp( params[NOISEAMP]->GetFloatValue(), 0.0f, 1.0f );
+		// c6: unused, age, bloom front, debug
+		c[0] = 0.0f;
 		c[1] = params[AGE]->GetFloatValue();
 		c[2] = front[0];
 		c[3] = (float)params[DEBUGMODE]->GetIntValue();
