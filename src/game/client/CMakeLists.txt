@@ -1772,6 +1772,7 @@ set(UNITY_SOURCE_NEO_SHARED
     ${CMAKE_SOURCE_DIR}/game/shared/neo/neo_crosshair.cpp
     ${CMAKE_SOURCE_DIR}/game/shared/neo/neo_serial.cpp
     ${CMAKE_SOURCE_DIR}/game/shared/neo/neo_smoke_fill.cpp
+    ${CMAKE_SOURCE_DIR}/game/shared/neo/neo_smoke_world.cpp
 )
 
 set_source_files_properties(
@@ -1803,6 +1804,8 @@ target_sources_grouped(
     ${CMAKE_SOURCE_DIR}/game/shared/neo/neo_crosshair.h
     ${CMAKE_SOURCE_DIR}/game/shared/neo/neo_serial.h
     ${CMAKE_SOURCE_DIR}/game/shared/neo/neo_smoke_fill.h
+    ${CMAKE_SOURCE_DIR}/game/shared/neo/neo_smoke_shared.h
+    ${CMAKE_SOURCE_DIR}/game/shared/neo/neo_smoke_world.h
     ${UNITY_SOURCE_NEO_SHARED}
 )
 

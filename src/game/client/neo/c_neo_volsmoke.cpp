@@ -22,6 +22,8 @@
 #include "cdll_util.h"
 #include "c_neo_player.h"
 #include "vstdlib/jobthread.h"
+#include "neo_smoke_shared.h"
+#include "neo_smoke_world.h"
 
 // memdbgon must be the last include file in a .cpp file!!!
 #include "tier0/memdbgon.h"
@@ -40,10 +42,9 @@ static ConVar neo_volsmoke_draw( "neo_volsmoke_draw", "1", FCVAR_CHEAT, "Draw sm
 static ConVar neo_volsmoke_fill_audit( "neo_volsmoke_fill_audit", "0", FCVAR_CHEAT, "Test: also ask the point and segment queries where a block query answered, keep their answer and count disagreements." );
 
 // ---------------------------------------------------------------------------
-// Fixed gameplay values: they decide where the smoke blocks sight, so they are
-// the same for every client.
+// Fixed values of the drawing. The gameplay values, which decide where the
+// smoke blocks sight, are in neo_smoke_shared.h.
 // ---------------------------------------------------------------------------
-
 
 // Atlas texel bytes in BGRA order. The atlas holds what does not change with
 // time: the gas path length, the cell weight (variation and carve hole) and
@@ -79,20 +80,6 @@ static constexpr double NEO_VOLSMOKE_FILL_BUDGET = 0.0015; // seconds a frame, w
 static constexpr float NEO_VOLSMOKE_FILL_SAME_AGE = 0.25f; // seconds apart that count as one age
 static constexpr int NEO_VOLSMOKE_FILL_CHUNK_CELLS = 64;
 static constexpr int NEO_VOLSMOKE_FILL_CHUNK_QUERIES = 128;
-
-// The legacy smoke's time curves: sine ease-out bloom, cosine fade.
-static constexpr float NEO_VOLSMOKE_BLOOM_TIME = 5.5f;
-static constexpr float NEO_VOLSMOKE_FADE_START = 17.0f;
-static constexpr float NEO_VOLSMOKE_FADE_END = 25.0f;
-
-// Width of the soft edge behind the expanding front.
-static constexpr float NEO_VOLSMOKE_EDGE = 27.0f;
-
-// Per-cell density variation, from the cell index so it is the same everywhere.
-static constexpr float NEO_VOLSMOKE_CELL_VARIATION = 0.15f;
-
-// Extinction per world unit at density 1.
-static constexpr float NEO_VOLSMOKE_EXTINCTION = 0.06f;
 
 // The near pass clips against the engine's dest-alpha depth, which saturates
 // about 194 u from the eye. It marches view depths up to NEAR_RANGE, kept
@@ -249,27 +236,6 @@ static constexpr float NEO_VOLSMOKE_PATH_STEP = 16.0f;
 static constexpr float NEO_VOLSMOKE_FIRE_SILHOUETTE = 0.15f;
 static constexpr float NEO_VOLSMOKE_CLOAK_SILHOUETTE = 0.15f;
 
-// World-only: no props or entities, so every client sees the same walls.
-// Gas does not enter water; it spreads over the surface as over a floor.
-static constexpr int NEO_VOLSMOKE_WATER_MASK = CONTENTS_WATER | CONTENTS_SLIME;
-static constexpr int NEO_VOLSMOKE_FILL_MASK = CONTENTS_SOLID | CONTENTS_WINDOW | NEO_VOLSMOKE_WATER_MASK;
-
-static float VolSmokeBloom( float age )
-{
-	return sinf( 0.5f * M_PI_F * clamp( age, 0.0f, NEO_VOLSMOKE_BLOOM_TIME ) / NEO_VOLSMOKE_BLOOM_TIME );
-}
-
-static float VolSmokeFade( float age )
-{
-	if ( age <= NEO_VOLSMOKE_FADE_START )
-	{
-		return 1.0f;
-	}
-
-	const float f = clamp( ( age - NEO_VOLSMOKE_FADE_START ) / ( NEO_VOLSMOKE_FADE_END - NEO_VOLSMOKE_FADE_START ), 0.0f, 1.0f );
-	return 0.5f + 0.5f * cosf( M_PI_F * f );
-}
-
 static int VolSmokePow2( int n )
 {
 	int p = 1;
@@ -281,24 +247,6 @@ static int VolSmokePow2( int n )
 	return p;
 }
 
-// The variation is keyed by a cell's place relative to the grenade, laid out
-// as the cell index of a fixed grid around it, so it does not move with the
-// box.
-static constexpr int NEO_VOLSMOKE_VARIATION_SPAN = 128;
-static constexpr int NEO_VOLSMOKE_VARIATION_BELOW = 8;
-
-static float VolSmokeCellVariation( int x, int y, int z )
-{
-	const int half = NEO_VOLSMOKE_VARIATION_SPAN / 2;
-	const int key = ( ( z + NEO_VOLSMOKE_VARIATION_BELOW ) * NEO_VOLSMOKE_VARIATION_SPAN + y + half ) * NEO_VOLSMOKE_VARIATION_SPAN + x + half;
-	unsigned int h = (unsigned int)key;
-	h ^= h >> 16;
-	h *= 0x7feb352dU;
-	h ^= h >> 15;
-	h *= 0x846ca68bU;
-	h ^= h >> 16;
-	return 1.0f - NEO_VOLSMOKE_CELL_VARIATION * (float)( h & 0xff ) / 255.0f;
-}
 
 // ---------------------------------------------------------------------------
 // CPU cost readout (neo_volsmoke_perf): time per stage, summed over volumes.
@@ -373,121 +321,15 @@ private:
 };
 
 // ---------------------------------------------------------------------------
-// World queries for the fill: cell centers and the segments between them.
-//
-// One box query answers a whole block of cells: when the block is empty,
-// every cell center in it is open, and so is every link inside it or into
-// another empty block, since the segment stays inside the two boxes. A block
-// that touches the world falls to the fine blocks inside it, then to the point
-// and segment queries. The coarse blocks cover the fill's lattice; the fine
-// ones are kept only for coarse blocks that touch the world.
+// The fill's world queries (shared with the server), plus what only the
+// client draws: the walls beside the gas.
 // ---------------------------------------------------------------------------
-static constexpr int NEO_VOLSMOKE_COARSE_BLOCK = CNeoSmokeFill::BLOCK_ALIGN; // cells
-static constexpr int NEO_VOLSMOKE_FINE_BLOCK = 2;                            // cells
-static constexpr int NEO_VOLSMOKE_FINE_PER_AXIS = NEO_VOLSMOKE_COARSE_BLOCK / NEO_VOLSMOKE_FINE_BLOCK;
-static constexpr int NEO_VOLSMOKE_FINE_PER_COARSE = NEO_VOLSMOKE_FINE_PER_AXIS * NEO_VOLSMOKE_FINE_PER_AXIS * NEO_VOLSMOKE_FINE_PER_AXIS;
-static_assert( NEO_VOLSMOKE_COARSE_BLOCK % NEO_VOLSMOKE_FINE_BLOCK == 0, "fine blocks must tile a coarse block" );
-
-// Coarse block directory entries; a value above zero is a touched block whose
-// fine states start at ( value - 1 ) * NEO_VOLSMOKE_FINE_PER_COARSE.
-static constexpr int NEO_VOLSMOKE_COARSE_UNKNOWN = 0;
-static constexpr int NEO_VOLSMOKE_COARSE_EMPTY = -1;
-
-static constexpr int NEO_VOLSMOKE_AUDIT_MAX_WARNINGS = 10; // per volume
-
-struct VolSmokeAuditCell_t
-{
-	int nCell[3];
-	int nAxis; // -1 for a point query
-};
-
-enum VolSmokeBlockState_t
-{
-	VOLSMOKE_BLOCK_UNKNOWN = 0,
-	VOLSMOKE_BLOCK_EMPTY,
-	VOLSMOKE_BLOCK_TOUCHED,
-};
-
-class CNeoVolSmokeWorld final : public INeoSmokeFillWorld
+class CNeoVolSmokeWorld final : public CNeoSmokeWorld
 {
 public:
 	CNeoVolSmokeWorld( const Vector &gridMin, const int boxSize[3], const int seedCorner[3], const int latticeLo[3], const int latticeHi[3] )
-		: m_vecGridMin( gridMin ), m_flQuerySeconds( 0.0 ), m_nTraces( 0 ), m_nAuditChecks( 0 ), m_nAuditDisagree( 0 )
+		: CNeoSmokeWorld( gridMin, boxSize, seedCorner, latticeLo, latticeHi )
 	{
-		int blocks = 1;
-		for ( int a = 0; a < 3; ++a )
-		{
-			m_nBoxSize[a] = boxSize[a];
-			m_nDrawOffset[a] = 0;
-			m_nSeedCorner[a] = seedCorner[a];
-			m_nLatticeLo[a] = latticeLo[a];
-			m_nLatticeHi[a] = latticeHi[a];
-			m_nCoarse[a] = ( latticeHi[a] - latticeLo[a] ) / NEO_VOLSMOKE_COARSE_BLOCK;
-			blocks *= m_nCoarse[a];
-		}
-
-		m_Coarse.SetCount( blocks );
-		Q_memset( m_Coarse.Base(), 0, m_Coarse.Count() * sizeof( int ) );
-	}
-
-	static bool PointIn( const Vector &pos, int mask )
-	{
-		Ray_t ray;
-		ray.Init( pos, pos );
-		CTraceFilterWorldOnly filter;
-		trace_t tr;
-		enginetrace->TraceRay( ray, mask, &filter, &tr );
-		return tr.startsolid;
-	}
-
-	static bool PointSolid( const Vector &pos ) { return PointIn( pos, NEO_VOLSMOKE_FILL_MASK ); }
-
-	virtual bool CellSolid( int x, int y, int z ) override
-	{
-		const double start = Plat_FloatTime();
-		bool solid = false;
-		const bool inEmpty = InEmptyBlock( x, y, z );
-		if ( !inEmpty || Auditing() )
-		{
-			++m_nTraces;
-			solid = PointSolid( Center( x, y, z ) );
-		}
-
-		if ( inEmpty && Auditing() )
-		{
-			Audit( solid, x, y, z, -1 );
-		}
-
-		m_flQuerySeconds += Plat_FloatTime() - start;
-		return solid;
-	}
-
-	virtual bool LinkBlocked( int x, int y, int z, int axis ) override
-	{
-		const double start = Plat_FloatTime();
-		int n[3] = { x, y, z };
-		++n[axis];
-
-		const bool inEmpty = InEmptyBlock( x, y, z ) && InEmptyBlock( n[0], n[1], n[2] );
-		bool blocked = false;
-		if ( !inEmpty || Auditing() )
-		{
-			++m_nTraces;
-			Ray_t ray;
-			ray.Init( Center( x, y, z ), Center( n[0], n[1], n[2] ) );
-			CTraceFilterWorldOnly filter;
-			trace_t tr;
-			enginetrace->TraceRay( ray, NEO_VOLSMOKE_FILL_MASK, &filter, &tr );
-			blocked = tr.startsolid || tr.fraction < 1.0f;
-		}
-
-		if ( inEmpty && Auditing() )
-		{
-			Audit( blocked, x, y, z, axis );
-		}
-
-		m_flQuerySeconds += Plat_FloatTime() - start;
-		return blocked;
 	}
 
 	// The client's box, in query coordinates, for LinkWall.
@@ -545,70 +387,9 @@ public:
 		return true;
 	}
 
-	virtual bool SeedBlocked( int x, int y, int z ) override
-	{
-		const double start = Plat_FloatTime();
-		++m_nTraces;
-		Ray_t ray;
-		ray.Init( Grenade(), Center( x, y, z ) );
-		CTraceFilterWorldOnly filter;
-		trace_t tr;
-		enginetrace->TraceRay( ray, NEO_VOLSMOKE_FILL_MASK, &filter, &tr );
-		m_flQuerySeconds += Plat_FloatTime() - start;
-		return tr.startsolid || tr.fraction < 1.0f;
-	}
-
-	virtual bool SeedInWater() override
-	{
-		++m_nTraces;
-		return PointIn( Grenade(), NEO_VOLSMOKE_WATER_MASK );
-	}
-
-	virtual bool CellWater( int x, int y, int z ) override
-	{
-		++m_nTraces;
-		return PointIn( Center( x, y, z ), NEO_VOLSMOKE_WATER_MASK );
-	}
-
-	// For neo_volsmoke_stats.
-	double QuerySeconds() const { return m_flQuerySeconds; }
-	int Traces() const { return m_nTraces; }
-	int MemoryBytes() const
-	{
-		return m_Coarse.Count() * (int)sizeof( int ) + m_Fine.Count();
-	}
-	int AuditChecks() const { return m_nAuditChecks; }
-	int AuditDisagreements() const { return m_nAuditDisagree; }
-
-private:
-	static bool Auditing() { return neo_volsmoke_fill_audit.GetBool(); }
-
-	// The block answered "open"; the direct query said otherwise. The direct
-	// answer is the one returned, so an audited fill grows the old field.
-	void Audit( bool directSolid, int x, int y, int z, int axis )
-	{
-		++m_nAuditChecks;
-		if ( !directSolid )
-		{
-			return;
-		}
-
-		++m_nAuditDisagree;
-		if ( m_nAuditDisagree > NEO_VOLSMOKE_AUDIT_MAX_WARNINGS )
-		{
-			return;
-		}
-
-		// Runs on a fill worker, so it only records; PrintAudit reports on the
-		// main thread.
-		const VolSmokeAuditCell_t cell = { { x, y, z }, axis };
-		m_AuditCells.AddToTail( cell );
-	}
-
-public:
 	void PrintAudit( int volumeId ) const
 	{
-		for ( const VolSmokeAuditCell_t &cell : m_AuditCells )
+		for ( const NeoSmokeAuditCell_t &cell : m_AuditCells )
 		{
 			const Vector pos = Center( cell.nCell[0], cell.nCell[1], cell.nCell[2] );
 			Warning( "neo_volsmoke_fill_audit: volume %d block says open, %s says solid at cell (%d %d %d) axis %d, world (%.1f %.1f %.1f)\n",
@@ -618,110 +399,7 @@ public:
 	}
 
 private:
-
-	bool InBox( int x, int y, int z ) const
-	{
-		return x >= 0 && y >= 0 && z >= 0 && x < m_nBoxSize[0] && y < m_nBoxSize[1] && z < m_nBoxSize[2];
-	}
-
-	bool InLattice( int x, int y, int z ) const
-	{
-		return x >= m_nLatticeLo[0] && y >= m_nLatticeLo[1] && z >= m_nLatticeLo[2]
-			&& x < m_nLatticeHi[0] && y < m_nLatticeHi[1] && z < m_nLatticeHi[2];
-	}
-
-	bool InEmptyBlock( int x, int y, int z )
-	{
-		if ( !InLattice( x, y, z ) )
-		{
-			return false;
-		}
-
-		// Offsets from the lattice corner, which lies on a block boundary.
-		const int ox = x - m_nLatticeLo[0];
-		const int oy = y - m_nLatticeLo[1];
-		const int oz = z - m_nLatticeLo[2];
-		const int cx = ox / NEO_VOLSMOKE_COARSE_BLOCK;
-		const int cy = oy / NEO_VOLSMOKE_COARSE_BLOCK;
-		const int cz = oz / NEO_VOLSMOKE_COARSE_BLOCK;
-		int &coarse = m_Coarse[( cz * m_nCoarse[1] + cy ) * m_nCoarse[0] + cx];
-		if ( coarse == NEO_VOLSMOKE_COARSE_UNKNOWN )
-		{
-			if ( !BoxTouchesWorld( x - ox % NEO_VOLSMOKE_COARSE_BLOCK, y - oy % NEO_VOLSMOKE_COARSE_BLOCK, z - oz % NEO_VOLSMOKE_COARSE_BLOCK, NEO_VOLSMOKE_COARSE_BLOCK ) )
-			{
-				coarse = NEO_VOLSMOKE_COARSE_EMPTY;
-			}
-			else
-			{
-				coarse = m_Fine.Count() / NEO_VOLSMOKE_FINE_PER_COARSE + 1;
-				m_Fine.AddMultipleToTail( NEO_VOLSMOKE_FINE_PER_COARSE );
-				Q_memset( m_Fine.Base() + m_Fine.Count() - NEO_VOLSMOKE_FINE_PER_COARSE, VOLSMOKE_BLOCK_UNKNOWN, NEO_VOLSMOKE_FINE_PER_COARSE );
-			}
-		}
-
-		if ( coarse == NEO_VOLSMOKE_COARSE_EMPTY )
-		{
-			return true;
-		}
-
-		const int fx = ( ox % NEO_VOLSMOKE_COARSE_BLOCK ) / NEO_VOLSMOKE_FINE_BLOCK;
-		const int fy = ( oy % NEO_VOLSMOKE_COARSE_BLOCK ) / NEO_VOLSMOKE_FINE_BLOCK;
-		const int fz = ( oz % NEO_VOLSMOKE_COARSE_BLOCK ) / NEO_VOLSMOKE_FINE_BLOCK;
-		const int fine = ( coarse - 1 ) * NEO_VOLSMOKE_FINE_PER_COARSE + ( fz * NEO_VOLSMOKE_FINE_PER_AXIS + fy ) * NEO_VOLSMOKE_FINE_PER_AXIS + fx;
-		unsigned char &state = m_Fine[fine];
-		if ( state == VOLSMOKE_BLOCK_UNKNOWN )
-		{
-			const bool touched = BoxTouchesWorld( x - ox % NEO_VOLSMOKE_FINE_BLOCK, y - oy % NEO_VOLSMOKE_FINE_BLOCK, z - oz % NEO_VOLSMOKE_FINE_BLOCK, NEO_VOLSMOKE_FINE_BLOCK );
-			state = touched ? VOLSMOKE_BLOCK_TOUCHED : VOLSMOKE_BLOCK_EMPTY;
-		}
-
-		return state == VOLSMOKE_BLOCK_EMPTY;
-	}
-
-	// Does the cube of b cells whose low corner is cell (x, y, z) touch the world?
-	bool BoxTouchesWorld( int x, int y, int z, int b )
-	{
-		++m_nTraces;
-		const float c = CNeoSmokeFill::CELL_SIZE;
-		const float size = b * c;
-		const Vector lo = m_vecGridMin + Vector( x * c, y * c, z * c );
-		const Vector half( 0.5f * size, 0.5f * size, 0.5f * size );
-		const Vector center = lo + half;
-
-		Ray_t ray;
-		ray.Init( center, center, -half, half );
-		CTraceFilterWorldOnly filter;
-		trace_t tr;
-		enginetrace->TraceRay( ray, NEO_VOLSMOKE_FILL_MASK, &filter, &tr );
-		return tr.startsolid || tr.allsolid;
-	}
-
-	Vector Grenade() const
-	{
-		const float c = CNeoSmokeFill::CELL_SIZE;
-		return m_vecGridMin + Vector( m_nSeedCorner[0] * c, m_nSeedCorner[1] * c, m_nSeedCorner[2] * c );
-	}
-
-	Vector Center( int x, int y, int z ) const
-	{
-		const float c = CNeoSmokeFill::CELL_SIZE;
-		return m_vecGridMin + Vector( ( x + 0.5f ) * c, ( y + 0.5f ) * c, ( z + 0.5f ) * c );
-	}
-
-	Vector m_vecGridMin;
-	int m_nBoxSize[3];      // the client's box, from m_nDrawOffset
-	int m_nDrawOffset[3];
-	int m_nSeedCorner[3];
-	int m_nLatticeLo[3];
-	int m_nLatticeHi[3];
-	int m_nCoarse[3];
-	CUtlVector<int> m_Coarse;          // NEO_VOLSMOKE_COARSE_* or fine offset + 1
-	CUtlVector<unsigned char> m_Fine;  // VolSmokeBlockState_t
-	double m_flQuerySeconds;
-	int m_nTraces;
-	int m_nAuditChecks;
-	int m_nAuditDisagree;
-	CUtlVector<VolSmokeAuditCell_t> m_AuditCells; // the first disagreements
+	virtual bool Auditing() const override { return neo_volsmoke_fill_audit.GetBool(); }
 };
 
 // ---------------------------------------------------------------------------
