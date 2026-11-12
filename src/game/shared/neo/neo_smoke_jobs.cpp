@@ -24,7 +24,7 @@ static int SmokeFillWorkers()
 	const int cores = pCpu->m_nPhysicalProcessors;
 	const bool smt = pCpu->m_nLogicalProcessors > pCpu->m_nPhysicalProcessors;
 	const int workers = smt ? cores - 1 : cores / 2;
-	return clamp( workers, 1, NEO_SMOKE_FILL_MAX_WORKERS );
+	return Clamp( workers, 1, NEO_SMOKE_FILL_MAX_WORKERS );
 }
 
 IThreadPool *NEOSmokeFillPool()
@@ -52,7 +52,6 @@ IThreadPool *NEOSmokeFillPool()
 		return nullptr;
 	}
 
-	DevMsg( "neo_smoke: %d fill workers\n", pPool->NumThreads() );
 	s_pSmokeFillPool = pPool;
 	return s_pSmokeFillPool;
 }

@@ -45,11 +45,11 @@ enum NEOSmokeOcc_t
 	NEO_SMOKE_OCC_MASK = 3,
 };
 
-static const int NEO_SMOKE_OCC_CELL_SHIFT = 0;
+static constexpr int NEO_SMOKE_OCC_CELL_SHIFT = 0;
 
 // Move code ( dx + 1 ) + 3 * ( dy + 1 ) + 9 * ( dz + 1 ) of no move. A move and
 // its reverse sum to twice this.
-static const int NEO_SMOKE_MOVE_SELF = 13;
+static constexpr int NEO_SMOKE_MOVE_SELF = 13;
 
 static int NeoSmokeOccLinkShift( int axis )
 {
@@ -214,7 +214,6 @@ static int NeoSmokePopCount( unsigned long long v )
 	v = ( v + ( v >> 4 ) ) & 0x0f0f0f0f0f0f0f0full;
 	return (int)( ( v * 0x0101010101010101ull ) >> 56 );
 }
-
 
 static void ShrinkToCount( int *&pArray, int count )
 {

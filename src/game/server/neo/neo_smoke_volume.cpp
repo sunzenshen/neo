@@ -10,6 +10,12 @@
 #include "vstdlib/jobthread.h"
 #include "igamesystem.h"
 
+// memdbgon must be the last include file in a .cpp file!!!
+#include "tier0/memdbgon.h"
+
+// Optical depth at which a human stops seeing a player behind smoke in a lit scene.
+static constexpr float NEO_SMOKE_SIGHT_BLOCK_DEPTH = 4.4f;
+
 // The networked half of a smoke field: what a client needs to fill the same
 // field and draw it at the same age, sent to every client so smoke around a
 // corner draws too. The origin is sent unscaled, so it arrives bit-exact.
@@ -41,9 +47,6 @@ void CNEOSmokeVolumeEnt::Spawn()
 	SetSolid( SOLID_NONE );
 	AddEffects( EF_NODRAW );
 }
-
-// memdbgon must be the last include file in a .cpp file!!!
-#include "tier0/memdbgon.h"
 
 // Fills run on worker threads, one job per fill, oldest first, so a tick
 // never pays for one; the main thread only starts jobs and collects the
@@ -353,7 +356,7 @@ float CNEOSmokeVolume::Density( const Vector &pos, float front ) const
 	float frac[3];
 	for ( int a = 0; a < 3; ++a )
 	{
-		const float g = clamp( ( pos[a] - m_vecGridMin[a] ) / CNEOSmokeFill::CELL_SIZE - 0.5f, 0.0f, (float)( m_nBox[a] - 1 ) );
+		const float g = Clamp( ( pos[a] - m_vecGridMin[a] ) / CNEOSmokeFill::CELL_SIZE - 0.5f, 0.0f, (float)( m_nBox[a] - 1 ) );
 		base[a] = Min( (int)g, m_nBox[a] - 2 );
 		frac[a] = g - base[a];
 	}
