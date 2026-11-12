@@ -274,8 +274,8 @@ void CNEOSmokeVolume::ReleaseWorld()
 	m_pWorld = nullptr;
 }
 
-// What the query and the clients need from the finished field. Runs on the
-// fill's worker, so the tick does not pay for the scan of the field.
+// What the sight query needs from the finished field. Runs on the fill's
+// worker, so the tick does not pay for the scan of the field.
 void CNEOSmokeVolume::PrepareField()
 {
 	m_Fill.BoxSize( m_nBox );
