@@ -3,9 +3,10 @@
 // The server fills the same field as the clients, from the same shared core
 // and world queries, so line of sight can follow the drawn smoke. The fill
 // runs on worker threads; the field does not depend on how its work is
-// split, and the queries switch to it at a fixed tick, so sight does not
-// depend on machine speed or host_timescale. Bot sight reads it through
-// the smoke line-of-sight blocker.
+// split, and the queries switch to it at a fixed tick when the fill is done
+// by then, as in normal play, so sight does not depend on machine speed or
+// host_timescale. Bot sight reads it through the smoke line-of-sight
+// blocker.
 
 #ifndef NEO_SMOKE_VOLUME_H
 #define NEO_SMOKE_VOLUME_H

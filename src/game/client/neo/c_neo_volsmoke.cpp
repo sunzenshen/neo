@@ -71,12 +71,9 @@ static constexpr float NEO_VOLSMOKE_DIST_RANGE = 64 * CNeoSmokeFill::CELL_SIZE;
 static constexpr float NEO_VOLSMOKE_UPLOAD_HZ = 15.0f;
 
 // Fills run on worker threads, one job per fill, so a frame never pays for
-// one. The main thread keeps a physical core of its own; the cap bounds the
-// fill memory held at once. Without a worker pool the
-// frame takes a fixed slice of fill work instead, in small chunks so it
-// overruns by at most one chunk. A slow machine blooms later, never
-// differently.
-static constexpr int NEO_VOLSMOKE_FILL_MAX_WORKERS = 8;
+// one. Without a worker pool the frame takes a fixed slice of fill work
+// instead, in small chunks so it overruns by at most one chunk. A slow
+// machine blooms later, never differently.
 static constexpr double NEO_VOLSMOKE_FILL_BUDGET = 0.0015; // seconds a frame, without workers
 static constexpr float NEO_VOLSMOKE_FILL_SAME_AGE = 0.25f; // seconds apart that count as one age
 
@@ -1009,7 +1006,7 @@ void C_NeoVolSmoke::StepFills()
 
 	s_nFillFrame = gpGlobals->framecount;
 
-	IThreadPool *pPool = NEOSmokeFillPool( NEO_VOLSMOKE_FILL_MAX_WORKERS );
+	IThreadPool *pPool = NEOSmokeFillPool();
 	int running = 0;
 	for ( C_NeoVolSmoke *pVol : s_Volumes )
 	{
