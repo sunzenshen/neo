@@ -206,11 +206,11 @@ static constexpr float NEO_VOLSMOKE_DLIGHT_LINEAR = 1.9f;
 static constexpr float NEO_VOLSMOKE_DLIGHT_MARGIN = SMOKEPARTICLE_SIZE;
 static constexpr int NEO_VOLSMOKE_MAX_DLIGHTS = 2;
 
-// A muzzle flash lights only the smoke close to the gun: hot at the muzzle,
-// gone by about the feet of a standing shooter, so it reads as a flash and
-// two shooters in one cloud show two glows. The gain makes up for the
+// A muzzle flash lights only the smoke around the gun: hot at the muzzle and
+// gone a little inside the range the legacy flash visibly lit its cloud, so
+// it reads as a flash rather than a lit cloud. The gain makes up for the
 // smaller lit area at the core.
-static constexpr float NEO_VOLSMOKE_FLASH_REACH = 64.0f;
+static constexpr float NEO_VOLSMOKE_FLASH_REACH = 96.0f;
 static constexpr float NEO_VOLSMOKE_FLASH_GAIN = 2.0f;
 
 static bool IsMuzzleFlashLight( const dlight_t *pLight )
