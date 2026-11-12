@@ -1038,7 +1038,6 @@ C_NeoVolSmoke *C_NeoVolSmoke::UploadTurn()
 			continue;
 		}
 
-		const float now = gpGlobals->curtime;
 		if ( s_pTurn && s_pTurn->ShapeChanged() && !pVol->ShapeChanged() )
 		{
 			continue;
