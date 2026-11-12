@@ -2680,6 +2680,8 @@ struct VolSmokeSheetVolume_t
 	const C_NeoVolSmoke *pVol;
 	Vector boxMin;
 	Vector boxMax;
+	Vector sphereCenter;
+	float sphereRadius;
 	float front;
 	float bite;
 	float extinction;
@@ -2734,8 +2736,20 @@ float C_NeoVolSmoke::SheetOpaqueDepth( const VolSmokeSheetVolume_t *vols, int nV
 	{
 		own[v] = FLT_MAX;
 
-		float t0 = 0.0f;
-		float t1 = FLT_MAX;
+		// No smoke is drawn outside the smoke sphere; a ray that passes over
+		// a cloud's top ends its span, and its upper bound, there.
+		const Vector rel = vols[v].sphereCenter - eye;
+		const float mid = DotProduct( rel, unit );
+		const float missSqr = rel.LengthSqr() - mid * mid;
+		const float radiusSqr = vols[v].sphereRadius * vols[v].sphereRadius;
+		if ( missSqr >= radiusSqr )
+		{
+			continue;
+		}
+
+		const float half = sqrtf( radiusSqr - missSqr );
+		float t0 = MAX( 0.0f, mid - half );
+		float t1 = mid + half;
 		for ( int a = 0; a < 3 && t0 < t1; ++a )
 		{
 			if ( fabsf( unit[a] ) < 1.0e-6f )
@@ -2923,7 +2937,9 @@ void C_NeoVolSmoke::DrawOpaqueSheet( IMatRenderContext *pRenderContext )
 		y0 = MIN( y0, yMin );
 		y1 = MAX( y1, yMax );
 
-		const VolSmokeSheetVolume_t vol = { pVol, a, b, pVol->FrontRadius( gpGlobals->curtime - pVol->m_flSpawnTime ), bite, pVol->DrawExtinction() };
+		Vector center;
+		const float radius = pVol->SmokeSphere( center );
+		const VolSmokeSheetVolume_t vol = { pVol, a, b, center, radius, pVol->FrontRadius( gpGlobals->curtime - pVol->m_flSpawnTime ), bite, pVol->DrawExtinction() };
 		vols.AddToTail( vol );
 		most += vol.extinction * ( b - a ).Length();
 	}
