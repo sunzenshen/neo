@@ -102,7 +102,18 @@ public:
 
 	float PathOpticalDepth( const Vector &from, const Vector &to ) const;
 
+	// Whether the segment crosses the box that can hold smoke now.
+	bool SegmentCrossesBox( const Vector &from, const Vector &to ) const;
+
+	bool BelongsTo( const CBaseEntity *pGrenade ) const { return m_hGrenade.Get() == pGrenade; }
+
+	// The box that holds the smoke; false until the field is filled.
+	bool SmokeBox( Vector &mins, Vector &maxs ) const;
+
 private:
+	// The box that can hold smoke at this age; false when there is none.
+	bool CurrentBox( Vector &boxMin, Vector &boxMax, float &front ) const;
+
 	void RunFill();
 	void PrepareField();
 	void FinishFill();
@@ -416,33 +427,33 @@ float CNeoSmokeVolume::DomeDensity( const Vector &pos, float front ) const
 	return edge * edge * ( 3.0f - 2.0f * edge );
 }
 
-float CNeoSmokeVolume::PathOpticalDepth( const Vector &from, const Vector &to ) const
+bool CNeoSmokeVolume::CurrentBox( Vector &boxMin, Vector &boxMax, float &front ) const
 {
-	const float age = gpGlobals->curtime - m_flStartTime;
-	const float bloom = VolSmokeBloom( age );
 	const bool filled = IsDone();
-	const float front = ( filled ? m_flFrontUnits : CNeoSmokeFill::DOME_RADIUS ) * bloom;
-	const Vector boxMin = filled ? m_vecSmokeMin : m_vecOrigin - Vector( front, front, front );
-	const Vector boxMax = filled ? m_vecSmokeMax : m_vecOrigin + Vector( front, front, front );
-
-	const Vector delta = to - from;
-	const float len = delta.Length();
-	if ( len < 1.0f || front <= 0.0f )
+	front = ( filled ? m_flFrontUnits : CNeoSmokeFill::DOME_RADIUS ) * VolSmokeBloom( gpGlobals->curtime - m_flStartTime );
+	if ( front <= 0.0f )
 	{
-		return 0.0f;
+		return false;
 	}
 
-	// Clip the segment to the smoke box.
-	const Vector unit = delta / len;
-	float t0 = 0.0f;
-	float t1 = len;
+	boxMin = filled ? m_vecSmokeMin : m_vecOrigin - Vector( front, front, front );
+	boxMax = filled ? m_vecSmokeMax : m_vecOrigin + Vector( front, front, front );
+	return true;
+}
+
+// Clips the segment from `from` along `unit` (length `len`) to the box;
+// false when it misses.
+static bool ClipSegmentToBox( const Vector &from, const Vector &unit, float len, const Vector &boxMin, const Vector &boxMax, float &t0, float &t1 )
+{
+	t0 = 0.0f;
+	t1 = len;
 	for ( int a = 0; a < 3; ++a )
 	{
 		if ( fabsf( unit[a] ) < 1.0e-6f )
 		{
 			if ( from[a] < boxMin[a] || from[a] > boxMax[a] )
 			{
-				return 0.0f;
+				return false;
 			}
 			continue;
 		}
@@ -453,6 +464,48 @@ float CNeoSmokeVolume::PathOpticalDepth( const Vector &from, const Vector &to ) 
 		t1 = MIN( t1, MAX( ta, tb ) );
 	}
 
+	return t0 < t1;
+}
+
+bool CNeoSmokeVolume::SegmentCrossesBox( const Vector &from, const Vector &to ) const
+{
+	Vector boxMin;
+	Vector boxMax;
+	float front;
+	const Vector delta = to - from;
+	const float len = delta.Length();
+	if ( len < 1.0f || !CurrentBox( boxMin, boxMax, front ) )
+	{
+		return false;
+	}
+
+	float t0;
+	float t1;
+	return ClipSegmentToBox( from, delta / len, len, boxMin, boxMax, t0, t1 );
+}
+
+float CNeoSmokeVolume::PathOpticalDepth( const Vector &from, const Vector &to ) const
+{
+	const float age = gpGlobals->curtime - m_flStartTime;
+	const bool filled = IsDone();
+	Vector boxMin;
+	Vector boxMax;
+	float front;
+	const Vector delta = to - from;
+	const float len = delta.Length();
+	if ( len < 1.0f || !CurrentBox( boxMin, boxMax, front ) )
+	{
+		return 0.0f;
+	}
+
+	const Vector unit = delta / len;
+	float t0;
+	float t1;
+	if ( !ClipSegmentToBox( from, unit, len, boxMin, boxMax, t0, t1 ) )
+	{
+		return 0.0f;
+	}
+
 	float path = 0.0f;
 	for ( float t = t0; t < t1; t += NEO_SMOKE_PATH_STEP )
 	{
@@ -461,7 +514,19 @@ float CNeoSmokeVolume::PathOpticalDepth( const Vector &from, const Vector &to ) 
 		path += ( filled ? Density( pos, front ) : DomeDensity( pos, front ) ) * step;
 	}
 
-	return path * NEO_VOLSMOKE_EXTINCTION * bloom * VolSmokeFade( age );
+	return path * NEO_VOLSMOKE_EXTINCTION * VolSmokeBloom( age ) * VolSmokeFade( age );
+}
+
+bool CNeoSmokeVolume::SmokeBox( Vector &mins, Vector &maxs ) const
+{
+	if ( !IsDone() )
+	{
+		return false;
+	}
+
+	mins = m_vecSmokeMin;
+	maxs = m_vecSmokeMax;
+	return true;
 }
 
 bool CNeoSmokeVolume::Expired() const
@@ -622,6 +687,72 @@ float NEOSmoke_OpticalDepth( const Vector &from, const Vector &to )
 	}
 
 	return tau;
+}
+
+// Halvings of the segment to find where sight is lost: 1/64 of the segment.
+static constexpr int NEO_SMOKE_SIGHT_SEARCH_STEPS = 6;
+
+// Only the volumes whose box the whole segment crosses can add depth to a
+// part of it, so the search sums just those.
+typedef CUtlVectorFixedGrowable< const CNeoSmokeVolume *, 16 > CrossedVolumes_t;
+
+static float SightDepth( const CrossedVolumes_t &volumes, const Vector &from, const Vector &to )
+{
+	float tau = 0.0f;
+	for ( const CNeoSmokeVolume *pVol : volumes )
+	{
+		tau += pVol->PathOpticalDepth( from, to );
+	}
+
+	return tau;
+}
+
+float NEOSmoke_SightBlockFraction( const Vector &from, const Vector &to )
+{
+	CrossedVolumes_t crossed;
+	for ( const CNeoSmokeVolume *pVol : s_SmokeVolumes )
+	{
+		if ( pVol->SegmentCrossesBox( from, to ) )
+		{
+			crossed.AddToTail( pVol );
+		}
+	}
+
+	if ( crossed.IsEmpty() || SightDepth( crossed, from, to ) < NEO_SMOKE_SIGHT_BLOCK_DEPTH )
+	{
+		return 1.0f;
+	}
+
+	const Vector delta = to - from;
+	float clear = 0.0f;
+	float blocked = 1.0f;
+	for ( int i = 0; i < NEO_SMOKE_SIGHT_SEARCH_STEPS; ++i )
+	{
+		const float mid = 0.5f * ( clear + blocked );
+		if ( SightDepth( crossed, from, from + delta * mid ) >= NEO_SMOKE_SIGHT_BLOCK_DEPTH )
+		{
+			blocked = mid;
+		}
+		else
+		{
+			clear = mid;
+		}
+	}
+
+	return blocked;
+}
+
+bool NEOSmokeVolume_SmokeBox( const CBaseEntity *pGrenade, Vector &mins, Vector &maxs )
+{
+	for ( const CNeoSmokeVolume *pVol : s_SmokeVolumes )
+	{
+		if ( pVol->BelongsTo( pGrenade ) )
+		{
+			return pVol->SmokeBox( mins, maxs );
+		}
+	}
+
+	return false;
 }
 
 static constexpr int NEO_SMOKE_DEPTH_BENCH_RUNS = 1000;

@@ -3,8 +3,8 @@
 // The server fills the same field as the clients, from the same shared core
 // and world queries, so line of sight can follow the drawn smoke. The fill
 // runs on worker threads; the field does not depend on how its work is
-// split, so a match replays the same way on any machine. Not used by
-// gameplay yet.
+// split, so a match replays the same way on any machine. Bot sight reads
+// it through the smoke line-of-sight blocker.
 
 #ifndef NEO_SMOKE_VOLUME_H
 #define NEO_SMOKE_VOLUME_H
@@ -23,5 +23,17 @@ void NEOSmokeVolume_Create( const Vector &origin, CBaseEntity *pGrenade );
 // the look noise, at the smoke's current age. Until a field is filled its
 // smoke is the nominal dome.
 float NEOSmoke_OpticalDepth( const Vector &from, const Vector &to );
+
+// Optical depth at which smoke hides a player. Not measured yet: start value
+// from the design (1.8 % of the light gets through).
+static constexpr float NEO_SMOKE_SIGHT_BLOCK_DEPTH = 4.0f;
+
+// The share of the segment from `from` that stays in sight: 1 when the smoke
+// on it stays under NEO_SMOKE_SIGHT_BLOCK_DEPTH.
+float NEOSmoke_SightBlockFraction( const Vector &from, const Vector &to );
+
+// The box that holds the smoke of `pGrenade`'s field; false while the field
+// is filling or when the grenade has none.
+bool NEOSmokeVolume_SmokeBox( const CBaseEntity *pGrenade, Vector &mins, Vector &maxs );
 
 #endif // NEO_SMOKE_VOLUME_H

@@ -151,11 +151,15 @@ void CNEOGrenadeSmoke::Detonate(void)
 	{
 		m_hasBeenMadeNonSolid = true;
 
-		SetupParticles(sv_neo_smoke_bloom_layers.GetInt());
 		m_flSmokeBloomTime = gpGlobals->curtime;
 		if (sv_neo_smoke_volumetric.GetBool())
 		{
 			NEOSmokeVolume_Create(GetAbsOrigin(), this);
+			CNEOSmokeLineOfSightBlocker::CreateForSmokeField(GetAbsOrigin(), this);
+		}
+		else
+		{
+			SetupParticles(sv_neo_smoke_bloom_layers.GetInt());
 		}
 
 		CRecipientFilter filter;
@@ -191,16 +195,10 @@ void CNEOGrenadeSmoke::BecomeDebris()
 
 void CNEOGrenadeSmoke::SetupParticles(size_t number)
 {
-	// In volumetric mode the server's smoke volume draws the cloud.
-	const bool legacyParticles = !sv_neo_smoke_volumetric.GetBool();
 	for (size_t i = 0; i < number; ++i)
 	{
-		ParticleSmokeGrenade *ptr = nullptr;
-		if (legacyParticles)
-		{
-			ptr = dynamic_cast<ParticleSmokeGrenade*>(CreateEntityByName(PARTICLESMOKEGRENADE_ENTITYNAME));
-			Assert(ptr);
-		}
+		auto ptr = dynamic_cast<ParticleSmokeGrenade*>(CreateEntityByName(PARTICLESMOKEGRENADE_ENTITYNAME));
+		Assert(ptr);
 		if (ptr)
 		{
 			Vector vForward;
@@ -223,7 +221,7 @@ void CNEOGrenadeSmoke::SetupParticles(size_t number)
 			// Use `ai_debug_los 2` after spawn to visualize relative blocker size
 			int blockerSize = sv_neo_smoke_blocker_size.GetInt();
 			// Overlap with each particle's position
-			blocker->SetAbsOrigin(GetAbsOrigin());
+			blocker->SetAbsOrigin(ptr->GetAbsOrigin());
 			blocker->SetBounds(Vector(-blockerSize), Vector(blockerSize));
 			// Schedule activation of LOS blocking
 			blocker->SetThink(&CNEOSmokeLineOfSightBlocker::ActivateLOSBlocker);
