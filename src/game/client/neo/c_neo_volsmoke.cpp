@@ -24,6 +24,7 @@
 #include "vstdlib/jobthread.h"
 #include "neo_smoke_shared.h"
 #include "neo_smoke_world.h"
+#include "neo_smoke_jobs.h"
 
 // memdbgon must be the last include file in a .cpp file!!!
 #include "tier0/memdbgon.h"
@@ -78,8 +79,6 @@ static constexpr float NEO_VOLSMOKE_UPLOAD_HZ = 15.0f;
 static constexpr int NEO_VOLSMOKE_FILL_MAX_WORKERS = 8;
 static constexpr double NEO_VOLSMOKE_FILL_BUDGET = 0.0015; // seconds a frame, without workers
 static constexpr float NEO_VOLSMOKE_FILL_SAME_AGE = 0.25f; // seconds apart that count as one age
-static constexpr int NEO_VOLSMOKE_FILL_CHUNK_CELLS = 64;
-static constexpr int NEO_VOLSMOKE_FILL_CHUNK_QUERIES = 128;
 
 // The near pass clips against the engine's dest-alpha depth, which saturates
 // about 194 u from the eye. It marches view depths up to NEAR_RANGE, kept
@@ -610,72 +609,6 @@ static void VolSmokeDeleteRetired( VolSmokeRetireWait_t wait )
 	}
 }
 
-// ---------------------------------------------------------------------------
-// Fill workers
-// ---------------------------------------------------------------------------
-// The fill's world queries are world-only traces, taken from the workers.
-// The SDK client traces from pool threads too (threaded particle simulation,
-// whose collision queries trace the world), though it waits for those jobs
-// within the frame; the SDK does not document traces running while the main
-// thread is inside the engine. The map must stay loaded while a job runs:
-// every job is joined before its volume goes, and all of them at level
-// shutdown.
-static IThreadPool *s_pVolSmokeFillPool = NULL;
-static bool s_bVolSmokeFillPoolTried = false;
-
-static int VolSmokeFillWorkers()
-{
-	// With SMT the sibling threads absorb the main, render and sound threads.
-	// Without it, half the cores stay free for them.
-	const CPUInformation *pCpu = GetCPUInformation();
-	const int cores = pCpu->m_nPhysicalProcessors;
-	const bool smt = pCpu->m_nLogicalProcessors > pCpu->m_nPhysicalProcessors;
-	const int workers = smt ? cores - 1 : cores / 2;
-	return clamp( workers, 1, NEO_VOLSMOKE_FILL_MAX_WORKERS );
-}
-
-static IThreadPool *VolSmokeFillPool()
-{
-	if ( s_bVolSmokeFillPoolTried )
-	{
-		return s_pVolSmokeFillPool;
-	}
-
-	s_bVolSmokeFillPoolTried = true;
-	IThreadPool *pPool = CreateThreadPool();
-	ThreadPoolStartParams_t params;
-	params.nThreads = VolSmokeFillWorkers();
-	params.nThreadsMax = params.nThreads;
-	params.fDistribute = TRS_FALSE;
-	params.iThreadPriority = TP_PRIORITY_LOW;
-	if ( !pPool || !pPool->Start( params ) || pPool->NumThreads() < 1 )
-	{
-		Warning( "neo_volsmoke: no fill workers, filling on the main thread\n" );
-		if ( pPool )
-		{
-			DestroyThreadPool( pPool );
-		}
-
-		return NULL;
-	}
-
-	DevMsg( "neo_volsmoke: %d fill workers\n", pPool->NumThreads() );
-	s_pVolSmokeFillPool = pPool;
-	return s_pVolSmokeFillPool;
-}
-
-static void VolSmokeFillPoolShutdown()
-{
-	if ( !s_pVolSmokeFillPool )
-	{
-		return;
-	}
-
-	s_pVolSmokeFillPool->Stop();
-	DestroyThreadPool( s_pVolSmokeFillPool );
-	s_pVolSmokeFillPool = NULL;
-}
-
 // Deletes retired resources each frame, and all of them when the level or the
 // client shuts down (no frame is queued then).
 class CNeoVolSmokeRetireSystem final : public CAutoGameSystemPerFrame
@@ -697,7 +630,7 @@ public:
 	virtual void Shutdown() override
 	{
 		C_NeoVolSmoke::StopAllFills();
-		VolSmokeFillPoolShutdown();
+		NEOSmokeFillPoolShutdown();
 
 		// The retired materials reference the noise texture.
 		VolSmokeDeleteRetired( VOLSMOKE_RETIRE_NOW );
@@ -1079,7 +1012,7 @@ void C_NeoVolSmoke::StepFills()
 
 	s_nFillFrame = gpGlobals->framecount;
 
-	IThreadPool *pPool = VolSmokeFillPool();
+	IThreadPool *pPool = NEOSmokeFillPool( NEO_VOLSMOKE_FILL_MAX_WORKERS );
 	int running = 0;
 	for ( C_NeoVolSmoke *pVol : s_Volumes )
 	{
@@ -1154,7 +1087,7 @@ double C_NeoVolSmoke::StepFill( double budget )
 	double spent = 0.0;
 	while ( !m_Fill.IsDone() && spent < budget )
 	{
-		m_Fill.Step( NEO_VOLSMOKE_FILL_CHUNK_CELLS, NEO_VOLSMOKE_FILL_CHUNK_QUERIES );
+		m_Fill.Step( NEO_SMOKE_FILL_CHUNK_CELLS, NEO_SMOKE_FILL_CHUNK_QUERIES );
 		spent = Plat_FloatTime() - start;
 	}
 
@@ -1174,11 +1107,7 @@ double C_NeoVolSmoke::StepFill( double budget )
 void C_NeoVolSmoke::RunFill()
 {
 	const double start = Plat_FloatTime();
-	while ( !m_Fill.IsDone() && m_nFillCancel == 0 )
-	{
-		m_Fill.Step( NEO_VOLSMOKE_FILL_CHUNK_CELLS, NEO_VOLSMOKE_FILL_CHUNK_QUERIES );
-	}
-
+	NEOSmokeFillRun( m_Fill, m_nFillCancel );
 	m_flFillSeconds += Plat_FloatTime() - start;
 }
 
@@ -1191,12 +1120,8 @@ void C_NeoVolSmoke::StopFill()
 		return;
 	}
 
-	// Wait through the pool that runs the job: CJob::WaitForFinish waits
-	// through the global pool.
 	m_nFillCancel = 1;
-	s_pVolSmokeFillPool->YieldWait( m_pFillJob );
-	m_pFillJob->Release();
-	m_pFillJob = NULL;
+	NEOSmokeFillJoin( m_pFillJob );
 }
 
 void C_NeoVolSmoke::StopAllFills()
