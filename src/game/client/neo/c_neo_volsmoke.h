@@ -42,8 +42,10 @@ public:
 	// detonated at `spawnTime` (server time). Bloom and fade follow that time.
 	static C_NeoVolSmoke *Create( const Vector &origin, float spawnTime );
 
-	// As Create, but at most one volume per grenade, and none once its time is over.
-	static C_NeoVolSmoke *CreateForGrenade( const Vector &origin, float spawnTime );
+	// As Create, but at most one volume per grenade, and none once its time is
+	// over. The volume dies with `pGrenade`, as the legacy particles do, so a
+	// round restart that removes the grenade also removes its smoke.
+	static C_NeoVolSmoke *CreateForGrenade( const Vector &origin, float spawnTime, C_BaseEntity *pGrenade );
 
 	// Carves a capsule out of every live volume (bullet trace / explosion).
 	static void CarveAll( const Vector &start, const Vector &end, float radius );
@@ -53,7 +55,8 @@ public:
 	// Cancels and joins every running fill job.
 	static void StopAllFills();
 
-	// Releases the volumes whose time is over. Called once a frame, outside
+	// Releases the volumes whose time is over or whose grenade is gone. Called
+	// once a frame, outside
 	// the client think, which cannot release the entity it runs.
 	static void RemoveExpired();
 
@@ -155,6 +158,8 @@ private:
 	static int s_nNextId;
 
 	int    m_nId;
+	EHANDLE m_hGrenade;        // the grenade entity the volume belongs to, if any
+	bool   m_bHasGrenade;
 	int    m_nBox[3];          // the volume's box of cells, from the fill
 	int    m_nSeedCorner[3];   // the cell corner the grenade sits on, in the box
 	int    m_nBoxOffset[3];    // the box's low corner in the fill's query coordinates
