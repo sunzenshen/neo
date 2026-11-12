@@ -32,10 +32,9 @@
 // ---------------------------------------------------------------------------
 // ConVars
 // ---------------------------------------------------------------------------
-static ConVar neo_volsmoke_noise_amp( "neo_volsmoke_noise_amp", "1", FCVAR_CHEAT, "Test: look noise strength, 0 (smooth) to 1.", true, 0.0f, true, 1.0f );
 static ConVar neo_volsmoke_jitter( "neo_volsmoke_jitter", "1", FCVAR_CHEAT, "Per-pixel step jitter (grain) instead of banding." );
 static ConVar neo_volsmoke_debug( "neo_volsmoke_debug", "0", FCVAR_CHEAT, "0 off, 1 coverage, 2 scene depth as read by the shader, 3 box hit." );
-static ConVar neo_volsmoke_slabs( "neo_volsmoke_slabs", "1", FCVAR_CHEAT, "Test: 0 one march clipped by dest-alpha depth only, 1 far slabs depth-tested at their middle, 2 at their far end, 3 as 1 without the opaque-depth cull." );
+static ConVar neo_volsmoke_sheet( "neo_volsmoke_sheet", "1", FCVAR_CHEAT, "Hide slab tiles behind opaque smoke with a depth sheet. 0 draws every slab tile whole, the reference for checking what the sheet hides." );
 static ConVar neo_volsmoke_draw( "neo_volsmoke_draw", "1", FCVAR_CHEAT, "Draw smoke volumes." );
 static ConVar neo_volsmoke_fill_audit( "neo_volsmoke_fill_audit", "0", FCVAR_CHEAT, "Test: also ask the point and segment queries where a block query answered, keep their answer and count disagreements." );
 
@@ -92,17 +91,16 @@ static constexpr float NEO_VOLSMOKE_CULL_STEP = 16.0f;
 // cutoff, so its different step phase cannot let hidden smoke show.
 static constexpr float NEO_VOLSMOKE_CULL_OPAQUE = 6.9f;
 
-// The shader's look noise moves the front in by up to this, times its
-// strength; the cull assumes the most.
+// The shader's look noise at full strength moves the front in by up to this;
+// the cull assumes the most. The material does not default its strength, so
+// it is set every draw.
+static constexpr float NEO_VOLSMOKE_NOISE_AMP = 1.0f;
 static constexpr float NEO_VOLSMOKE_PUFF_BITE = 28.0f;
 
 // The grid covers the view frustum with this margin, and starts this far in
 // front of the eye so a box around the camera keeps a finite screen size.
 static constexpr float NEO_VOLSMOKE_CULL_FRUSTUM_MARGIN = 1.02f;
 static constexpr float NEO_VOLSMOKE_CULL_MIN_DEPTH = 1.0f;
-
-// View depth range of a whole-volume march; farther than any volume is drawn.
-static constexpr float NEO_VOLSMOKE_MAX_DEPTH = 65536.0f;
 
 // A carved cell refills over this many seconds. The radii are those of the
 // developer carve commands: a bullet's path and an explosion.
@@ -2125,8 +2123,8 @@ void C_NeoVolSmoke::SetDrawParams( IMaterial *pMat ) const
 	const float age = gpGlobals->curtime - m_flSpawnTime;
 	SetFloatVar( pMat, "$extinction", DrawExtinction() );
 	SetVec3Var( pMat, "$front", Vector( FrontRadius( age ), m_flDistRange, 1.0f / NEO_VOLSMOKE_EDGE ) );
-	SetFloatVar( pMat, "$noiseamp", neo_volsmoke_noise_amp.GetFloat() );
 	SetFloatVar( pMat, "$age", age );
+	SetFloatVar( pMat, "$noiseamp", NEO_VOLSMOKE_NOISE_AMP );
 	SetIntVar( pMat, "$jitter", neo_volsmoke_jitter.GetInt() );
 	SetIntVar( pMat, "$debugmode", neo_volsmoke_debug.GetInt() );
 }
@@ -2873,7 +2871,7 @@ void C_NeoVolSmoke::DrawOpaqueSheet( IMatRenderContext *pRenderContext )
 	s_nSheetTiles = 0;
 	s_nSheetTilesOpaque = 0;
 	s_CullVolumes.RemoveAll();
-	if ( neo_volsmoke_slabs.GetInt() == 3 || neo_volsmoke_slabs.GetInt() == 0 )
+	if ( !neo_volsmoke_sheet.GetBool() )
 	{
 		return;
 	}
@@ -2900,7 +2898,7 @@ void C_NeoVolSmoke::DrawOpaqueSheet( IMatRenderContext *pRenderContext )
 	const Vector &up = CurrentViewUp();
 	const float tanX = NEO_VOLSMOKE_CULL_FRUSTUM_MARGIN / proj[0][0];
 	const float tanY = NEO_VOLSMOKE_CULL_FRUSTUM_MARGIN / proj[1][1];
-	const float bite = NEO_VOLSMOKE_PUFF_BITE * neo_volsmoke_noise_amp.GetFloat();
+	const float bite = NEO_VOLSMOKE_PUFF_BITE * NEO_VOLSMOKE_NOISE_AMP;
 
 	// The volumes that can add smoke, and the screen rectangle that holds them.
 	CUtlVectorFixedGrowable< VolSmokeSheetVolume_t, 16 > vols;
@@ -3143,7 +3141,7 @@ struct VolSmokeCullGrid_t
 // False when every slab is to be drawn whole.
 bool C_NeoVolSmoke::BuildCullGrid( VolSmokeCullGrid_t &grid ) const
 {
-	if ( neo_volsmoke_slabs.GetInt() == 3 || s_nCullSerial != s_nSheetSerial )
+	if ( !neo_volsmoke_sheet.GetBool() || s_nCullSerial != s_nSheetSerial )
 	{
 		return false;
 	}
@@ -3212,11 +3210,10 @@ void C_NeoVolSmoke::DrawFarSlabs( IMatRenderContext *pRenderContext )
 
 	m_nSlabTiles = 0;
 	m_nSlabTilesCulled = 0;
-	if ( zMax <= NEO_VOLSMOKE_NEAR_RANGE || neo_volsmoke_slabs.GetInt() == 0 )
+	if ( zMax <= NEO_VOLSMOKE_NEAR_RANGE )
 	{
 		return;
 	}
-	const float testAt = neo_volsmoke_slabs.GetInt() == 2 ? 1.0f : 0.5f;
 
 	// Slab ends are whole units: the shader rounds the range it is given, and
 	// the near pass ends at NEAR_RANGE exactly.
@@ -3337,7 +3334,7 @@ void C_NeoVolSmoke::DrawFarSlabs( IMatRenderContext *pRenderContext )
 	{
 		const float lo = bounds[q.slab];
 		const float hi = bounds[q.slab + 1];
-		const float zc = lo + testAt * ( hi - lo );
+		const float zc = 0.5f * ( lo + hi ); // depth-tested at its middle
 		const Vector center = eye + fwd * zc;
 
 		const float xs[4] = { q.xMin, q.xMax, q.xMax, q.xMin };
@@ -3396,7 +3393,7 @@ void C_NeoVolSmoke::DrawNearPass( IMatRenderContext *pRenderContext )
 	for ( int i = 0; i < 8; ++i )
 	{
 		meshBuilder.Position3fv( corners[i].Base() );
-		meshBuilder.TexCoord2f( 0, 0.0f, neo_volsmoke_slabs.GetInt() == 0 ? NEO_VOLSMOKE_MAX_DEPTH : NEO_VOLSMOKE_NEAR_RANGE );
+		meshBuilder.TexCoord2f( 0, 0.0f, NEO_VOLSMOKE_NEAR_RANGE );
 		meshBuilder.AdvanceVertex();
 	}
 	for ( int i = 0; i < 36; ++i )
