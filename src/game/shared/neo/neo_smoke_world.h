@@ -17,12 +17,6 @@
 #include "neo_smoke_fill.h"
 #include "utlvector.h"
 
-struct NEOSmokeAuditCell_t
-{
-	int nCell[3];
-	int nAxis; // -1 for a point query
-};
-
 class CNEOSmokeWorld : public INEOSmokeFillWorld
 {
 public:
@@ -39,14 +33,7 @@ public:
 	virtual bool SeedInWater() override;
 	virtual bool CellWater( int x, int y, int z ) override;
 
-	int AuditChecks() const { return m_nAuditChecks; }
-	int AuditDisagreements() const { return m_nAuditDisagree; }
-
 protected:
-	// An audited fill also asks the point and segment queries where a block
-	// query answered, keeps their answer and records disagreements.
-	virtual bool Auditing() const { return false; }
-
 	bool InBox( int x, int y, int z ) const
 	{
 		return x >= 0 && y >= 0 && z >= 0 && x < m_nBoxSize[0] && y < m_nBoxSize[1] && z < m_nBoxSize[2];
@@ -63,11 +50,8 @@ protected:
 	Vector m_vecGridMin;
 	int m_nBoxSize[3];      // the drawn box, from m_nDrawOffset
 	int m_nDrawOffset[3];
-	CUtlVector<NEOSmokeAuditCell_t> m_AuditCells; // the first disagreements
 
 private:
-	void Audit( bool directSolid, int x, int y, int z, int axis );
-
 	bool InLattice( int x, int y, int z ) const
 	{
 		return x >= m_nLatticeLo[0] && y >= m_nLatticeLo[1] && z >= m_nLatticeLo[2]
@@ -88,8 +72,6 @@ private:
 	int m_nCoarse[3];
 	CUtlVector<int> m_Coarse;          // NEO_SMOKE_COARSE_* or fine offset + 1
 	CUtlVector<unsigned char> m_Fine;  // NEOSmokeBlockState_t
-	int m_nAuditChecks;
-	int m_nAuditDisagree;
 };
 
 #endif // NEO_SMOKE_WORLD_H

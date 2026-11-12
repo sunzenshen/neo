@@ -19,8 +19,6 @@ static_assert( NEO_SMOKE_COARSE_BLOCK % NEO_SMOKE_FINE_BLOCK == 0, "fine blocks 
 static constexpr int NEO_SMOKE_COARSE_UNKNOWN = 0;
 static constexpr int NEO_SMOKE_COARSE_EMPTY = -1;
 
-static constexpr int NEO_SMOKE_AUDIT_MAX_WARNINGS = 10; // per volume
-
 enum NEOSmokeBlockState_t
 {
 	NEO_SMOKE_BLOCK_UNKNOWN = 0,
@@ -29,7 +27,7 @@ enum NEOSmokeBlockState_t
 };
 
 CNEOSmokeWorld::CNEOSmokeWorld( const Vector &gridMin, const int boxSize[3], const int seedCorner[3], const int latticeLo[3], const int latticeHi[3] )
-	: m_vecGridMin( gridMin ), m_nAuditChecks( 0 ), m_nAuditDisagree( 0 )
+	: m_vecGridMin( gridMin )
 {
 	int blocks = 1;
 	for ( int a = 0; a < 3; ++a )
@@ -64,19 +62,12 @@ bool CNEOSmokeWorld::PointSolid( const Vector &pos )
 
 bool CNEOSmokeWorld::CellSolid( int x, int y, int z )
 {
-	bool solid = false;
-	const bool inEmpty = InEmptyBlock( x, y, z );
-	if ( !inEmpty || Auditing() )
+	if ( InEmptyBlock( x, y, z ) )
 	{
-		solid = PointSolid( Center( x, y, z ) );
+		return false;
 	}
 
-	if ( inEmpty && Auditing() )
-	{
-		Audit( solid, x, y, z, -1 );
-	}
-
-	return solid;
+	return PointSolid( Center( x, y, z ) );
 }
 
 bool CNEOSmokeWorld::LinkBlocked( int x, int y, int z, int axis )
@@ -84,24 +75,17 @@ bool CNEOSmokeWorld::LinkBlocked( int x, int y, int z, int axis )
 	int n[3] = { x, y, z };
 	++n[axis];
 
-	const bool inEmpty = InEmptyBlock( x, y, z ) && InEmptyBlock( n[0], n[1], n[2] );
-	bool blocked = false;
-	if ( !inEmpty || Auditing() )
+	if ( InEmptyBlock( x, y, z ) && InEmptyBlock( n[0], n[1], n[2] ) )
 	{
-		Ray_t ray;
-		ray.Init( Center( x, y, z ), Center( n[0], n[1], n[2] ) );
-		CTraceFilterWorldOnly filter;
-		trace_t tr;
-		enginetrace->TraceRay( ray, NEO_VOLSMOKE_FILL_MASK, &filter, &tr );
-		blocked = tr.startsolid || tr.fraction < 1.0f;
+		return false;
 	}
 
-	if ( inEmpty && Auditing() )
-	{
-		Audit( blocked, x, y, z, axis );
-	}
-
-	return blocked;
+	Ray_t ray;
+	ray.Init( Center( x, y, z ), Center( n[0], n[1], n[2] ) );
+	CTraceFilterWorldOnly filter;
+	trace_t tr;
+	enginetrace->TraceRay( ray, NEO_VOLSMOKE_FILL_MASK, &filter, &tr );
+	return tr.startsolid || tr.fraction < 1.0f;
 }
 
 bool CNEOSmokeWorld::SeedBlocked( int x, int y, int z )
@@ -122,28 +106,6 @@ bool CNEOSmokeWorld::SeedInWater()
 bool CNEOSmokeWorld::CellWater( int x, int y, int z )
 {
 	return PointIn( Center( x, y, z ), NEO_VOLSMOKE_WATER_MASK );
-}
-
-// The block answered "open"; the direct query said otherwise. The direct
-// answer is the one returned, so an audited fill grows the old field.
-void CNEOSmokeWorld::Audit( bool directSolid, int x, int y, int z, int axis )
-{
-	++m_nAuditChecks;
-	if ( !directSolid )
-	{
-		return;
-	}
-
-	++m_nAuditDisagree;
-	if ( m_nAuditDisagree > NEO_SMOKE_AUDIT_MAX_WARNINGS )
-	{
-		return;
-	}
-
-	// May run on a fill worker, so it only records; the owner reports on the
-	// main thread.
-	const NEOSmokeAuditCell_t cell = { { x, y, z }, axis };
-	m_AuditCells.AddToTail( cell );
 }
 
 bool CNEOSmokeWorld::InEmptyBlock( int x, int y, int z )
