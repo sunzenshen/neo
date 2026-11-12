@@ -27,6 +27,11 @@ Vector		g_SmokeFogOverlayColor;
 #ifdef NEO
 bool		g_SmokeFogOverlayThermalOverride;
 
+// This frame's colored share of the overlay alpha, and its alpha-weighted color.
+static float s_flColoredAlpha = 0.0f;
+static Vector s_vecColoredSum( 0.0f, 0.0f, 0.0f );
+static int s_nColoredFrame = -1;
+
 // Share of the screen size the overlay quad reaches past each edge.
 static const float SMOKE_FOG_OVERLAY_MARGIN = 0.01f;
 #endif
@@ -74,6 +79,15 @@ void DrawSmokeFogOverlay()
 
 	// Hard-coded for now..
 	g_SmokeFogOverlayColor.Init( 0.3, 0.3, 0.3 );
+#ifdef NEO
+	// Volumes in a dark place give the overlay their own darker color; the
+	// legacy smoke's share keeps the grey.
+	if ( s_nColoredFrame == gpGlobals->framecount && s_flColoredAlpha > 0.0f )
+	{
+		const float colored = MIN( s_flColoredAlpha / g_SmokeFogOverlayAlpha, 1.0f );
+		g_SmokeFogOverlayColor = Lerp( colored, g_SmokeFogOverlayColor, s_vecColoredSum / s_flColoredAlpha );
+	}
+#endif // NEO
 	
 	CMatRenderContextPtr pRenderContext( materials );
 
@@ -208,6 +222,20 @@ void UpdateThermalOverride()
 	{
 		g_SmokeFogOverlayAlpha = 0;
 	}
+}
+
+void AddSmokeFogOverlayColored( float alpha, const Vector &color )
+{
+	if ( s_nColoredFrame != gpGlobals->framecount )
+	{
+		s_nColoredFrame = gpGlobals->framecount;
+		s_flColoredAlpha = 0.0f;
+		s_vecColoredSum.Init();
+	}
+
+	g_SmokeFogOverlayAlpha += alpha;
+	s_flColoredAlpha += alpha;
+	s_vecColoredSum += color * alpha;
 }
 
 // Read before UpdateThermalOverride runs, so it applies the same rules to
