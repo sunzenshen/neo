@@ -657,15 +657,6 @@ C_NeoVolSmoke *C_NeoVolSmoke::CreateForGrenade( const Vector &origin, float spaw
 	return pVol;
 }
 
-void C_NeoVolSmoke::RemoveAll()
-{
-	// Release() removes the entity from the list via the destructor.
-	while ( s_Volumes.Count() > 0 )
-	{
-		s_Volumes[0]->Release();
-	}
-}
-
 void C_NeoVolSmoke::RemoveExpired()
 {
 	const float now = gpGlobals->curtime;
@@ -2216,12 +2207,6 @@ float C_NeoVolSmoke::OpticalDepth( const Vector &eye, const Vector &point )
 	return tau;
 }
 
-void C_NeoVolSmoke::PrintOpticalDepth( const Vector &from, const Vector &to )
-{
-	Msg( "neo_volsmoke_depth: (%g %g %g) -> (%g %g %g) depth %.4f (%d volumes)\n",
-		from.x, from.y, from.z, to.x, to.y, to.z, OpticalDepth( from, to ), s_Volumes.Count() );
-}
-
 // How strongly a flash, or what it lights, shows through smoke of optical
 // depth tau.
 static float FlashShows( float tau )
@@ -3057,88 +3042,4 @@ void C_NeoVolSmoke::DrawNearPass( IMatRenderContext *pRenderContext )
 	}
 	meshBuilder.End();
 	pMesh->Draw();
-}
-
-// ---------------------------------------------------------------------------
-// Console commands
-// ---------------------------------------------------------------------------
-static bool ViewTrace( trace_t &tr, float dist )
-{
-	C_BasePlayer *pPlayer = C_BasePlayer::GetLocalPlayer();
-	if ( !pPlayer )
-	{
-		return false;
-	}
-
-	Vector fwd;
-	pPlayer->EyeVectors( &fwd );
-	const Vector start = pPlayer->EyePosition();
-	UTIL_TraceLine( start, start + fwd * dist, MASK_SOLID_BRUSHONLY, pPlayer, COLLISION_GROUP_NONE, &tr );
-	return true;
-}
-
-// About where a resting grenade's origin sits above the surface.
-static constexpr float NEO_VOLSMOKE_SPAWN_LIFT = 4.0f;
-
-// How far along the view the debug commands look for a surface.
-static constexpr float NEO_VOLSMOKE_SPAWN_REACH = 2048.0f;
-static constexpr float NEO_VOLSMOKE_CARVE_REACH = 4096.0f;
-
-CON_COMMAND_F( neo_volsmoke_spawn, "Spawn a volumetric smoke at the crosshair, as a grenade resting there. Args: [age in seconds]", FCVAR_CHEAT )
-{
-	trace_t tr;
-	if ( !ViewTrace( tr, NEO_VOLSMOKE_SPAWN_REACH ) )
-	{
-		return;
-	}
-
-	const float age = args.ArgC() > 1 ? atof( args[1] ) : 0.0f;
-
-	Vector origin = tr.endpos + tr.plane.normal * NEO_VOLSMOKE_SPAWN_LIFT;
-	if ( tr.fraction >= 1.0f )
-	{
-		origin = tr.endpos;
-	}
-
-	C_NeoVolSmoke *p = C_NeoVolSmoke::Create( origin, gpGlobals->curtime - age );
-	Msg( "neo_volsmoke: %s at (%.0f %.0f %.0f), age %.1f, %d live\n", p ? "spawned" : "FAILED", origin.x, origin.y, origin.z, age, C_NeoVolSmoke::LiveCount() );
-}
-
-CON_COMMAND_F( neo_volsmoke_carve, "Carve a bullet-sized hole through smoke along your view.", FCVAR_CHEAT )
-{
-	trace_t tr;
-	if ( !ViewTrace( tr, NEO_VOLSMOKE_CARVE_REACH ) )
-	{
-		return;
-	}
-
-	C_NeoVolSmoke::CarveAll( tr.startpos, tr.endpos, NEO_VOLSMOKE_CARVE_RADIUS );
-}
-
-CON_COMMAND_F( neo_volsmoke_explode, "Carve an explosion-sized sphere out of smoke at the crosshair.", FCVAR_CHEAT )
-{
-	trace_t tr;
-	if ( !ViewTrace( tr, NEO_VOLSMOKE_CARVE_REACH ) )
-	{
-		return;
-	}
-
-	C_NeoVolSmoke::CarveAll( tr.endpos, tr.endpos, NEO_VOLSMOKE_EXPLODE_RADIUS );
-}
-
-CON_COMMAND_F( neo_volsmoke_clear, "Remove all volumetric smoke.", FCVAR_CHEAT )
-{
-	C_NeoVolSmoke::RemoveAll();
-}
-
-CON_COMMAND_F( neo_volsmoke_depth, "Print the smoke optical depth on a segment, as the flash and silhouette read it. Args: x1 y1 z1 x2 y2 z2", FCVAR_CHEAT )
-{
-	if ( args.ArgC() < 7 )
-	{
-		return;
-	}
-
-	const Vector from( atof( args[1] ), atof( args[2] ), atof( args[3] ) );
-	const Vector to( atof( args[4] ), atof( args[5] ), atof( args[6] ) );
-	C_NeoVolSmoke::PrintOpticalDepth( from, to );
 }
