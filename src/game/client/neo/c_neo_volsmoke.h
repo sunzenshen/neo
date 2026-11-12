@@ -61,6 +61,7 @@ public:
 	static void RemoveExpired();
 
 	static void PrintAllStats();
+	static void PrintOpticalDepth( const Vector &from, const Vector &to );
 
 	// The translucent sort key of a volume: the view depth of the nearest
 	// corner of its smoke box. False when the renderable is not a volume.
