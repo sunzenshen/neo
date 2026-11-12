@@ -84,7 +84,7 @@ void DrawSmokeFogOverlay()
 	// legacy smoke's share keeps the gray.
 	if ( s_nColoredFrame == gpGlobals->framecount && s_flColoredAlpha > 0.0f )
 	{
-		const float colored = MIN( s_flColoredAlpha / g_SmokeFogOverlayAlpha, 1.0f );
+		const float colored = Min( s_flColoredAlpha / g_SmokeFogOverlayAlpha, 1.0f );
 		g_SmokeFogOverlayColor = Lerp( colored, g_SmokeFogOverlayColor, s_vecColoredSum / s_flColoredAlpha );
 	}
 #endif // NEO
@@ -127,10 +127,6 @@ void DrawSmokeFogOverlay()
 	// column uncovered.
 	const float lo = -SMOKE_FOG_OVERLAY_MARGIN;
 	const float hi = 1.0f + SMOKE_FOG_OVERLAY_MARGIN;
-#else
-	const float lo = 0.0f;
-	const float hi = 1.0f;
-#endif // NEO
 
 	meshBuilder.Begin( pMesh, MATERIAL_QUADS, 1 );
 
@@ -153,6 +149,29 @@ void DrawSmokeFogOverlay()
 	meshBuilder.Color4f( vColor.x, vColor.y, vColor.z, alpha );
 	meshBuilder.TexCoord2f( 0, 0.0f, 0.0f );
 	meshBuilder.AdvanceVertex();
+#else
+	meshBuilder.Begin( pMesh, MATERIAL_QUADS, 1 );
+
+	meshBuilder.Position3f( 0, 0, dist );
+	meshBuilder.Color4f( vColor.x, vColor.y, vColor.z, alpha );
+	meshBuilder.TexCoord2f( 0, 0.0f, 0.0f );
+	meshBuilder.AdvanceVertex();
+
+	meshBuilder.Position3f( 0, 1, dist );
+	meshBuilder.Color4f( vColor.x, vColor.y, vColor.z, alpha );
+	meshBuilder.TexCoord2f( 0, 0.0f, 0.0f );
+	meshBuilder.AdvanceVertex();
+
+	meshBuilder.Position3f( 1, 1, dist );
+	meshBuilder.Color4f( vColor.x, vColor.y, vColor.z, alpha );
+	meshBuilder.TexCoord2f( 0, 0.0f, 0.0f );
+	meshBuilder.AdvanceVertex();
+
+	meshBuilder.Position3f( 1, 0, dist );
+	meshBuilder.Color4f( vColor.x, vColor.y, vColor.z, alpha );
+	meshBuilder.TexCoord2f( 0, 0.0f, 0.0f );
+	meshBuilder.AdvanceVertex();
+#endif // NEO
 
 	meshBuilder.End();
 	pMesh->Draw();
@@ -170,7 +189,7 @@ void DrawSmokeFogOverlay()
 extern ConVar glow_outline_effect_enable;
 #endif // GLOWS_ENABLE
 extern ConVar mp_forcecamera;
-
+#ifdef NEO
 enum SmokeFogOverlayView_t
 {
 	SMOKE_FOG_VIEW_NORMAL,
@@ -244,3 +263,41 @@ bool SmokeFogOverlayCoversView()
 {
 	return g_SmokeFogOverlayAlpha >= 1.0f && SmokeFogOverlayView() == SMOKE_FOG_VIEW_NORMAL;
 }
+#else
+void UpdateThermalOverride()
+{
+	auto localPlayer = C_NEO_Player::GetLocalNEOPlayer();
+	Assert(localPlayer);
+	if (localPlayer->IsAlive())
+	{
+		if (localPlayer->GetClass() == NEO_CLASS_SUPPORT && localPlayer->IsInVision())
+		{
+			g_SmokeFogOverlayThermalOverride = true;
+			g_SmokeFogOverlayAlpha = 0;
+			return;
+		}
+	}
+	else if (localPlayer->GetObserverMode() == OBS_MODE_IN_EYE)
+	{
+		auto targetPlayer = dynamic_cast<C_NEO_Player*>(localPlayer->GetObserverTarget());
+		if (targetPlayer && targetPlayer->IsAlive())
+		{
+			if (targetPlayer->GetClass() == NEO_CLASS_SUPPORT && targetPlayer->IsInVision())
+			{
+				g_SmokeFogOverlayThermalOverride = true;
+				g_SmokeFogOverlayAlpha = 0;
+				return;
+			}
+		}
+	}
+#ifdef GLOWS_ENABLE
+	else if (localPlayer->IsObserver() && (localPlayer->GetTeamNumber() == TEAM_SPECTATOR || mp_forcecamera.GetInt() == OBS_ALLOW_ALL))
+	{
+		g_SmokeFogOverlayThermalOverride = false;
+		g_SmokeFogOverlayAlpha = 0;
+		return;
+	}
+#endif // GLOWS_ENABLE
+	g_SmokeFogOverlayThermalOverride = false;
+}
+#endif // NEO
