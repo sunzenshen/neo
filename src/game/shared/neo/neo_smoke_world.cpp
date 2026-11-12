@@ -8,9 +8,6 @@
 // memdbgon must be the last include file in a .cpp file!!!
 #include "tier0/memdbgon.h"
 
-ConVar sv_neo_smoke_volumetric( "sv_neo_smoke_volumetric", "0", FCVAR_REPLICATED | FCVAR_NOTIFY,
-	"Smoke grenades: 0 = legacy particle smoke, 1 = volumetric smoke. Applies from the next detonation.", true, 0.0f, true, 1.0f );
-
 static constexpr int NEO_SMOKE_COARSE_BLOCK = CNEOSmokeFill::BLOCK_ALIGN; // cells
 static constexpr int NEO_SMOKE_FINE_BLOCK = 2;                            // cells
 static constexpr int NEO_SMOKE_FINE_PER_AXIS = NEO_SMOKE_COARSE_BLOCK / NEO_SMOKE_FINE_BLOCK;
