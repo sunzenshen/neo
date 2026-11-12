@@ -1,6 +1,7 @@
 #include "cbase.h"
 #include "neo_smokegrenade.h"
 #include "neo_smokelineofsightblocker.h"
+#include "neo_smoke_volume.h"
 
 #include "neo_tracefilter_collisiongroupdelta.h"
 #include "particle_smokegrenade.h"
@@ -151,6 +152,7 @@ void CNEOGrenadeSmoke::Detonate(void)
 
 		SetupParticles(sv_neo_smoke_bloom_layers.GetInt());
 		m_flSmokeBloomTime = gpGlobals->curtime;
+		NEOSmokeVolume_Create(GetAbsOrigin(), this);
 
 		CRecipientFilter filter;
 		filter.AddRecipientsByPAS(GetAbsOrigin());

@@ -792,7 +792,7 @@ C_NeoVolSmoke *C_NeoVolSmoke::CreateForGrenade( const Vector &origin, float spaw
 		pVol->m_bHasGrenade = true;
 	}
 
-	DevMsg( "neo_volsmoke: grenade at (%.1f %.1f %.1f) spawned volume %d, age %.2f\n",
+	DevMsg( "neo_volsmoke: grenade at (%.9g %.9g %.9g) spawned volume %d, age %.2f\n",
 		origin.x, origin.y, origin.z, pVol ? pVol->m_nId : -1, gpGlobals->curtime - spawnTime );
 	return pVol;
 }
@@ -1729,18 +1729,7 @@ void C_NeoVolSmoke::Carve( const Vector &start, const Vector &end, float radius 
 // Field and atlas hashes for neo_volsmoke_stats. Each is a sum over cells of a
 // mix of the cell's place relative to the grenade and its value, so it does
 // not depend on the box or the atlas layout: equal fields give equal hashes
-// across builds. The key is the offline fill prototype's.
-static unsigned long long VolSmokeCellKey( int x, int y, int z, unsigned long long value )
-{
-	const int bias = 512;
-	unsigned long long k = ( (unsigned long long)( x + bias ) << 40 ) ^ ( (unsigned long long)( y + bias ) << 28 )
-		^ ( (unsigned long long)( z + bias ) << 16 ) ^ value;
-	k *= 0x9E3779B97F4A7C15ull;
-	k ^= k >> 29;
-	k *= 0xBF58476D1CE4E5B9ull;
-	k ^= k >> 32;
-	return k;
-}
+// across builds. The key is the offline fill prototype's (VolSmokeCellKey).
 
 unsigned long long C_NeoVolSmoke::ClientFieldHash() const
 {
