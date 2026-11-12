@@ -1847,6 +1847,14 @@ int C_NeoVolSmoke::DrawModel( int flags )
 		return 0;
 	}
 
+	CMatRenderContextPtr pRenderContext( materials );
+
+	if ( !ShaderDraws() )
+	{
+		DrawCoverBox( pRenderContext );
+		return 1;
+	}
+
 	SetDrawParams( m_Material );
 	SetDrawParams( m_SlabMaterial );
 
@@ -1854,8 +1862,6 @@ int C_NeoVolSmoke::DrawModel( int flags )
 	const int nLights = CollectDynamicLights( m_vecSmokeMin, m_vecSmokeMax, lights );
 	SetDynamicLightParams( m_Material, lights, nLights );
 	SetDynamicLightParams( m_SlabMaterial, lights, nLights );
-
-	CMatRenderContextPtr pRenderContext( materials );
 
 	pRenderContext->MatrixMode( MATERIAL_MODEL );
 	pRenderContext->PushMatrix();
@@ -2917,4 +2923,86 @@ void C_NeoVolSmoke::DrawNearPass( IMatRenderContext *pRenderContext )
 	}
 	meshBuilder.End();
 	pMesh->Draw();
+}
+
+// The shader falls back on hardware without ps_3_0; the material then
+// carries the fallback shader's name.
+bool C_NeoVolSmoke::ShaderDraws()
+{
+	return V_strcmp( m_Material->GetShaderName(), "Neo_VolSmoke" ) == 0
+		&& V_strcmp( m_SlabMaterial->GetShaderName(), "Neo_VolSmoke" ) == 0;
+}
+
+static IMaterial *VolSmokeCoverMaterial()
+{
+	static IMaterial *s_pMat = nullptr;
+	if ( !s_pMat )
+	{
+		KeyValues *pVMT = new KeyValues( "UnlitGeneric" );
+		pVMT->SetInt( "$vertexcolor", 1 );
+		pVMT->SetInt( "$nocull", 1 );
+		s_pMat = materials->CreateMaterial( "__neo_volsmoke_cover", pVMT );
+	}
+
+	return s_pMat;
+}
+
+// Without the shader, an opaque box over everywhere the fill reached. It
+// hides more than the cloud would, so a client cannot gain by losing the
+// shader. Two-sided, so a camera inside it sees nothing past it either.
+void C_NeoVolSmoke::DrawCoverBox( IMatRenderContext *pRenderContext )
+{
+	IMaterial *pMat = VolSmokeCoverMaterial();
+	if ( !pMat || pMat->IsErrorMaterial() )
+	{
+		return;
+	}
+
+	unsigned char rgb[3];
+	for ( int k = 0; k < 3; ++k )
+	{
+		rgb[k] = VolSmokeByte( powf( m_vecColor[k], 1.0f / NEO_VOLSMOKE_DISPLAY_GAMMA ) );
+	}
+
+	const Vector &a = m_vecGridMin;
+	const Vector &b = m_vecGridMax;
+	const Vector corners[8] =
+	{
+		Vector( a.x, a.y, a.z ), Vector( b.x, a.y, a.z ), Vector( b.x, b.y, a.z ), Vector( a.x, b.y, a.z ),
+		Vector( a.x, a.y, b.z ), Vector( b.x, a.y, b.z ), Vector( b.x, b.y, b.z ), Vector( a.x, b.y, b.z ),
+	};
+	static const unsigned short indices[36] =
+	{
+		0, 2, 1,  0, 3, 2,
+		4, 5, 6,  4, 6, 7,
+		0, 1, 5,  0, 5, 4,
+		2, 3, 7,  2, 7, 6,
+		1, 2, 6,  1, 6, 5,
+		3, 0, 4,  3, 4, 7,
+	};
+
+	pRenderContext->MatrixMode( MATERIAL_MODEL );
+	pRenderContext->PushMatrix();
+	pRenderContext->LoadIdentity();
+	pRenderContext->Bind( pMat );
+	IMesh *pMesh = pRenderContext->GetDynamicMesh( true, nullptr, nullptr, pMat );
+
+	CMeshBuilder meshBuilder;
+	meshBuilder.Begin( pMesh, MATERIAL_TRIANGLES, 8, 36 );
+	for ( int i = 0; i < 8; ++i )
+	{
+		meshBuilder.Position3fv( corners[i].Base() );
+		meshBuilder.Color4ub( rgb[0], rgb[1], rgb[2], 255 );
+		meshBuilder.AdvanceVertex();
+	}
+	for ( int i = 0; i < 36; ++i )
+	{
+		meshBuilder.Index( indices[i] );
+		meshBuilder.AdvanceIndex();
+	}
+	meshBuilder.End();
+	pMesh->Draw();
+
+	pRenderContext->MatrixMode( MATERIAL_MODEL );
+	pRenderContext->PopMatrix();
 }

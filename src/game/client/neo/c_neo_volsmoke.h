@@ -128,6 +128,8 @@ private:
 	static void BuildOpaqueSheet( IMatRenderContext *pRenderContext );
 	void DrawFarSlabs( IMatRenderContext *pRenderContext );
 	void DrawNearPass( IMatRenderContext *pRenderContext );
+	bool ShaderDraws();
+	void DrawCoverBox( IMatRenderContext *pRenderContext );
 
 	// What shows through the smoke after the volume draws
 	static float OpticalDepth( const Vector &eye, const Vector &point );

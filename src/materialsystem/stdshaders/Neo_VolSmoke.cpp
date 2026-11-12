@@ -64,11 +64,12 @@ SHADER_INIT
 
 SHADER_FALLBACK
 {
-	if ( g_pHardwareConfig->GetDXSupportLevel() < 95 || !g_pHardwareConfig->SupportsShaderModel_3_0() )
+	// Keyed on the hardware, not the configured dx level, so a lowered
+	// mat_dxlevel on capable hardware still draws the smoke.
+	if ( g_pHardwareConfig->GetMaxDXSupportLevel() < 95 )
 	{
-		// No ps_3_0: draw nothing rather than something wrong. The caller can
-		// fall back to the legacy particle smoke when this material is in
-		// fallback (IMaterial::GetShaderName() != "Neo_VolSmoke").
+		// No ps_3_0. The client sees the fallback through
+		// IMaterial::GetShaderName() and draws an opaque box instead.
 		return "Wireframe";
 	}
 	return 0;
