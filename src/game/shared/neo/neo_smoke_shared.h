@@ -10,6 +10,7 @@
 #endif
 
 #include "mathlib/mathlib.h"
+#include "neo_smoke_fill.h"
 
 class ConVar;
 
@@ -21,6 +22,14 @@ extern ConVar sv_neo_smoke_volumetric;
 static constexpr float NEO_VOLSMOKE_BLOOM_TIME = 5.5f;
 static constexpr float NEO_VOLSMOKE_FADE_START = 17.0f;
 static constexpr float NEO_VOLSMOKE_FADE_END = 25.0f;
+
+// Step of the CPU smoke path. The server's sight and the client's path
+// sample alike, so the two sums are equal.
+static constexpr float NEO_VOLSMOKE_PATH_STEP = 16.0f;
+
+// Path lengths are stored up to this length, or up to the front when it is
+// farther, so a short field keeps its precision.
+static constexpr float NEO_VOLSMOKE_DIST_RANGE = 64 * CNeoSmokeFill::CELL_SIZE;
 
 // Width of the soft edge behind the expanding front.
 static constexpr float NEO_VOLSMOKE_EDGE = 27.0f;
