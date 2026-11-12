@@ -1541,7 +1541,15 @@ void C_NeoVolSmoke::AddInsideOverlay( float front, float now )
 	const float age = now - m_flSpawnTime;
 	const float density = sum / ( side * side * side );
 	const float share = clamp( density / NEO_VOLSMOKE_OVERLAY_FULL, 0.0f, 1.0f );
-	g_SmokeFogOverlayAlpha += share * VolSmokeBloom( age ) * VolSmokeFade( age );
+	// The overlay is a display color: the cloud's own, so the view keeps
+	// its brightness on walking in, dark in a dark room.
+	Vector display;
+	for ( int k = 0; k < 3; ++k )
+	{
+		display[k] = powf( m_vecColor[k], 1.0f / NEO_VOLSMOKE_DISPLAY_GAMMA );
+	}
+
+	AddSmokeFogOverlayColored( share * VolSmokeBloom( age ) * VolSmokeFade( age ), display );
 }
 
 // Density of a cell inside the front: its variation, times the carve hole
