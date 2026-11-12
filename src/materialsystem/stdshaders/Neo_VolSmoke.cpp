@@ -27,7 +27,7 @@ BEGIN_SHADER_PARAMS
 	SHADER_PARAM( TILECELLS,  SHADER_PARAM_TYPE_VEC2,    "[128 128]",     "Cells across one atlas tile: x, y" )
 	SHADER_PARAM( SPINCENTER, SHADER_PARAM_TYPE_VEC3,    "[0 0 0]",       "World point the look noise turns about" )
 	SHADER_PARAM( AMBIENT,    SHADER_PARAM_TYPE_VEC3,    "[0.6 0.6 0.6]", "Ambient light reaching the smoke (linear)" )
-	SHADER_PARAM( LIGHTCOLOR, SHADER_PARAM_TYPE_VEC3,    "[0.8 0.8 0.8]", "Directional light colour (linear), scaled by baked per-voxel light" )
+	SHADER_PARAM( LIGHTCOLOR, SHADER_PARAM_TYPE_VEC3,    "[0.8 0.8 0.8]", "Directional light color (linear), scaled by baked per-voxel light" )
 	SHADER_PARAM( EXTINCTION, SHADER_PARAM_TYPE_FLOAT,   "0.06",          "Extinction per world unit at density 1" )
 	SHADER_PARAM( NOISEAMP,   SHADER_PARAM_TYPE_FLOAT,   "1",             "Look noise strength, 0 (smooth) to 1" )
 	SHADER_PARAM( AGE,        SHADER_PARAM_TYPE_FLOAT,   "0",             "Seconds since the smoke spawned, moves the look noise" )
@@ -151,7 +151,7 @@ SHADER_DRAW
 		c[3] = params[JITTER]->GetIntValue() ? 1.0f : 0.0f;
 		pShaderAPI->SetPixelShaderConstant( 4, c );
 
-		// c5: directional light colour + time
+		// c5: directional light color + time
 		params[LIGHTCOLOR]->GetVecValue( c, 3 );
 		c[3] = pShaderAPI->CurrentTime();
 		pShaderAPI->SetPixelShaderConstant( 5, c );
