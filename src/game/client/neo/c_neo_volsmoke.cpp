@@ -19,6 +19,7 @@
 #include "smoke_fog_overlay.h"
 #include "dlight.h"
 #include "iefx.h"
+#include "cdll_util.h"
 
 // memdbgon must be the last include file in a .cpp file!!!
 #include "tier0/memdbgon.h"
@@ -214,6 +215,12 @@ static constexpr int NEO_VOLSMOKE_MAX_DLIGHTS = 2;
 // scaled by what gets through, so they fade with depth into the cloud instead
 // of switching at a plane as the legacy draw order does.
 static constexpr float NEO_VOLSMOKE_FLASH_DEPTH_SHARE = 0.15f;
+// Below this share a flash no longer shows, as the march stops at a small
+// transmittance: what the smoke reveals fades to nothing before the far side.
+static constexpr float NEO_VOLSMOKE_FLASH_CUTOFF = 0.05f;
+static constexpr float NEO_VOLSMOKE_FLASH_LIFE = 0.05f; // the weapon's muzzle light
+static constexpr float NEO_VOLSMOKE_FLASH_POINT_RADIUS = 6.0f;
+static constexpr float NEO_VOLSMOKE_FLASH_MIN = 1.0f / 255.0f;
 static constexpr float NEO_VOLSMOKE_PATH_STEP = 16.0f;
 
 // The legacy smoke's thermal-vision transparency.
@@ -2368,6 +2375,8 @@ int C_NeoVolSmoke::DrawModel( int flags )
 	pRenderContext->MatrixMode( MATERIAL_MODEL );
 	pRenderContext->PopMatrix();
 
+	DrawRevealed( pRenderContext );
+
 	return 1;
 }
 
@@ -2631,6 +2640,146 @@ float C_NeoVolSmoke::OpticalDepth( const Vector &eye, const Vector &point )
 float C_NeoVolSmoke::FlashFactor( const Vector &eye, const Vector &point )
 {
 	return expf( -NEO_VOLSMOKE_FLASH_DEPTH_SHARE * OpticalDepth( eye, point ) );
+}
+
+// How strongly a flash, or what it lights, shows through smoke of optical
+// depth tau.
+static float FlashShows( float tau )
+{
+	const float through = expf( -NEO_VOLSMOKE_FLASH_DEPTH_SHARE * tau );
+	return MAX( through - NEO_VOLSMOKE_FLASH_CUTOFF, 0.0f ) / ( 1.0f - NEO_VOLSMOKE_FLASH_CUTOFF );
+}
+
+// The volume that draws what the smoke reveals at a point: the one whose
+// smoke box is nearest, so a flash or a player draws once per frame.
+C_NeoVolSmoke *C_NeoVolSmoke::Owner( const Vector &point )
+{
+	C_NeoVolSmoke *pBest = nullptr;
+	float bestSqr = FLT_MAX;
+	for ( C_NeoVolSmoke *pVol : s_Volumes )
+	{
+		if ( pVol->m_vecSmokeMax.x <= pVol->m_vecSmokeMin.x )
+		{
+			continue;
+		}
+
+		const float distSqr = CalcSqrDistanceToAABB( pVol->m_vecSmokeMin, pVol->m_vecSmokeMax, point );
+		if ( distSqr < bestSqr )
+		{
+			bestSqr = distSqr;
+			pBest = pVol;
+		}
+	}
+
+	return pBest;
+}
+
+static IMaterial *VolSmokeFlashMaterial()
+{
+	static IMaterial *s_pMat = nullptr;
+	if ( !s_pMat )
+	{
+		KeyValues *pVMT = new KeyValues( "UnlitGeneric" );
+		pVMT->SetString( "$basetexture", "effects/muzzleflash1" );
+		pVMT->SetInt( "$additive", 1 );
+		pVMT->SetInt( "$vertexcolor", 1 );
+		pVMT->SetInt( "$vertexalpha", 1 );
+		pVMT->SetInt( "$nocull", 1 );
+		s_pMat = materials->CreateMaterial( "__neo_volsmoke_flash", pVMT );
+	}
+
+	return s_pMat;
+}
+
+static void DrawFlashPoint( IMatRenderContext *pRenderContext, const Vector &origin, float strength )
+{
+	IMaterial *pMat = VolSmokeFlashMaterial();
+	if ( !pMat || pMat->IsErrorMaterial() )
+	{
+		return;
+	}
+
+	const Vector right = CurrentViewRight() * NEO_VOLSMOKE_FLASH_POINT_RADIUS;
+	const Vector up = CurrentViewUp() * NEO_VOLSMOKE_FLASH_POINT_RADIUS;
+	const unsigned char level = (unsigned char)( 255.0f * clamp( strength, 0.0f, 1.0f ) );
+
+	pRenderContext->MatrixMode( MATERIAL_MODEL );
+	pRenderContext->PushMatrix();
+	pRenderContext->LoadIdentity();
+	pRenderContext->Bind( pMat );
+	IMesh *pMesh = pRenderContext->GetDynamicMesh( true, NULL, NULL, pMat );
+
+	const Vector corners[4] = { origin - right - up, origin + right - up, origin + right + up, origin - right + up };
+	static const float us[4] = { 0.0f, 1.0f, 1.0f, 0.0f };
+	static const float vs[4] = { 1.0f, 1.0f, 0.0f, 0.0f };
+	CMeshBuilder meshBuilder;
+	meshBuilder.Begin( pMesh, MATERIAL_QUADS, 1 );
+	for ( int i = 0; i < 4; ++i )
+	{
+		meshBuilder.Position3fv( corners[i].Base() );
+		meshBuilder.Color4ub( level, level, level, 255 );
+		meshBuilder.TexCoord2f( 0, us[i], vs[i] );
+		meshBuilder.AdvanceVertex();
+	}
+	meshBuilder.End();
+	pMesh->Draw();
+
+	pRenderContext->MatrixMode( MATERIAL_MODEL );
+	pRenderContext->PopMatrix();
+}
+
+// The player a muzzle-flash light belongs to, or null for another light or
+// the local view model's flash.
+static C_BasePlayer *MuzzleFlashOwner( const dlight_t *pLight )
+{
+	if ( pLight->key < LIGHT_INDEX_MUZZLEFLASH || pLight->key >= LIGHT_INDEX_MUZZLEFLASH + MAX_EDICTS )
+	{
+		return nullptr;
+	}
+
+	C_BaseEntity *pEnt = ClientEntityList().GetBaseEntity( pLight->key - LIGHT_INDEX_MUZZLEFLASH );
+	C_BaseCombatWeapon *pWeapon = pEnt ? pEnt->MyCombatWeaponPointer() : nullptr;
+	if ( !pWeapon )
+	{
+		return nullptr;
+	}
+
+	return ToBasePlayer( pWeapon->GetOwner() );
+}
+
+// What the smoke reveals, drawn over the volume: the point of each muzzle
+// flash, scaled with the smoke between it and the eye, so it fades with depth.
+// Thermal vision shows none of it, as legacy.
+void C_NeoVolSmoke::DrawRevealed( IMatRenderContext *pRenderContext )
+{
+	if ( g_SmokeFogOverlayThermalOverride )
+	{
+		return;
+	}
+
+	const Vector &eye = CurrentViewOrigin();
+	const float overlayClear = 1.0f - clamp( g_SmokeFogOverlayAlpha, 0.0f, 1.0f );
+
+	dlight_t *lights[MAX_DLIGHTS];
+	const int nLights = effects->CL_GetActiveDLights( lights );
+	for ( int i = 0; i < nLights; ++i )
+	{
+		const dlight_t *pLight = lights[i];
+		C_BasePlayer *pShooter = MuzzleFlashOwner( pLight );
+		if ( !pShooter || Owner( pLight->origin ) != this )
+		{
+			continue;
+		}
+
+		const float life = clamp( ( pLight->die - gpGlobals->curtime ) / NEO_VOLSMOKE_FLASH_LIFE, 0.0f, 1.0f );
+		const float flash = FlashShows( OpticalDepth( eye, pLight->origin ) ) * overlayClear * life;
+		if ( flash < NEO_VOLSMOKE_FLASH_MIN )
+		{
+			continue;
+		}
+
+		DrawFlashPoint( pRenderContext, pLight->origin, flash );
+	}
 }
 
 // Screen tiles over the smoke, as view-space x / z and y / z, each with the
