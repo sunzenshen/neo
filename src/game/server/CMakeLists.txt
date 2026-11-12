@@ -1466,6 +1466,17 @@ set_source_files_properties(
     PROPERTIES UNITY_GROUP neo_shared_server
 )
 
+# The smoke field must be the same in GCC and MSVC builds: no fast-math
+# reassociation in the fill and its world queries.
+if(NOT COMPILER_MSVC)
+    set_source_files_properties(
+        ${CMAKE_SOURCE_DIR}/game/shared/neo/neo_smoke_fill.cpp
+        ${CMAKE_SOURCE_DIR}/game/shared/neo/neo_smoke_world.cpp
+        PROPERTIES SKIP_UNITY_BUILD_INCLUSION ON SKIP_PRECOMPILE_HEADERS ON
+        COMPILE_OPTIONS -fno-fast-math
+    )
+endif()
+
 set_source_files_properties(
     ${UNITY_SOURCE_NEO_SRC_SERVER}
     PROPERTIES UNITY_GROUP neo_src_server
