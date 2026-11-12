@@ -36,7 +36,6 @@ static ConVar neo_volsmoke_jitter( "neo_volsmoke_jitter", "1", FCVAR_CHEAT, "Per
 static ConVar neo_volsmoke_debug( "neo_volsmoke_debug", "0", FCVAR_CHEAT, "0 off, 1 coverage, 2 scene depth as read by the shader, 3 box hit." );
 static ConVar neo_volsmoke_sheet( "neo_volsmoke_sheet", "1", FCVAR_CHEAT, "Hide slab tiles behind opaque smoke with a depth sheet. 0 draws every slab tile whole, the reference for checking what the sheet hides." );
 static ConVar neo_volsmoke_draw( "neo_volsmoke_draw", "1", FCVAR_CHEAT, "Draw smoke volumes." );
-static ConVar neo_volsmoke_fill_audit( "neo_volsmoke_fill_audit", "0", FCVAR_CHEAT, "Test: also ask the point and segment queries where a block query answered, keep their answer and count disagreements." );
 
 // ---------------------------------------------------------------------------
 // Fixed values of the drawing. The gameplay values, which decide where the
@@ -407,20 +406,6 @@ public:
 		planeDist = DotProduct( normal, tr.endpos );
 		return true;
 	}
-
-	void PrintAudit( int volumeId ) const
-	{
-		for ( const NEOSmokeAuditCell_t &cell : m_AuditCells )
-		{
-			const Vector pos = Center( cell.nCell[0], cell.nCell[1], cell.nCell[2] );
-			Warning( "neo_volsmoke_fill_audit: volume %d block says open, %s says solid at cell (%d %d %d) axis %d, world (%.1f %.1f %.1f)\n",
-				volumeId, cell.nAxis < 0 ? "point" : "segment", cell.nCell[0], cell.nCell[1], cell.nCell[2], cell.nAxis,
-				pos.x, pos.y, pos.z );
-		}
-	}
-
-private:
-	virtual bool Auditing() const override { return neo_volsmoke_fill_audit.GetBool(); }
 };
 
 // ---------------------------------------------------------------------------
