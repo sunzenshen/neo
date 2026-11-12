@@ -17,6 +17,8 @@
 #include "viewrender.h"
 #include "tier1/KeyValues.h"
 #include "smoke_fog_overlay.h"
+#include "dlight.h"
+#include "iefx.h"
 
 // memdbgon must be the last include file in a .cpp file!!!
 #include "tier0/memdbgon.h"
@@ -194,6 +196,17 @@ static constexpr int NEO_VOLSMOKE_OVERLAY_SIDE = 3; // samples per axis
 // Average density at which the overlay covers the view completely. Below the
 // smallest cell variation, so the core hides the viewmodel as legacy does.
 static constexpr float NEO_VOLSMOKE_OVERLAY_FULL = 0.5f;
+
+// Dynamic lights (muzzle flashes, explosions) light the smoke as they light
+// the legacy particles, fading to nothing a particle radius past the light's
+// own radius. The shader adds the light in linear, after the darkness factor,
+// so a flash reads stronger in a dark cloud than in a lit one; the linear
+// scale matches the legacy flash on a cloud in a lit room. The shader takes
+// the brightest few that reach the smoke.
+static constexpr float NEO_VOLSMOKE_DLIGHT_SHARE = 0.1f;
+static constexpr float NEO_VOLSMOKE_DLIGHT_LINEAR = 0.75f;
+static constexpr float NEO_VOLSMOKE_DLIGHT_MARGIN = SMOKEPARTICLE_SIZE;
+static constexpr int NEO_VOLSMOKE_MAX_DLIGHTS = 2;
 
 // The legacy smoke's thermal-vision transparency.
 extern ConVar r_neo_thermal_smoke_alpha;
@@ -2182,6 +2195,92 @@ float C_NeoVolSmoke::SmokeSphere( Vector &center ) const
 	return FrontRadius( gpGlobals->curtime - m_flSpawnTime ) + NEO_VOLSMOKE_SPHERE_MARGIN;
 }
 
+struct VolSmokeDLight_t
+{
+	Vector origin;
+	float invReachSqr;
+	Vector color;
+	float score;
+};
+
+// The dynamic lights that reach the box, brightest at the box first. Returns
+// how many were kept.
+static int CollectDynamicLights( const Vector &boxMin, const Vector &boxMax, VolSmokeDLight_t out[NEO_VOLSMOKE_MAX_DLIGHTS] )
+{
+	dlight_t *lights[MAX_DLIGHTS];
+	const int nLights = effects->CL_GetActiveDLights( lights );
+
+	int nKept = 0;
+	for ( int i = 0; i < nLights; ++i )
+	{
+		const dlight_t *pLight = lights[i];
+		if ( pLight->color.exponent == 0 || ( pLight->color.r == 0 && pLight->color.g == 0 && pLight->color.b == 0 ) )
+		{
+			continue;
+		}
+
+		const float reach = pLight->radius + NEO_VOLSMOKE_DLIGHT_MARGIN;
+		const float distSqr = CalcSqrDistanceToAABB( boxMin, boxMax, pLight->origin );
+		if ( distSqr >= reach * reach )
+		{
+			continue;
+		}
+
+		VolSmokeDLight_t light;
+		ColorRGBExp32ToVector( pLight->color, light.color );
+
+		// Legacy adds a share of the light and scales a channel past white
+		// back down with the others; cap the light the same way, keeping
+		// its tint, then add it in linear.
+		light.color *= NEO_VOLSMOKE_DLIGHT_SHARE / 255.0f;
+		const float brightest = MAX( light.color.x, MAX( light.color.y, light.color.z ) );
+		if ( brightest > 1.0f )
+		{
+			light.color /= brightest;
+		}
+
+		light.color *= NEO_VOLSMOKE_DLIGHT_LINEAR;
+		light.origin = pLight->origin;
+		light.invReachSqr = 1.0f / ( reach * reach );
+		light.score = MAX( light.color.x, MAX( light.color.y, light.color.z ) ) * ( 1.0f - distSqr * light.invReachSqr );
+
+		// Insert by score; a light weaker than all kept ones falls off the end.
+		int slot = nKept;
+		while ( slot > 0 && out[slot - 1].score < light.score )
+		{
+			if ( slot < NEO_VOLSMOKE_MAX_DLIGHTS )
+			{
+				out[slot] = out[slot - 1];
+			}
+			--slot;
+		}
+
+		if ( slot < NEO_VOLSMOKE_MAX_DLIGHTS )
+		{
+			out[slot] = light;
+			nKept = MIN( nKept + 1, NEO_VOLSMOKE_MAX_DLIGHTS );
+		}
+	}
+
+	return nKept;
+}
+
+static void SetDynamicLightParams( IMaterial *pMat, const VolSmokeDLight_t lights[NEO_VOLSMOKE_MAX_DLIGHTS], int nLights )
+{
+	SetIntVar( pMat, "$dlightcount", nLights );
+	if ( nLights > 0 )
+	{
+		SetVec4Var( pMat, "$dlight0pos", lights[0].origin.x, lights[0].origin.y, lights[0].origin.z, lights[0].invReachSqr );
+		SetVec3Var( pMat, "$dlight0color", lights[0].color );
+	}
+
+	if ( nLights > 1 )
+	{
+		SetVec4Var( pMat, "$dlight1pos", lights[1].origin.x, lights[1].origin.y, lights[1].origin.z, lights[1].invReachSqr );
+		SetVec3Var( pMat, "$dlight1color", lights[1].color );
+	}
+}
+
 void C_NeoVolSmoke::SetDrawParams( IMaterial *pMat ) const
 {
 	const Vector amb = m_vecColor * NEO_VOLSMOKE_AMBIENT_SHARE;
@@ -2242,6 +2341,11 @@ int C_NeoVolSmoke::DrawModel( int flags )
 
 	SetDrawParams( m_Material );
 	SetDrawParams( m_SlabMaterial );
+
+	VolSmokeDLight_t lights[NEO_VOLSMOKE_MAX_DLIGHTS];
+	const int nLights = CollectDynamicLights( m_vecSmokeMin, m_vecSmokeMax, lights );
+	SetDynamicLightParams( m_Material, lights, nLights );
+	SetDynamicLightParams( m_SlabMaterial, lights, nLights );
 
 	CMatRenderContextPtr pRenderContext( materials );
 
