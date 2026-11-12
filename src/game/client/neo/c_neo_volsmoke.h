@@ -154,7 +154,7 @@ private:
 	bool BuildCullGrid( VolSmokeCullGrid_t &grid ) const;
 	bool StartsRender();
 	static float SheetOpaqueDepth( const VolSmokeSheetVolume_t *vols, int nVols, const Vector &eye, const Vector &dir, float *own );
-	static void DrawOpaqueSheet( IMatRenderContext *pRenderContext );
+	static void BuildOpaqueSheet( IMatRenderContext *pRenderContext );
 	void DrawFarSlabs( IMatRenderContext *pRenderContext );
 	void DrawNearPass( IMatRenderContext *pRenderContext );
 

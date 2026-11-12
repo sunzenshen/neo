@@ -289,6 +289,10 @@ static CUtlVector< const C_NeoVolSmoke * > s_CullVolumes;
 static CUtlVector< float > s_flCullCorner;
 static CUtlVector< float > s_flCenterOwn;
 
+// The sheet's view depth on each grid tile, FLT_MAX where the tile is not
+// opaque: every volume's slab cull hides its tiles past it.
+static float s_flSheetDepth[NEO_VOLSMOKE_CULL_MAX_ROWS][NEO_VOLSMOKE_CULL_MAX_COLS];
+
 static void VolSmokePerfReset()
 {
 	Q_memset( &s_VolSmokePerf, 0, sizeof( s_VolSmokePerf ) );
@@ -2182,12 +2186,11 @@ int C_NeoVolSmoke::DrawModel( int flags )
 	pRenderContext->PushMatrix();
 	pRenderContext->LoadIdentity();
 
-	// The engine draws translucents back to front, so the first volume drawn
-	// in a render is the farthest: the sheet goes before any volume's slabs.
+	// The sheet is built once a render, before any volume's slabs.
 	if ( StartsRender() )
 	{
 		CVolSmokePerfScope perf( VOLSMOKE_PERF_SHEET );
-		DrawOpaqueSheet( pRenderContext );
+		BuildOpaqueSheet( pRenderContext );
 	}
 
 	// Back to front: the far slabs, then the near pass in front of them.
@@ -2672,10 +2675,11 @@ void C_NeoVolSmoke::DrawRevealed( IMatRenderContext *pRenderContext )
 	}
 }
 
-// Opaque sheet: one grid of eye rays sums the smoke of every volume, and a
-// depth-only quad at the view depth where the sum turns opaque lets the
-// hardware depth test reject every slab and translucent behind it. Overlapping
-// clouds make the sum opaque sooner than any one of them.
+// Opaque sheet: one grid of eye rays sums the smoke of every volume, and the
+// view depth where the sum turns opaque hides every volume's slab tiles
+// behind it. Overlapping clouds make the sum opaque sooner than any one of
+// them. The sheet is not written to the depth buffer: sprites, tracers and
+// glass drawn after the smoke would be cut along its tile edges.
 struct VolSmokeSheetVolume_t
 {
 	const C_NeoVolSmoke *pVol;
@@ -2700,10 +2704,6 @@ struct VolSmokeSheetSpan_t
 // margin over the slab cull's: the coarse march's midpoint samples can
 // overshoot where a grazing ray crosses the bumps at the cloud's edge.
 static constexpr float NEO_VOLSMOKE_SHEET_OPAQUE = 2.0f * NEO_VOLSMOKE_CULL_OPAQUE;
-
-// Revealed players are drawn after the volume with the depth test: the sheet
-// keeps clear of a sphere this much wider than a body's center.
-static constexpr float NEO_VOLSMOKE_SHEET_BODY_RADIUS = 48.0f;
 
 // True for the first volume drawn in a render. The frame count stops while
 // the game is paused, but each volume draws once a render, so a volume that
@@ -2827,46 +2827,7 @@ float C_NeoVolSmoke::SheetOpaqueDepth( const VolSmokeSheetVolume_t *vols, int nV
 	return FLT_MAX;
 }
 
-static IMaterial *VolSmokeSheetMaterial()
-{
-	static IMaterial *s_pMat = nullptr;
-	if ( !s_pMat )
-	{
-		KeyValues *pVMT = new KeyValues( "DepthWrite" );
-		pVMT->SetInt( "$nocull", 1 );
-		s_pMat = materials->CreateMaterial( "__neo_volsmoke_sheet", pVMT );
-	}
-
-	return s_pMat;
-}
-
-// Screen rectangle, as view-space x / z and y / z, that holds a sphere; false
-// if the sphere reaches the eye plane.
-static bool SphereScreenRect( const Vector &center, float radius, float &xMin, float &xMax, float &yMin, float &yMax )
-{
-	const Vector &eye = CurrentViewOrigin();
-	const Vector rel = center - eye;
-	const Vector v( DotProduct( rel, CurrentViewRight() ), DotProduct( rel, CurrentViewUp() ), DotProduct( rel, CurrentViewForward() ) );
-	if ( v.z - radius <= NEO_VOLSMOKE_CULL_MIN_DEPTH )
-	{
-		return false;
-	}
-
-	const float zs[2] = { v.z - radius, v.z + radius };
-	xMin = yMin = FLT_MAX;
-	xMax = yMax = -FLT_MAX;
-	for ( const float z : zs )
-	{
-		xMin = MIN( xMin, ( v.x - radius ) / z );
-		xMax = MAX( xMax, ( v.x + radius ) / z );
-		yMin = MIN( yMin, ( v.y - radius ) / z );
-		yMax = MAX( yMax, ( v.y + radius ) / z );
-	}
-
-	return true;
-}
-
-void C_NeoVolSmoke::DrawOpaqueSheet( IMatRenderContext *pRenderContext )
+void C_NeoVolSmoke::BuildOpaqueSheet( IMatRenderContext *pRenderContext )
 {
 	s_nSheetTiles = 0;
 	s_nSheetTilesOpaque = 0;
@@ -2875,13 +2836,6 @@ void C_NeoVolSmoke::DrawOpaqueSheet( IMatRenderContext *pRenderContext )
 	{
 		return;
 	}
-
-	IMaterial *pMat = VolSmokeSheetMaterial();
-	if ( !pMat || pMat->IsErrorMaterial() )
-	{
-		return;
-	}
-
 
 	VMatrix proj;
 	pRenderContext->GetMatrix( MATERIAL_PROJECTION, &proj );
@@ -2974,48 +2928,6 @@ void C_NeoVolSmoke::DrawOpaqueSheet( IMatRenderContext *pRenderContext )
 		ys[j] = ( j == rows ) ? y1 : y0 + ( y1 - y0 ) * j / rows;
 	}
 
-	// What the smoke reveals is drawn after it with the depth test: muzzle
-	// flashes in a cloud with the players they light, and cloaked bodies.
-	struct RevealRect_t
-	{
-		float xMin, xMax, yMin, yMax;
-	};
-	CUtlVectorFixedGrowable< RevealRect_t, 8 > reveal;
-	bool revealAll = false;
-	const auto addReveal = [&]( const Vector &center, float radius ) -> bool
-	{
-		RevealRect_t r;
-		if ( !SphereScreenRect( center, radius, r.xMin, r.xMax, r.yMin, r.yMax ) )
-		{
-			revealAll = true;
-			return false;
-		}
-
-		reveal.AddToTail( r );
-		return true;
-	};
-
-	dlight_t *lights[MAX_DLIGHTS];
-	const int nLights = effects->CL_GetActiveDLights( lights );
-	for ( int i = 0; i < nLights; ++i )
-	{
-		if ( MuzzleFlashOwner( lights[i] ) && Owner( lights[i]->origin )
-			&& !addReveal( lights[i]->origin, NEO_VOLSMOKE_FLASH_REACH + NEO_VOLSMOKE_SHEET_BODY_RADIUS ) )
-		{
-			break;
-		}
-	}
-
-	for ( int p = 1; p <= gpGlobals->maxClients && p <= MAX_PLAYERS; ++p )
-	{
-		C_NEO_Player *pPlayer = ToNEOPlayer( UTIL_PlayerByIndex( p ) );
-		if ( pPlayer && pPlayer->IsCloaked() && Owner( pPlayer->WorldSpaceCenter() )
-			&& !addReveal( pPlayer->WorldSpaceCenter(), NEO_VOLSMOKE_SHEET_BODY_RADIUS ) )
-		{
-			break;
-		}
-	}
-
 	const int nVols = vols.Count();
 	s_nCullSerial = s_nSheetSerial;
 	s_nCullCols = cols;
@@ -3027,6 +2939,13 @@ void C_NeoVolSmoke::DrawOpaqueSheet( IMatRenderContext *pRenderContext )
 		s_CullVolumes.AddToTail( vol.pVol );
 	}
 	s_flCullCorner.SetCount( ( rows + 1 ) * ( cols + 1 ) * nVols );
+	for ( int j = 0; j < rows; ++j )
+	{
+		for ( int i = 0; i < cols; ++i )
+		{
+			s_flSheetDepth[j][i] = FLT_MAX;
+		}
+	}
 
 	float corner[NEO_VOLSMOKE_CULL_MAX_ROWS + 1][NEO_VOLSMOKE_CULL_MAX_COLS + 1];
 	for ( int j = 0; j <= rows; ++j )
@@ -3038,9 +2957,7 @@ void C_NeoVolSmoke::DrawOpaqueSheet( IMatRenderContext *pRenderContext )
 		}
 	}
 
-	// Under water the view adds its own fog and surface passes; leave those
-	// to draw as they do without the sheet.
-	if ( !sheet || revealAll || ( enginetrace->GetPointContents( eye ) & MASK_WATER ) )
+	if ( !sheet )
 	{
 		return;
 	}
@@ -3066,65 +2983,22 @@ void C_NeoVolSmoke::DrawOpaqueSheet( IMatRenderContext *pRenderContext )
 		}
 	}
 
-	struct SheetTile_t
-	{
-		float xMin, xMax, yMin, yMax, z;
-	};
-	CUtlVectorFixedGrowable< SheetTile_t, 64 > tiles;
 	for ( int j = 0; j < rows; ++j )
 	{
 		for ( int i = 0; i < cols; ++i )
 		{
 			++s_nSheetTiles;
 
-			float depth = tileDepth[j][i];
+			const float depth = tileDepth[j][i];
 			if ( depth == FLT_MAX )
 			{
 				continue;
 			}
 
-			bool revealed = false;
-			for ( const RevealRect_t &r : reveal )
-			{
-				revealed = revealed || ( r.xMin < xs[i + 1] && r.xMax > xs[i] && r.yMin < ys[j + 1] && r.yMax > ys[j] );
-			}
-			if ( revealed )
-			{
-				continue;
-			}
-
-			// A slab is depth-tested inside its own range: keep every slab that
-			// starts in front of the opaque depth.
-			const float z = depth + MAX( NEO_VOLSMOKE_SLAB_MIN, NEO_VOLSMOKE_SLAB_GROWTH * depth );
-			const SheetTile_t tile = { xs[i], xs[i + 1], ys[j], ys[j + 1], z };
-			tiles.AddToTail( tile );
+			s_flSheetDepth[j][i] = depth;
+			++s_nSheetTilesOpaque;
 		}
 	}
-
-	s_nSheetTilesOpaque = tiles.Count();
-	if ( tiles.Count() == 0 )
-	{
-		return;
-	}
-
-	pRenderContext->Bind( pMat );
-	IMesh *pMesh = pRenderContext->GetDynamicMesh( true, NULL, NULL, pMat );
-	CMeshBuilder meshBuilder;
-	meshBuilder.Begin( pMesh, MATERIAL_QUADS, tiles.Count() );
-	for ( const SheetTile_t &tile : tiles )
-	{
-		const Vector center = eye + fwd * tile.z;
-		const float qx[4] = { tile.xMin, tile.xMax, tile.xMax, tile.xMin };
-		const float qy[4] = { tile.yMin, tile.yMin, tile.yMax, tile.yMax };
-		for ( int k = 0; k < 4; ++k )
-		{
-			const Vector pos = center + right * ( qx[k] * tile.z ) + up * ( qy[k] * tile.z );
-			meshBuilder.Position3fv( pos.Base() );
-			meshBuilder.AdvanceVertex();
-		}
-	}
-	meshBuilder.End();
-	pMesh->Draw();
 }
 
 // Screen tiles over the smoke, as view-space x / z and y / z, each with the
@@ -3160,7 +3034,8 @@ bool C_NeoVolSmoke::BuildCullGrid( VolSmokeCullGrid_t &grid ) const
 	{
 		for ( int i = 0; i < s_nCullCols; ++i )
 		{
-			grid.depth[j][i] = MAX( MAX( own( j, i ), own( j, i + 1 ) ), MAX( own( j + 1, i ), own( j + 1, i + 1 ) ) );
+			const float ownDepth = MAX( MAX( own( j, i ), own( j, i + 1 ) ), MAX( own( j + 1, i ), own( j + 1, i + 1 ) ) );
+			grid.depth[j][i] = MIN( ownDepth, s_flSheetDepth[j][i] );
 			any = any || grid.depth[j][i] != FLT_MAX;
 		}
 	}
