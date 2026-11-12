@@ -320,11 +320,11 @@ static void VolSmokePerfFrame()
 		return;
 	}
 
-	p.framePeak = MAX( p.framePeak, p.frameTotal );
+	p.framePeak = Max( p.framePeak, p.frameTotal );
 	p.frameTotal = 0.0;
 	p.lastFrame = gpGlobals->framecount;
 	p.frameTime += gpGlobals->absoluteframetime;
-	p.frameTimePeak = MAX( p.frameTimePeak, (double)gpGlobals->absoluteframetime );
+	p.frameTimePeak = Max( p.frameTimePeak, (double)gpGlobals->absoluteframetime );
 	++p.frames;
 }
 
@@ -337,7 +337,7 @@ public:
 		const double spent = Plat_FloatTime() - m_flStart;
 		VolSmokePerf_t &p = s_VolSmokePerf;
 		p.stage[m_Stage] += spent;
-		p.stagePeak[m_Stage] = MAX( p.stagePeak[m_Stage], spent );
+		p.stagePeak[m_Stage] = Max( p.stagePeak[m_Stage], spent );
 		p.frameTotal += spent;
 	}
 
@@ -577,7 +577,7 @@ static void VolSmokeNoiseShutdown()
 		return;
 	}
 
-	s_VolSmokeNoise->SetTextureRegenerator( NULL );
+	s_VolSmokeNoise->SetTextureRegenerator( nullptr );
 	s_VolSmokeNoise.Shutdown( true );
 }
 
@@ -617,7 +617,7 @@ static void VolSmokeDeleteRetired( const VolSmokeRetired_t &retired )
 
 	if ( retired.pAtlas )
 	{
-		retired.pAtlas->SetTextureRegenerator( NULL ); // calls Release() on the regenerator
+		retired.pAtlas->SetTextureRegenerator( nullptr ); // calls Release() on the regenerator
 		retired.pAtlas->DecrementReferenceCount();
 		retired.pAtlas->DeleteIfUnreferenced();
 	}
@@ -692,8 +692,8 @@ int C_NeoVolSmoke::s_nNextId = 0;
 
 // ---------------------------------------------------------------------------
 C_NeoVolSmoke::C_NeoVolSmoke()
-	: m_nId( s_nNextId++ ), m_bHasGrenade( false ), m_flSpawnTime( 0 ), m_pWorld( NULL ), m_pFillJob( NULL ), m_bFillDone( false ), m_flFillSeconds( 0 ), m_flFillPeakFrame( 0 ), m_flFillDoneAge( -1.0f ), m_nLagFrames( 0 ), m_bCellBytes( false ), m_flCellBytesSeconds( 0 ),
-	  m_nBounded( 0 ), m_pRegen( NULL ), m_nPacked( 0 ), m_flNextUpload( 0 ), m_flRegrowEnd( -1.0f ), m_flUploadedFront( 0 ), m_bUploadPending( false ), m_nSlabTiles( 0 ), m_nSlabTilesCulled( 0 ), m_flDistRange( NEO_VOLSMOKE_DIST_RANGE ), m_nAtlasCols( 0 ), m_nAtlasW( 0 ), m_nAtlasH( 0 ), m_nRenderSerial( -1 )
+	: m_nId( s_nNextId++ ), m_bHasGrenade( false ), m_flSpawnTime( 0 ), m_pWorld( nullptr ), m_pFillJob( nullptr ), m_bFillDone( false ), m_flFillSeconds( 0 ), m_flFillPeakFrame( 0 ), m_flFillDoneAge( -1.0f ), m_nLagFrames( 0 ), m_bCellBytes( false ), m_flCellBytesSeconds( 0 ),
+	  m_nBounded( 0 ), m_pRegen( nullptr ), m_nPacked( 0 ), m_flNextUpload( 0 ), m_flRegrowEnd( -1.0f ), m_flUploadedFront( 0 ), m_bUploadPending( false ), m_nSlabTiles( 0 ), m_nSlabTilesCulled( 0 ), m_flDistRange( NEO_VOLSMOKE_DIST_RANGE ), m_nAtlasCols( 0 ), m_nAtlasW( 0 ), m_nAtlasH( 0 ), m_nRenderSerial( -1 )
 {
 	for ( int a = 0; a < 3; ++a )
 	{
@@ -718,10 +718,10 @@ C_NeoVolSmoke *C_NeoVolSmoke::Create( const Vector &origin, float spawnTime )
 	C_NeoVolSmoke *pVol = new C_NeoVolSmoke();
 	pVol->Init( origin, spawnTime );
 
-	if ( !pVol->InitializeAsClientEntity( NULL, RENDER_GROUP_TRANSLUCENT_ENTITY ) )
+	if ( !pVol->InitializeAsClientEntity( nullptr, RENDER_GROUP_TRANSLUCENT_ENTITY ) )
 	{
 		pVol->Release();
-		return NULL;
+		return nullptr;
 	}
 
 	pVol->SetNextClientThink( CLIENT_THINK_ALWAYS );
@@ -741,7 +741,7 @@ C_NeoVolSmoke *C_NeoVolSmoke::CreateForGrenade( const Vector &origin, float spaw
 {
 	if ( gpGlobals->curtime - spawnTime >= NEO_VOLSMOKE_FADE_END )
 	{
-		return NULL;
+		return nullptr;
 	}
 
 	C_NeoVolSmoke *pVol = Create( origin, spawnTime );
@@ -838,7 +838,7 @@ Vector C_NeoVolSmoke::CellCenter( const int c[3] ) const
 // Path length at atlas value 1.
 float C_NeoVolSmoke::DistRange() const
 {
-	return MAX( NEO_VOLSMOKE_DIST_RANGE, CNEOSmokeFill::DistToUnits( m_Fill.FrontDist() ) );
+	return Max( NEO_VOLSMOKE_DIST_RANGE, CNEOSmokeFill::DistToUnits( m_Fill.FrontDist() ) );
 }
 
 // Once the fill is done: the box, the bounds and the atlas fitted to the field.
@@ -877,7 +877,7 @@ void C_NeoVolSmoke::FitToField()
 void C_NeoVolSmoke::CreateAtlas()
 {
 	// As many tiles to a row as fit the atlas size; both sides a power of two.
-	m_nAtlasCols = MAX( 1, CNEOSmokeFill::ATLAS_SIZE / m_nBox[0] );
+	m_nAtlasCols = Max( 1, CNEOSmokeFill::ATLAS_SIZE / m_nBox[0] );
 	const int rows = ( m_nBox[2] + m_nAtlasCols - 1 ) / m_nAtlasCols;
 	m_nAtlasW = VolSmokePow2( m_nAtlasCols * m_nBox[0] );
 	m_nAtlasH = VolSmokePow2( rows * m_nBox[1] );
@@ -965,10 +965,10 @@ void C_NeoVolSmoke::Shutdown()
 		retired.pAtlas->IncrementReferenceCount();
 		m_Atlas.Shutdown( false );
 	}
-	m_pRegen = NULL; // the atlas owns it
+	m_pRegen = nullptr; // the atlas owns it
 
 	retired.pWorld = m_pWorld;
-	m_pWorld = NULL;
+	m_pWorld = nullptr;
 
 	if ( retired.pMaterials[0] || retired.pMaterials[1] || retired.pAtlas || retired.pWorld )
 	{
@@ -1064,7 +1064,7 @@ void C_NeoVolSmoke::StepFills()
 		}
 
 		pVol->m_pFillJob->Release();
-		pVol->m_pFillJob = NULL;
+		pVol->m_pFillJob = nullptr;
 		pVol->m_bFillDone = pVol->m_Fill.IsDone();
 		pVol->m_flFillDoneAge = gpGlobals->curtime - pVol->m_flSpawnTime;
 	}
@@ -1078,11 +1078,11 @@ void C_NeoVolSmoke::StepFills()
 		{
 			if ( pVol->WantsFill() )
 			{
-				oldest = MIN( oldest, pVol->m_flSpawnTime );
+				oldest = Min( oldest, pVol->m_flSpawnTime );
 			}
 		}
 
-		C_NeoVolSmoke *pNearest = NULL;
+		C_NeoVolSmoke *pNearest = nullptr;
 		float nearestSqr = 0.0f;
 		for ( C_NeoVolSmoke *pVol : s_Volumes )
 		{
@@ -1128,7 +1128,7 @@ double C_NeoVolSmoke::StepFill( double budget )
 	}
 
 	m_flFillSeconds += spent;
-	m_flFillPeakFrame = MAX( m_flFillPeakFrame, spent );
+	m_flFillPeakFrame = Max( m_flFillPeakFrame, spent );
 	if ( m_Fill.IsDone() )
 	{
 		m_bFillDone = true;
@@ -1187,18 +1187,18 @@ bool C_NeoVolSmoke::ShapeChanged( float now ) const
 }
 
 // The volume whose atlas upload has waited longest, a changed shape before a
-// light change. NULL when none waited at the start of the frame.
+// light change. nullptr when none waited at the start of the frame.
 C_NeoVolSmoke *C_NeoVolSmoke::UploadTurn()
 {
 	static int s_nTurnFrame = -1;
-	static C_NeoVolSmoke *s_pTurn = NULL;
+	static C_NeoVolSmoke *s_pTurn = nullptr;
 	if ( s_nTurnFrame == gpGlobals->framecount )
 	{
 		return s_pTurn;
 	}
 
 	s_nTurnFrame = gpGlobals->framecount;
-	s_pTurn = NULL;
+	s_pTurn = nullptr;
 	for ( int i = 0; i < s_Volumes.Count(); ++i )
 	{
 		C_NeoVolSmoke *pVol = s_Volumes[i];
@@ -1227,7 +1227,7 @@ C_NeoVolSmoke *C_NeoVolSmoke::UploadTurn()
 // grows as far as it has filled instead of showing a cut-off shape.
 float C_NeoVolSmoke::FrontRadius( float age ) const
 {
-	return MIN( BloomRadius( age ), m_flUploadedFront );
+	return Min( BloomRadius( age ), m_flUploadedFront );
 }
 
 // The front by the bloom curve alone.
@@ -1452,7 +1452,7 @@ void C_NeoVolSmoke::BuildCellBytes()
 		float ownWall = NEO_VOLSMOKE_WALL_CAP;
 		for ( int w = 0; w < walls; ++w )
 		{
-			ownWall = MIN( ownWall, DotProduct( wallNormal[w], center ) - wallDist[w] );
+			ownWall = Min( ownWall, DotProduct( wallNormal[w], center ) - wallDist[w] );
 		}
 
 		bytes[i * VOLSMOKE_CELL_BYTES + VOLSMOKE_CELL_WALL] = VolSmokeWallByte( ownWall );
@@ -1475,7 +1475,7 @@ void C_NeoVolSmoke::BuildCellBytes()
 					}
 
 					unsigned char &nDist = bytes[n * VOLSMOKE_CELL_BYTES + VOLSMOKE_CELL_DIST];
-					nDist = MIN( nDist, dist );
+					nDist = Min( nDist, dist );
 				}
 			}
 		}
@@ -1507,13 +1507,13 @@ void C_NeoVolSmoke::BuildCellBytes()
 					const Vector nCenter = center + Vector( dx * cell, dy * cell, dz * cell );
 					for ( int w = 0; w < walls; ++w )
 					{
-						nWall = MIN( nWall, DotProduct( wallNormal[w], nCenter ) - wallDist[w] );
+						nWall = Min( nWall, DotProduct( wallNormal[w], nCenter ) - wallDist[w] );
 					}
 
 					// A cell past a face stays past it whatever the other gas cells
 					// say. Among the faces it is past, the nearest one counts: at an
 					// outside corner the farther face is not the one beside the gas.
-					const unsigned char newByte = MIN( VolSmokeWallByte( nWall ), NEO_VOLSMOKE_WALL_UNSET - 1 );
+					const unsigned char newByte = Min<int>( VolSmokeWallByte( nWall ), NEO_VOLSMOKE_WALL_UNSET - 1 );
 					unsigned char &nWallByte = bytes[n * VOLSMOKE_CELL_BYTES + VOLSMOKE_CELL_WALL];
 					const bool bothPast = nWallByte < NEO_VOLSMOKE_WALL_ZERO_BYTE && newByte < NEO_VOLSMOKE_WALL_ZERO_BYTE;
 					if ( nWallByte == NEO_VOLSMOKE_WALL_UNSET )
@@ -1522,11 +1522,11 @@ void C_NeoVolSmoke::BuildCellBytes()
 					}
 					else if ( bothPast )
 					{
-						nWallByte = MAX( nWallByte, newByte );
+						nWallByte = Max( nWallByte, newByte );
 					}
 					else
 					{
-						nWallByte = MIN( nWallByte, newByte );
+						nWallByte = Min( nWallByte, newByte );
 					}
 				}
 			}
@@ -1610,8 +1610,8 @@ void C_NeoVolSmoke::UpdateBounds( float front )
 		CellCoords( i, c[0], c[1], c[2] );
 		for ( int a = 0; a < 3; ++a )
 		{
-			m_SmokeLo[a] = MIN( m_SmokeLo[a], c[a] );
-			m_SmokeHi[a] = MAX( m_SmokeHi[a], c[a] );
+			m_SmokeLo[a] = Min( m_SmokeLo[a], c[a] );
+			m_SmokeHi[a] = Max( m_SmokeHi[a], c[a] );
 		}
 		grew = true;
 	}
@@ -1626,8 +1626,8 @@ void C_NeoVolSmoke::UpdateBounds( float front )
 	const float cell = CNEOSmokeFill::CELL_SIZE;
 	for ( int a = 0; a < 3; ++a )
 	{
-		m_vecSmokeMin[a] = MAX( m_vecGridMin[a], m_vecGridMin[a] + ( m_SmokeLo[a] - 1 ) * cell );
-		m_vecSmokeMax[a] = MIN( m_vecGridMax[a], m_vecGridMin[a] + ( m_SmokeHi[a] + 2 ) * cell );
+		m_vecSmokeMin[a] = Max( m_vecGridMin[a], m_vecGridMin[a] + ( m_SmokeLo[a] - 1 ) * cell );
+		m_vecSmokeMax[a] = Min( m_vecGridMax[a], m_vecGridMin[a] + ( m_SmokeHi[a] + 2 ) * cell );
 	}
 
 	// The render bounds follow the smoke, so the leaves it draws in do too.
@@ -1662,15 +1662,15 @@ void C_NeoVolSmoke::SweepLight( float now )
 		CellCoords( m_Fill.FinalizedCell( k ), c[0], c[1], c[2] );
 		for ( int a = 0; a < 3; ++a )
 		{
-			lo[a] = MIN( lo[a], c[a] );
-			hi[a] = MAX( hi[a], c[a] );
+			lo[a] = Min( lo[a], c[a] );
+			hi[a] = Max( hi[a], c[a] );
 		}
 	}
 
 	for ( int a = 0; a < 3; ++a )
 	{
-		lo[a] = MAX( 0, lo[a] - MARGIN );
-		hi[a] = MIN( size[a] - 1, hi[a] + MARGIN );
+		lo[a] = Max( 0, lo[a] - MARGIN );
+		hi[a] = Min( size[a] - 1, hi[a] + MARGIN );
 	}
 
 	unsigned char *bits = m_pRegen->Bits();
@@ -1761,7 +1761,7 @@ void C_NeoVolSmoke::Carve( const Vector &start, const Vector &end, float radius 
 
 	if ( touched )
 	{
-		m_flRegrowEnd = MAX( m_flRegrowEnd, now + NEO_VOLSMOKE_REGROW_TIME );
+		m_flRegrowEnd = Max( m_flRegrowEnd, now + NEO_VOLSMOKE_REGROW_TIME );
 	}
 }
 
@@ -1841,15 +1841,15 @@ unsigned long long C_NeoVolSmoke::AtlasHash() const
 		CellCoords( m_Fill.FinalizedCell( k ), c[0], c[1], c[2] );
 		for ( int a = 0; a < 3; ++a )
 		{
-			lo[a] = MIN( lo[a], c[a] );
-			hi[a] = MAX( hi[a], c[a] );
+			lo[a] = Min( lo[a], c[a] );
+			hi[a] = Max( hi[a], c[a] );
 		}
 	}
 
 	for ( int a = 0; a < 3; ++a )
 	{
-		lo[a] = MAX( 0, lo[a] - 1 );
-		hi[a] = MIN( m_nBox[a] - 1, hi[a] + 1 );
+		lo[a] = Max( 0, lo[a] - 1 );
+		hi[a] = Min( m_nBox[a] - 1, hi[a] + 1 );
 	}
 
 	const unsigned char *bits = m_pRegen->Bits();
@@ -2168,7 +2168,7 @@ static int CollectDynamicLights( const Vector &boxMin, const Vector &boxMax, Vol
 		// back down with the others; cap the light the same way, keeping
 		// its tint, then add it in linear.
 		light.color *= NEO_VOLSMOKE_DLIGHT_SHARE / 255.0f;
-		const float brightest = MAX( light.color.x, MAX( light.color.y, light.color.z ) );
+		const float brightest = Max( light.color.x, Max( light.color.y, light.color.z ) );
 		if ( brightest > 1.0f )
 		{
 			light.color /= brightest;
@@ -2177,7 +2177,7 @@ static int CollectDynamicLights( const Vector &boxMin, const Vector &boxMax, Vol
 		light.color *= NEO_VOLSMOKE_DLIGHT_LINEAR * ( muzzle ? NEO_VOLSMOKE_FLASH_GAIN : 1.0f );
 		light.origin = pLight->origin;
 		light.invReachSqr = 1.0f / ( reach * reach );
-		light.score = MAX( light.color.x, MAX( light.color.y, light.color.z ) ) * ( 1.0f - distSqr * light.invReachSqr );
+		light.score = Max( light.color.x, Max( light.color.y, light.color.z ) ) * ( 1.0f - distSqr * light.invReachSqr );
 
 		// Insert by score; a light weaker than all kept ones falls off the end.
 		int slot = nKept;
@@ -2193,7 +2193,7 @@ static int CollectDynamicLights( const Vector &boxMin, const Vector &boxMax, Vol
 		if ( slot < NEO_VOLSMOKE_MAX_DLIGHTS )
 		{
 			out[slot] = light;
-			nKept = MIN( nKept + 1, NEO_VOLSMOKE_MAX_DLIGHTS );
+			nKept = Min( nKept + 1, NEO_VOLSMOKE_MAX_DLIGHTS );
 		}
 	}
 
@@ -2325,10 +2325,10 @@ static void SlabScreenRect( const Vector view[8], float lo, float hi, float &xMi
 
 	const auto addPoint = [&]( const Vector &p )
 	{
-		xMin = MIN( xMin, p.x / p.z );
-		xMax = MAX( xMax, p.x / p.z );
-		yMin = MIN( yMin, p.y / p.z );
-		yMax = MAX( yMax, p.y / p.z );
+		xMin = Min( xMin, p.x / p.z );
+		xMax = Max( xMax, p.x / p.z );
+		yMin = Min( yMin, p.y / p.z );
+		yMax = Max( yMax, p.y / p.z );
 	};
 
 	for ( int i = 0; i < 8; ++i )
@@ -2368,8 +2368,8 @@ static void SlabScreenRect( const Vector view[8], float lo, float hi, float &xMi
 // view-aligned box, whose screen bound comes from its corners.
 static void SphereSlabClip( const Vector &center, float radius, float lo, float hi, float &xMin, float &xMax, float &yMin, float &yMax )
 {
-	const float z0 = MAX( lo, center.z - radius );
-	const float z1 = MIN( hi, center.z + radius );
+	const float z0 = Max( lo, center.z - radius );
+	const float z1 = Min( hi, center.z + radius );
 	if ( z0 > z1 )
 	{
 		xMin = yMin = FLT_MAX;
@@ -2379,7 +2379,7 @@ static void SphereSlabClip( const Vector &center, float radius, float lo, float 
 
 	// Widest cross-section of the sphere inside the slab.
 	const float off = ( center.z < z0 ) ? z0 - center.z : ( ( center.z > z1 ) ? center.z - z1 : 0.0f );
-	const float reach = sqrtf( MAX( radius * radius - off * off, 0.0f ) );
+	const float reach = sqrtf( Max( radius * radius - off * off, 0.0f ) );
 
 	const float xs[2] = { center.x - reach, center.x + reach };
 	const float ys[2] = { center.y - reach, center.y + reach };
@@ -2392,17 +2392,17 @@ static void SphereSlabClip( const Vector &center, float radius, float lo, float 
 	{
 		for ( int k = 0; k < 2; ++k )
 		{
-			sxMin = MIN( sxMin, xs[k] / z );
-			sxMax = MAX( sxMax, xs[k] / z );
-			syMin = MIN( syMin, ys[k] / z );
-			syMax = MAX( syMax, ys[k] / z );
+			sxMin = Min( sxMin, xs[k] / z );
+			sxMax = Max( sxMax, xs[k] / z );
+			syMin = Min( syMin, ys[k] / z );
+			syMax = Max( syMax, ys[k] / z );
 		}
 	}
 
-	xMin = MAX( xMin, sxMin );
-	xMax = MIN( xMax, sxMax );
-	yMin = MAX( yMin, syMin );
-	yMax = MIN( yMax, syMax );
+	xMin = Max( xMin, sxMin );
+	xMax = Min( xMax, sxMax );
+	yMin = Max( yMin, syMin );
+	yMax = Min( yMax, syMax );
 }
 
 // The atlas's path length (0..1 of DIST_RANGE) and weight at a point,
@@ -2415,7 +2415,7 @@ void C_NeoVolSmoke::SampleAtlas( const Vector &pos, float &dist, float &weight, 
 	for ( int a = 0; a < 3; ++a )
 	{
 		const float g = clamp( ( pos[a] - m_vecGridMin[a] ) / CNEOSmokeFill::CELL_SIZE - 0.5f, 0.0f, (float)( size[a] - 1 ) );
-		base[a] = MIN( (int)g, size[a] - 2 );
+		base[a] = Min( (int)g, size[a] - 2 );
 		frac[a] = g - base[a];
 	}
 
@@ -2461,7 +2461,7 @@ float C_NeoVolSmoke::DensityLowerBound( const Vector &pos, float front, float bi
 		return 0.0f;
 	}
 
-	const float edge = MIN( depth / NEO_VOLSMOKE_EDGE, 1.0f );
+	const float edge = Min( depth / NEO_VOLSMOKE_EDGE, 1.0f );
 	return weight * edge * edge * ( 3.0f - 2.0f * edge );
 }
 
@@ -2497,15 +2497,15 @@ float C_NeoVolSmoke::PathOpticalDepth( const Vector &eye, const Vector &point ) 
 
 		const float ta = ( m_vecSmokeMin[a] - eye[a] ) / unit[a];
 		const float tb = ( m_vecSmokeMax[a] - eye[a] ) / unit[a];
-		t0 = MAX( t0, MIN( ta, tb ) );
-		t1 = MIN( t1, MAX( ta, tb ) );
+		t0 = Max( t0, Min( ta, tb ) );
+		t1 = Min( t1, Max( ta, tb ) );
 	}
 
 	const float front = FrontRadius( gpGlobals->curtime - m_flSpawnTime );
 	float path = 0.0f;
 	for ( float t = t0; t < t1; t += NEO_VOLSMOKE_PATH_STEP )
 	{
-		const float step = MIN( NEO_VOLSMOKE_PATH_STEP, t1 - t );
+		const float step = Min( NEO_VOLSMOKE_PATH_STEP, t1 - t );
 		path += DensityLowerBound( eye + unit * ( t + 0.5f * step ), front, 0.0f ) * step;
 	}
 
@@ -2534,7 +2534,7 @@ void C_NeoVolSmoke::PrintOpticalDepth( const Vector &from, const Vector &to )
 static float FlashShows( float tau )
 {
 	const float through = expf( -NEO_VOLSMOKE_FLASH_DEPTH_SHARE * tau );
-	return MAX( through - NEO_VOLSMOKE_FLASH_CUTOFF, 0.0f ) / ( 1.0f - NEO_VOLSMOKE_FLASH_CUTOFF );
+	return Max( through - NEO_VOLSMOKE_FLASH_CUTOFF, 0.0f ) / ( 1.0f - NEO_VOLSMOKE_FLASH_CUTOFF );
 }
 
 // How strongly the flash point shows through smoke of optical depth tau.
@@ -2544,7 +2544,7 @@ static float FlashPointShows( float tau )
 	const float through = 1.0f - powf( depth, NEO_VOLSMOKE_FLASH_POINT_FALLOFF );
 	const float beyond = RemapValClamped( tau, NEO_VOLSMOKE_FLASH_POINT_DEPTH, NEO_VOLSMOKE_FLASH_POINT_GONE, 0.0f, 1.0f );
 	const float floorShows = NEO_VOLSMOKE_FLASH_POINT_FLOOR * ( 1.0f - SimpleSpline( beyond ) );
-	return MAX( through, floorShows );
+	return Max( through, floorShows );
 }
 
 // The volume that draws what the smoke reveals at a point: the one whose
@@ -2621,7 +2621,7 @@ static void DrawFlashPoint( IMatRenderContext *pRenderContext, const Vector &ori
 	pRenderContext->PushMatrix();
 	pRenderContext->LoadIdentity();
 	pRenderContext->Bind( pMat );
-	IMesh *pMesh = pRenderContext->GetDynamicMesh( true, NULL, NULL, pMat );
+	IMesh *pMesh = pRenderContext->GetDynamicMesh( true, nullptr, nullptr, pMat );
 
 	const Vector corners[4] = { origin - right - up, origin + right - up, origin + right + up, origin - right + up };
 	static const float us[4] = { 0.0f, 1.0f, 1.0f, 0.0f };
@@ -2735,7 +2735,7 @@ void C_NeoVolSmoke::DrawRevealed( IMatRenderContext *pRenderContext )
 			const float tau = OpticalDepth( eye, pPlayer->WorldSpaceCenter() );
 			const float hidden = 1.0f - expf( -tau );
 			const float shown = FlashShows( tau ) * overlayClear * life;
-			silhouette[p] = MAX( silhouette[p], NEO_VOLSMOKE_FIRE_SILHOUETTE * shown * hidden );
+			silhouette[p] = Max( silhouette[p], NEO_VOLSMOKE_FIRE_SILHOUETTE * shown * hidden );
 			any = true;
 		}
 	}
@@ -2758,7 +2758,7 @@ void C_NeoVolSmoke::DrawRevealed( IMatRenderContext *pRenderContext )
 
 		const float hidden = 1.0f - expf( -tau );
 		const float shown = FlashShows( tau ) * overlayClear;
-		silhouette[p] = MAX( silhouette[p], NEO_VOLSMOKE_CLOAK_SILHOUETTE * shown * hidden );
+		silhouette[p] = Max( silhouette[p], NEO_VOLSMOKE_CLOAK_SILHOUETTE * shown * hidden );
 		any = true;
 	}
 
@@ -2853,7 +2853,7 @@ float C_NeoVolSmoke::SheetOpaqueDepth( const VolSmokeSheetVolume_t *vols, int nV
 		}
 
 		const float half = sqrtf( radiusSqr - missSqr );
-		float t0 = MAX( 0.0f, mid - half );
+		float t0 = Max( 0.0f, mid - half );
 		float t1 = mid + half;
 		for ( int a = 0; a < 3 && t0 < t1; ++a )
 		{
@@ -2868,23 +2868,23 @@ float C_NeoVolSmoke::SheetOpaqueDepth( const VolSmokeSheetVolume_t *vols, int nV
 
 			const float ta = ( vols[v].boxMin[a] - eye[a] ) / unit[a];
 			const float tb = ( vols[v].boxMax[a] - eye[a] ) / unit[a];
-			t0 = MAX( t0, MIN( ta, tb ) );
-			t1 = MIN( t1, MAX( ta, tb ) );
+			t0 = Max( t0, Min( ta, tb ) );
+			t1 = Min( t1, Max( ta, tb ) );
 		}
 
 		if ( t0 < t1 )
 		{
 			const VolSmokeSheetSpan_t span = { v, t0, t1, 0.0f };
 			spans.AddToTail( span );
-			tStart = MIN( tStart, t0 );
-			tEnd = MAX( tEnd, t1 );
+			tStart = Min( tStart, t0 );
+			tEnd = Max( tEnd, t1 );
 		}
 	}
 
 	float sigma = 0.0f;
 	for ( float t = tStart; t < tEnd; t += NEO_VOLSMOKE_CULL_STEP )
 	{
-		const float tNext = MIN( t + NEO_VOLSMOKE_CULL_STEP, tEnd );
+		const float tNext = Min( t + NEO_VOLSMOKE_CULL_STEP, tEnd );
 
 		// Cell weights are at most 1, which bounds what the rest of the ray can
 		// add, in sum and to each volume.
@@ -2892,7 +2892,7 @@ float C_NeoVolSmoke::SheetOpaqueDepth( const VolSmokeSheetVolume_t *vols, int nV
 		bool ownLeft = false;
 		for ( const VolSmokeSheetSpan_t &span : spans )
 		{
-			const float rest = vols[span.vol].extinction * MAX( 0.0f, span.t1 - MAX( t, span.t0 ) );
+			const float rest = vols[span.vol].extinction * Max( 0.0f, span.t1 - Max( t, span.t0 ) );
 			most += rest;
 			ownLeft = ownLeft || ( own[span.vol] == FLT_MAX && span.sigma + rest >= NEO_VOLSMOKE_CULL_OPAQUE );
 		}
@@ -2904,8 +2904,8 @@ float C_NeoVolSmoke::SheetOpaqueDepth( const VolSmokeSheetVolume_t *vols, int nV
 		// Each volume adds only the part of the step inside its box.
 		for ( VolSmokeSheetSpan_t &span : spans )
 		{
-			const float a = MAX( t, span.t0 );
-			const float b = MIN( tNext, span.t1 );
+			const float a = Max( t, span.t0 );
+			const float b = Min( tNext, span.t1 );
 			if ( a >= b )
 			{
 				continue;
@@ -2981,8 +2981,8 @@ void C_NeoVolSmoke::BuildOpaqueSheet( IMatRenderContext *pRenderContext )
 			const Vector corner( ( i & 1 ) ? b.x : a.x, ( i & 2 ) ? b.y : a.y, ( i & 4 ) ? b.z : a.z );
 			const Vector rel = corner - eye;
 			view[i].Init( DotProduct( rel, right ), DotProduct( rel, up ), DotProduct( rel, fwd ) );
-			zMin = MIN( zMin, view[i].z );
-			zMax = MAX( zMax, view[i].z );
+			zMin = Min( zMin, view[i].z );
+			zMax = Max( zMax, view[i].z );
 		}
 		if ( zMax <= NEO_VOLSMOKE_CULL_MIN_DEPTH )
 		{
@@ -2990,11 +2990,11 @@ void C_NeoVolSmoke::BuildOpaqueSheet( IMatRenderContext *pRenderContext )
 		}
 
 		float xMin, xMax, yMin, yMax;
-		SlabScreenRect( view, MAX( zMin, NEO_VOLSMOKE_CULL_MIN_DEPTH ), zMax, xMin, xMax, yMin, yMax );
-		x0 = MIN( x0, xMin );
-		x1 = MAX( x1, xMax );
-		y0 = MIN( y0, yMin );
-		y1 = MAX( y1, yMax );
+		SlabScreenRect( view, Max( zMin, NEO_VOLSMOKE_CULL_MIN_DEPTH ), zMax, xMin, xMax, yMin, yMax );
+		x0 = Min( x0, xMin );
+		x1 = Max( x1, xMax );
+		y0 = Min( y0, yMin );
+		y1 = Max( y1, yMax );
 
 		Vector center;
 		const float radius = pVol->SmokeSphere( center );
@@ -3010,10 +3010,10 @@ void C_NeoVolSmoke::BuildOpaqueSheet( IMatRenderContext *pRenderContext )
 	}
 	const bool sheet = most >= NEO_VOLSMOKE_SHEET_OPAQUE;
 
-	x0 = MAX( x0, -tanX );
-	x1 = MIN( x1, tanX );
-	y0 = MAX( y0, -tanY );
-	y1 = MIN( y1, tanY );
+	x0 = Max( x0, -tanX );
+	x1 = Min( x1, tanX );
+	y0 = Max( y0, -tanY );
+	y1 = Min( y1, tanY );
 	if ( x0 >= x1 || y0 >= y1 )
 	{
 		return;
@@ -3075,12 +3075,12 @@ void C_NeoVolSmoke::BuildOpaqueSheet( IMatRenderContext *pRenderContext )
 	{
 		for ( int i = 0; i < cols; ++i )
 		{
-			float depth = MAX( MAX( corner[j][i], corner[j][i + 1] ), MAX( corner[j + 1][i], corner[j + 1][i + 1] ) );
+			float depth = Max( Max( corner[j][i], corner[j][i + 1] ), Max( corner[j + 1][i], corner[j + 1][i + 1] ) );
 			if ( depth != FLT_MAX )
 			{
 				const float xc = 0.5f * ( xs[i] + xs[i + 1] );
 				const float yc = 0.5f * ( ys[j] + ys[j + 1] );
-				depth = MAX( depth, SheetOpaqueDepth( vols.Base(), nVols, eye, fwd + right * xc + up * yc, s_flCenterOwn.Base() ) );
+				depth = Max( depth, SheetOpaqueDepth( vols.Base(), nVols, eye, fwd + right * xc + up * yc, s_flCenterOwn.Base() ) );
 			}
 
 			tileDepth[j][i] = depth;
@@ -3138,8 +3138,8 @@ bool C_NeoVolSmoke::BuildCullGrid( VolSmokeCullGrid_t &grid ) const
 	{
 		for ( int i = 0; i < s_nCullCols; ++i )
 		{
-			const float ownDepth = MAX( MAX( own( j, i ), own( j, i + 1 ) ), MAX( own( j + 1, i ), own( j + 1, i + 1 ) ) );
-			grid.depth[j][i] = MIN( ownDepth, s_flSheetDepth[j][i] );
+			const float ownDepth = Max( Max( own( j, i ), own( j, i + 1 ) ), Max( own( j + 1, i ), own( j + 1, i + 1 ) ) );
+			grid.depth[j][i] = Min( ownDepth, s_flSheetDepth[j][i] );
 			any = any || grid.depth[j][i] != FLT_MAX;
 		}
 	}
@@ -3178,8 +3178,8 @@ void C_NeoVolSmoke::DrawFarSlabs( IMatRenderContext *pRenderContext )
 		const Vector corner( ( i & 1 ) ? b.x : a.x, ( i & 2 ) ? b.y : a.y, ( i & 4 ) ? b.z : a.z );
 		const Vector rel = corner - eye;
 		view[i].Init( DotProduct( rel, right ), DotProduct( rel, up ), DotProduct( rel, fwd ) );
-		zMin = MIN( zMin, view[i].z );
-		zMax = MAX( zMax, view[i].z );
+		zMin = Min( zMin, view[i].z );
+		zMax = Max( zMax, view[i].z );
 	}
 
 	Vector seed;
@@ -3198,12 +3198,12 @@ void C_NeoVolSmoke::DrawFarSlabs( IMatRenderContext *pRenderContext )
 	// the near pass ends at NEAR_RANGE exactly.
 	float bounds[NEO_VOLSMOKE_MAX_SLABS + 1];
 	int nSlabs = 0;
-	bounds[0] = MAX( NEO_VOLSMOKE_NEAR_RANGE, floorf( zMin ) );
+	bounds[0] = Max( NEO_VOLSMOKE_NEAR_RANGE, floorf( zMin ) );
 	const float zEnd = ceilf( zMax );
 	while ( bounds[nSlabs] < zEnd )
 	{
 		const float z = bounds[nSlabs];
-		float next = ceilf( z + MAX( NEO_VOLSMOKE_SLAB_MIN, NEO_VOLSMOKE_SLAB_GROWTH * z ) );
+		float next = ceilf( z + Max( NEO_VOLSMOKE_SLAB_MIN, NEO_VOLSMOKE_SLAB_GROWTH * z ) );
 		if ( nSlabs == NEO_VOLSMOKE_MAX_SLABS - 1 || next > zEnd )
 		{
 			next = zEnd;
@@ -3245,10 +3245,10 @@ void C_NeoVolSmoke::DrawFarSlabs( IMatRenderContext *pRenderContext )
 			float xMin, xMax, yMin, yMax;
 			SlabScreenRect( view, lo, bounds[s + 1], xMin, xMax, yMin, yMax );
 			SphereSlabClip( sphereView, sphereRadius, lo, bounds[s + 1], xMin, xMax, yMin, yMax );
-			xMin = MAX( xMin, -NEO_VOLSMOKE_SLAB_MAX_TAN );
-			yMin = MAX( yMin, -NEO_VOLSMOKE_SLAB_MAX_TAN );
-			xMax = MIN( xMax, NEO_VOLSMOKE_SLAB_MAX_TAN );
-			yMax = MIN( yMax, NEO_VOLSMOKE_SLAB_MAX_TAN );
+			xMin = Max( xMin, -NEO_VOLSMOKE_SLAB_MAX_TAN );
+			yMin = Max( yMin, -NEO_VOLSMOKE_SLAB_MAX_TAN );
+			xMax = Min( xMax, NEO_VOLSMOKE_SLAB_MAX_TAN );
+			yMax = Min( yMax, NEO_VOLSMOKE_SLAB_MAX_TAN );
 			if ( !useCull )
 			{
 				addQuad( xMin, xMax, yMin, yMax, s );
@@ -3259,8 +3259,8 @@ void C_NeoVolSmoke::DrawFarSlabs( IMatRenderContext *pRenderContext )
 			// the visible part of every slab rectangle; the rest is off screen.
 			for ( int j = 0; j < grid.rows; ++j )
 			{
-				const float y0 = MAX( grid.ys[j], yMin );
-				const float y1 = MIN( grid.ys[j + 1], yMax );
+				const float y0 = Max( grid.ys[j], yMin );
+				const float y1 = Min( grid.ys[j + 1], yMax );
 				if ( y0 >= y1 )
 				{
 					continue;
@@ -3282,7 +3282,7 @@ void C_NeoVolSmoke::DrawFarSlabs( IMatRenderContext *pRenderContext )
 					}
 					else if ( !keep && runStart >= 0 )
 					{
-						addQuad( MAX( grid.xs[runStart], xMin ), MIN( grid.xs[i], xMax ), y0, y1, s );
+						addQuad( Max( grid.xs[runStart], xMin ), Min( grid.xs[i], xMax ), y0, y1, s );
 						runStart = -1;
 					}
 				}
@@ -3291,7 +3291,7 @@ void C_NeoVolSmoke::DrawFarSlabs( IMatRenderContext *pRenderContext )
 	};
 
 	pRenderContext->Bind( m_SlabMaterial, (IClientRenderable *)this );
-	IMesh *pMesh = pRenderContext->GetDynamicMesh( true, NULL, NULL, m_SlabMaterial );
+	IMesh *pMesh = pRenderContext->GetDynamicMesh( true, nullptr, nullptr, m_SlabMaterial );
 
 	collect( cull );
 	int maxVerts, maxIndices;
@@ -3346,7 +3346,7 @@ void C_NeoVolSmoke::DrawNearPass( IMatRenderContext *pRenderContext )
 	pRenderContext->CullMode( MATERIAL_CULLMODE_CCW );
 
 	pRenderContext->Bind( m_Material, (IClientRenderable *)this );
-	IMesh *pMesh = pRenderContext->GetDynamicMesh( true, NULL, NULL, m_Material );
+	IMesh *pMesh = pRenderContext->GetDynamicMesh( true, nullptr, nullptr, m_Material );
 
 	const Vector &a = m_vecSmokeMin;
 	const Vector &b = m_vecSmokeMax;
@@ -3495,9 +3495,9 @@ CON_COMMAND_F( neo_volsmoke_perf, "Print the smoke's CPU time per frame by stage
 	}
 
 	// The frame in progress counts toward the peak.
-	const double framePeak = MAX( p.framePeak, p.frameTotal );
-	const int frames = MAX( p.frames, 1 );
-	const double seconds = MAX( Plat_FloatTime() - p.start, 1.0e-3 );
+	const double framePeak = Max( p.framePeak, p.frameTotal );
+	const int frames = Max( p.frames, 1 );
+	const double seconds = Max( Plat_FloatTime() - p.start, 1.0e-3 );
 
 	double total = 0.0;
 	for ( int s = 0; s < VOLSMOKE_PERF_STAGES; ++s )
