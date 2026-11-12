@@ -2187,17 +2187,18 @@ bool C_NeoVolSmoke::SortDepth( IClientRenderable *pRenderable, const Vector &vie
 		}
 	}
 
-	if ( !pVolume || pVolume->m_vecSmokeMax.x <= pVolume->m_vecSmokeMin.x )
+	if ( !pVolume || !pVolume->m_bFitted || pVolume->m_vecSmokeMax.x <= pVolume->m_vecSmokeMin.x )
 	{
 		return false;
 	}
 
 	// The nearest corner along the view direction: per axis, the box side
-	// that faces the camera.
+	// that faces the camera. The box fitted to the whole field, not the one
+	// growing with the bloom, so two volumes keep their order as they grow.
 	Vector nearest;
 	for ( int axis = 0; axis < 3; ++axis )
 	{
-		nearest[axis] = viewForward[axis] >= 0.0f ? pVolume->m_vecSmokeMin[axis] : pVolume->m_vecSmokeMax[axis];
+		nearest[axis] = viewForward[axis] >= 0.0f ? pVolume->m_vecGridMin[axis] : pVolume->m_vecGridMax[axis];
 	}
 
 	depth = DotProduct( nearest - viewOrigin, viewForward );
