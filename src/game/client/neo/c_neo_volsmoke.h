@@ -29,6 +29,7 @@ class IMaterial;
 class CNeoVolSmokeWorld;
 class CJob;
 struct VolSmokeCullGrid_t;
+struct VolSmokeSheetVolume_t;
 
 class C_NeoVolSmoke : public C_BaseEntity
 {
@@ -152,6 +153,9 @@ private:
 	float DensityLowerBound( const Vector &pos, float front, float bite ) const;
 	float OpaqueDepth( const Vector &eye, const Vector &dir, float front, float bite, float extinction ) const;
 	bool BuildCullGrid( IMatRenderContext *pRenderContext, const Vector view[8], float zMin, float zMax, VolSmokeCullGrid_t &grid ) const;
+	bool StartsRender();
+	static float SheetOpaqueDepth( const VolSmokeSheetVolume_t *vols, int nVols, const Vector &eye, const Vector &dir );
+	static void DrawOpaqueSheet( IMatRenderContext *pRenderContext );
 	void DrawFarSlabs( IMatRenderContext *pRenderContext );
 	void DrawNearPass( IMatRenderContext *pRenderContext );
 
@@ -217,6 +221,7 @@ private:
 	bool  m_bUploadPending;    // atlas changed, upload waits for a free frame
 	int   m_nSlabTiles;        // far slab tiles last frame, and those behind opaque smoke
 	int   m_nSlabTilesCulled;
+	int   m_nRenderSerial;     // the render this volume last drew in
 };
 
 #endif // C_NEO_VOLSMOKE_H
