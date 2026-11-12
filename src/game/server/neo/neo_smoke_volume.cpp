@@ -23,18 +23,13 @@ public:
 	virtual int UpdateTransmitState() override { return SetTransmitState( FL_EDICT_ALWAYS ); }
 
 	void SetStartTime( float time ) { m_flStartTime = time; }
-	void SetFieldHash( unsigned long long hash );
 
 private:
 	CNetworkVar( float, m_flStartTime );
-	CNetworkVar( int, m_nFieldHashLo );
-	CNetworkVar( int, m_nFieldHashHi );
 };
 
 IMPLEMENT_SERVERCLASS_ST( CNEOSmokeVolumeEnt, DT_NEOSmokeVolumeEnt )
 	SendPropTime( SENDINFO( m_flStartTime ) ),
-	SendPropInt( SENDINFO( m_nFieldHashLo ), 32, SPROP_UNSIGNED ),
-	SendPropInt( SENDINFO( m_nFieldHashHi ), 32, SPROP_UNSIGNED ),
 END_SEND_TABLE()
 
 LINK_ENTITY_TO_CLASS( neo_smoke_volume, CNEOSmokeVolumeEnt );
@@ -45,13 +40,6 @@ void CNEOSmokeVolumeEnt::Spawn()
 	SetMoveType( MOVETYPE_NONE );
 	SetSolid( SOLID_NONE );
 	AddEffects( EF_NODRAW );
-}
-
-// Zero until the field is filled.
-void CNEOSmokeVolumeEnt::SetFieldHash( unsigned long long hash )
-{
-	m_nFieldHashLo = (int)( hash & 0xffffffffull );
-	m_nFieldHashHi = (int)( hash >> 32 );
 }
 
 // memdbgon must be the last include file in a .cpp file!!!
@@ -119,8 +107,6 @@ public:
 	bool LiveDue() const { return !m_bLive && gpGlobals->tickcount >= m_nLiveTick && IsDone(); }
 	void GoLive();
 	bool Expired() const;
-	unsigned long long LatticeHash() const;
-	void Print() const;
 
 	// The part of the segment from `from` along `unit` (length `len`) inside
 	// the box that can hold smoke now; false when it misses.
@@ -141,7 +127,6 @@ private:
 	void RunFill();
 	void PrepareField();
 	void ReleaseWorld();
-	void FinishFill();
 	float Density( const Vector &pos, float front ) const;
 	float DomeDensity( const Vector &pos, float front ) const;
 	void CornerValue( int x, int y, int z, float &dist, float &weight ) const;
@@ -150,7 +135,6 @@ private:
 	// the grenade went off.
 	float Age() const { return TICKS_TO_TIME( gpGlobals->tickcount - m_nStartTick ); }
 
-	int m_nId;
 	Vector m_vecOrigin;
 	float m_flStartTime;
 	int m_nStartTick;
@@ -160,7 +144,6 @@ private:
 	CNEOSmokeWorld *m_pWorld; // freed once the fill is done
 	int m_nLiveTick;
 	bool m_bLive;
-	float m_flLiveAge;
 
 	// The job owns the fill and its world while it runs.
 	CJob *m_pFillJob;
@@ -175,30 +158,18 @@ private:
 	Vector m_vecSmokeMax;
 	float m_flFrontUnits;
 	float m_flDistRange;
-	unsigned long long m_nFieldHash;
-
-	static int s_nNextId;
 };
 
-int CNEOSmokeVolume::s_nNextId = 0;
-
 static CUtlVector< CNEOSmokeVolume * > s_SmokeVolumes;
-
-// Fields that went live after their tick, since the last print.
-static int s_nLateLive = 0;
 
 // Bumped whenever the set of fields or a field's shape changes, so a
 // remembered sight result is not reused across such a change.
 static int s_nVolumeGeneration = 0;
 
-// Sight queries and the marches they ran, since the last print.
-static int s_nSightQueries = 0;
-static int s_nSightMarches = 0;
-
 CNEOSmokeVolume::CNEOSmokeVolume( const Vector &origin, CBaseEntity *pGrenade )
-	: m_nId( s_nNextId++ ), m_vecOrigin( origin ), m_flStartTime( gpGlobals->curtime ), m_nStartTick( gpGlobals->tickcount ), m_hGrenade( pGrenade ), m_pWorld( nullptr ),
-	  m_nLiveTick( gpGlobals->tickcount + TIME_TO_TICKS( NEO_SMOKE_FIELD_LIVE_DELAY ) ), m_bLive( false ), m_flLiveAge( -1.0f ),
-	  m_pFillJob( nullptr ), m_flFrontUnits( 0.0f ), m_flDistRange( 0.0f ), m_nFieldHash( 0 )
+	: m_vecOrigin( origin ), m_flStartTime( gpGlobals->curtime ), m_nStartTick( gpGlobals->tickcount ), m_hGrenade( pGrenade ), m_pWorld( nullptr ),
+	  m_nLiveTick( gpGlobals->tickcount + TIME_TO_TICKS( NEO_SMOKE_FIELD_LIVE_DELAY ) ), m_bLive( false ),
+	  m_pFillJob( nullptr ), m_flFrontUnits( 0.0f ), m_flDistRange( 0.0f )
 {
 	// The same box and lattice as the client's volume, so the queries and
 	// the field are the same.
@@ -243,7 +214,7 @@ int CNEOSmokeVolume::Step( int cells )
 	if ( m_Fill.IsDone() )
 	{
 		PrepareField();
-		FinishFill();
+		ReleaseWorld();
 	}
 
 	return taken;
@@ -287,22 +258,12 @@ void CNEOSmokeVolume::CollectJob()
 
 	m_pFillJob->Release();
 	m_pFillJob = nullptr;
-	if ( m_Fill.IsDone() )
-	{
-		FinishFill();
-	}
-
 }
 
 void CNEOSmokeVolume::GoLive()
 {
 	m_bLive = true;
-	m_flLiveAge = Age();
 	++s_nVolumeGeneration;
-	if ( gpGlobals->tickcount > m_nLiveTick )
-	{
-		++s_nLateLive;
-	}
 }
 
 // The query reads the finished field only, so the world cache goes. A job
@@ -311,15 +272,6 @@ void CNEOSmokeVolume::ReleaseWorld()
 {
 	delete m_pWorld;
 	m_pWorld = nullptr;
-}
-
-void CNEOSmokeVolume::FinishFill()
-{
-	ReleaseWorld();
-	if ( m_hNetworked.Get() )
-	{
-		m_hNetworked->SetFieldHash( m_nFieldHash );
-	}
 }
 
 // What the query and the clients need from the finished field. Runs on the
@@ -354,8 +306,6 @@ void CNEOSmokeVolume::PrepareField()
 		m_vecSmokeMin[a] = Max( m_vecGridMin[a], m_vecGridMin[a] + ( lo[a] - 1 ) * cell );
 		m_vecSmokeMax[a] = Min( gridMax, m_vecGridMin[a] + ( hi[a] + 2 ) * cell );
 	}
-
-	m_nFieldHash = LatticeHash();
 }
 
 // A box cell's path length and weight as the client's atlas holds them: a
@@ -535,38 +485,6 @@ bool CNEOSmokeVolume::Expired() const
 	return !m_hGrenade.Get() || Age() > NEO_VOLSMOKE_FADE_END;
 }
 
-// The client's lattice hash (neo_volsmoke_stats): cells relative to the
-// grenade's cell corner, so the two prints of one field are equal.
-unsigned long long CNEOSmokeVolume::LatticeHash() const
-{
-	int seedCorner[3];
-	int offset[3];
-	m_Fill.BoxSeedCorner( seedCorner );
-	m_Fill.BoxOffset( offset );
-
-	unsigned long long hash = 0;
-	for ( int i = 0; i < m_Fill.LatticeCount(); ++i )
-	{
-		int c[3];
-		m_Fill.LatticeCell( i, c[0], c[1], c[2] );
-		for ( int a = 0; a < 3; ++a )
-		{
-			c[a] -= seedCorner[a] + offset[a];
-		}
-
-		hash += VolSmokeCellKey( c[0], c[1], c[2], (unsigned int)m_Fill.LatticeDist( i ) );
-	}
-
-	return hash;
-}
-
-void CNEOSmokeVolume::Print() const
-{
-	Msg( "neo_smoke_server_stats: volume %d origin (%.9g %.9g %.9g) age %.2f live at age %.2f lattice %016llx (%d cells, front %.1f)\n",
-		m_nId, m_vecOrigin.x, m_vecOrigin.y, m_vecOrigin.z, Age(), m_flLiveAge,
-		IsDone() ? LatticeHash() : 0ull, IsDone() ? m_Fill.LatticeCount() : 0, IsDone() ? CNEOSmokeFill::DistToUnits( m_Fill.LatticeFrontDist() ) : 0.0f );
-}
-
 void NEOSmokeVolume_Create( const Vector &origin, CBaseEntity *pGrenade )
 {
 	s_SmokeVolumes.AddToTail( new CNEOSmokeVolume( origin, pGrenade ) );
@@ -676,8 +594,6 @@ typedef CUtlVectorFixedGrowable< NEOSmokeSightSpan_t, 16 > SightSpans_t;
 // volumes it crosses.
 static float SightBlockMarch( const Vector &from, const Vector &to )
 {
-	++s_nSightMarches;
-
 	const Vector delta = to - from;
 	const float len = delta.Length();
 	if ( len < 1.0f )
@@ -744,7 +660,6 @@ float NEOSmoke_SightBlockFraction( const Vector &from, const Vector &to )
 	static int s_nGeneration = -1;
 	static float s_flFraction = 1.0f;
 
-	++s_nSightQueries;
 	if ( s_nTick == gpGlobals->tickcount && s_nGeneration == s_nVolumeGeneration && s_vecFrom == from && s_vecTo == to )
 	{
 		return s_flFraction;
@@ -769,22 +684,4 @@ bool NEOSmokeVolume_SmokeBox( const CBaseEntity *pGrenade, Vector &mins, Vector 
 	}
 
 	return false;
-}
-
-CON_COMMAND_F( neo_smoke_server_stats, "Print the server's smoke fields.", FCVAR_CHEAT )
-{
-	if ( !UTIL_IsCommandIssuedByServerAdmin() )
-	{
-		return;
-	}
-
-	for ( const CNEOSmokeVolume *pVol : s_SmokeVolumes )
-	{
-		pVol->Print();
-	}
-
-	Msg( "neo_smoke_server_stats: live %d, late %d, sight queries %d, marches %d\n", s_SmokeVolumes.Count(), s_nLateLive, s_nSightQueries, s_nSightMarches );
-	s_nLateLive = 0;
-	s_nSightQueries = 0;
-	s_nSightMarches = 0;
 }
