@@ -26,6 +26,7 @@ public:
 
 	void	Spawn(void);
 	int		OnTakeDamage(const CTakeDamageInfo& inputInfo);
+	void	Splash() override;
 	void	DelayThink();
 	void	SetPunted(bool punt) { m_punted = punt; }
 	bool	WasPunted(void) const { return m_punted; }
