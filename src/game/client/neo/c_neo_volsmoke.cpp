@@ -229,10 +229,15 @@ static constexpr float NEO_VOLSMOKE_FLASH_DEPTH_SHARE = 0.15f;
 static constexpr float NEO_VOLSMOKE_FLASH_CUTOFF = 0.05f;
 static constexpr float NEO_VOLSMOKE_FLASH_LIFE = 0.05f; // the weapon's muzzle light
 // The flash point fades smoothly with the smoke between it and the eye:
-// a clear point in the near half, dim in the far half, gone behind the
-// cloud, where the path holds about this optical depth.
+// a clear point in the near half, dimmer in the far half. An unsuppressed
+// shot must stay findable from outside the cloud, so the point keeps a
+// floor through about one cloud of smoke and fades out over the depth of
+// a path through the whole cloud: a shooter in clear air behind the cloud
+// stays hidden.
 static constexpr float NEO_VOLSMOKE_FLASH_POINT_DEPTH = 16.0f;
 static constexpr float NEO_VOLSMOKE_FLASH_POINT_FALLOFF = 2.0f;
+static constexpr float NEO_VOLSMOKE_FLASH_POINT_FLOOR = 0.45f;
+static constexpr float NEO_VOLSMOKE_FLASH_POINT_GONE = 22.0f;
 static constexpr float NEO_VOLSMOKE_FLASH_POINT_RADIUS = 12.0f;
 // The muzzle flash sprite's orange, as the legacy sprite shows it.
 static const Vector NEO_VOLSMOKE_FLASH_POINT_TINT( 1.0f, 0.84f, 0.5f );
@@ -2797,7 +2802,10 @@ static float FlashShows( float tau )
 static float FlashPointShows( float tau )
 {
 	const float depth = clamp( tau / NEO_VOLSMOKE_FLASH_POINT_DEPTH, 0.0f, 1.0f );
-	return 1.0f - powf( depth, NEO_VOLSMOKE_FLASH_POINT_FALLOFF );
+	const float through = 1.0f - powf( depth, NEO_VOLSMOKE_FLASH_POINT_FALLOFF );
+	const float beyond = RemapValClamped( tau, NEO_VOLSMOKE_FLASH_POINT_DEPTH, NEO_VOLSMOKE_FLASH_POINT_GONE, 0.0f, 1.0f );
+	const float floorShows = NEO_VOLSMOKE_FLASH_POINT_FLOOR * ( 1.0f - SimpleSpline( beyond ) );
+	return MAX( through, floorShows );
 }
 
 // The volume that draws what the smoke reveals at a point: the one whose
