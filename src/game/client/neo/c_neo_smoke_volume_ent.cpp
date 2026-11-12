@@ -9,8 +9,6 @@
 // memdbgon must be the last include file in a .cpp file!!!
 #include "tier0/memdbgon.h"
 
-extern ConVar neo_volsmoke_hook_grenade;
-
 class C_NEOSmokeVolumeEnt : public C_BaseEntity
 {
 	DECLARE_CLASS( C_NEOSmokeVolumeEnt, C_BaseEntity );
@@ -42,7 +40,7 @@ void C_NEOSmokeVolumeEnt::OnDataChanged( DataUpdateType_t updateType )
 {
 	BaseClass::OnDataChanged( updateType );
 
-	if ( updateType != DATA_UPDATE_CREATED || !neo_volsmoke_hook_grenade.GetBool() )
+	if ( updateType != DATA_UPDATE_CREATED )
 	{
 		return;
 	}

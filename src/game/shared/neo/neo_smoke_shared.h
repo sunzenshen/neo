@@ -11,6 +11,12 @@
 
 #include "mathlib/mathlib.h"
 
+class ConVar;
+
+// The smoke every player faces: legacy particles and cube blocker, or the
+// volumetric field. Read when a grenade detonates.
+extern ConVar sv_neo_smoke_volumetric;
+
 // The legacy smoke's time curves: sine ease-out bloom, cosine fade.
 static constexpr float NEO_VOLSMOKE_BLOOM_TIME = 5.5f;
 static constexpr float NEO_VOLSMOKE_FADE_START = 17.0f;
