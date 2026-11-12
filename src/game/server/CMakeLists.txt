@@ -1467,7 +1467,8 @@ set_source_files_properties(
 )
 
 # The smoke field must be the same in GCC and MSVC builds: no fast-math
-# reassociation in the fill and its world queries.
+# reassociation in the fill and its world queries. MSVC needs no flag here:
+# the fill is integer arithmetic, and its field hashes matched the GCC build.
 if(NOT COMPILER_MSVC)
     set_source_files_properties(
         ${CMAKE_SOURCE_DIR}/game/shared/neo/neo_smoke_fill.cpp

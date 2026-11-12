@@ -47,7 +47,7 @@ static constexpr int NEO_VOLSMOKE_FILL_MASK = CONTENTS_SOLID | CONTENTS_WINDOW |
 
 inline float VolSmokeBloom( float age )
 {
-	return sinf( 0.5f * M_PI_F * clamp( age, 0.0f, NEO_VOLSMOKE_BLOOM_TIME ) / NEO_VOLSMOKE_BLOOM_TIME );
+	return sinf( 0.5f * M_PI_F * Clamp( age, 0.0f, NEO_VOLSMOKE_BLOOM_TIME ) / NEO_VOLSMOKE_BLOOM_TIME );
 }
 
 inline float VolSmokeFade( float age )
@@ -57,7 +57,7 @@ inline float VolSmokeFade( float age )
 		return 1.0f;
 	}
 
-	const float f = clamp( ( age - NEO_VOLSMOKE_FADE_START ) / ( NEO_VOLSMOKE_FADE_END - NEO_VOLSMOKE_FADE_START ), 0.0f, 1.0f );
+	const float f = Clamp( ( age - NEO_VOLSMOKE_FADE_START ) / ( NEO_VOLSMOKE_FADE_END - NEO_VOLSMOKE_FADE_START ), 0.0f, 1.0f );
 	return 0.5f + 0.5f * cosf( M_PI_F * f );
 }
 

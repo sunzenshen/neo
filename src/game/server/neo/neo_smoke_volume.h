@@ -21,11 +21,8 @@ class CBaseEntity;
 // as at a round restart.
 void NEOSmokeVolume_Create( const Vector &origin, CBaseEntity *pGrenade );
 
-// Optical depth at which a human stops seeing a player behind smoke in a lit scene.
-static constexpr float NEO_SMOKE_SIGHT_BLOCK_DEPTH = 4.4f;
-
 // The share of the segment from `from` that stays in sight: 1 when the smoke
-// on it stays under NEO_SMOKE_SIGHT_BLOCK_DEPTH.
+// on it stays under the block depth.
 float NEOSmoke_SightBlockFraction( const Vector &from, const Vector &to );
 
 // The box that holds the smoke of `pGrenade`'s field; false while the field
