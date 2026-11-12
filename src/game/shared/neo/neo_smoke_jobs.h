@@ -22,10 +22,14 @@ class CNeoSmokeFill;
 static constexpr int NEO_SMOKE_FILL_CHUNK_CELLS = 64;
 static constexpr int NEO_SMOKE_FILL_CHUNK_QUERIES = 128;
 
-// The pool of this DLL, started on the first call with up to `maxWorkers`
-// threads. NULL when it cannot start: the caller then fills on its own
-// thread.
-IThreadPool *NEOSmokeFillPool( int maxWorkers );
+// Workers a pool may start. The main thread keeps a physical core of its
+// own; the cap bounds the fill memory held at once.
+static constexpr int NEO_SMOKE_FILL_MAX_WORKERS = 8;
+
+// The pool of this DLL, started on the first call with a worker count that
+// follows the machine. NULL when it cannot start: the caller then fills on
+// its own thread.
+IThreadPool *NEOSmokeFillPool();
 void NEOSmokeFillPoolShutdown();
 
 // Steps the fill until it is done or cancelled. Runs on a worker.

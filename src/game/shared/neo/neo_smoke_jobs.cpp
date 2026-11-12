@@ -16,7 +16,7 @@
 static IThreadPool *s_pSmokeFillPool = NULL;
 static bool s_bSmokeFillPoolTried = false;
 
-static int SmokeFillWorkers( int maxWorkers )
+static int SmokeFillWorkers()
 {
 	// With SMT the sibling threads absorb the main, render and sound threads.
 	// Without it, half the cores stay free for them.
@@ -24,10 +24,10 @@ static int SmokeFillWorkers( int maxWorkers )
 	const int cores = pCpu->m_nPhysicalProcessors;
 	const bool smt = pCpu->m_nLogicalProcessors > pCpu->m_nPhysicalProcessors;
 	const int workers = smt ? cores - 1 : cores / 2;
-	return clamp( workers, 1, maxWorkers );
+	return clamp( workers, 1, NEO_SMOKE_FILL_MAX_WORKERS );
 }
 
-IThreadPool *NEOSmokeFillPool( int maxWorkers )
+IThreadPool *NEOSmokeFillPool()
 {
 	if ( s_bSmokeFillPoolTried )
 	{
@@ -37,7 +37,7 @@ IThreadPool *NEOSmokeFillPool( int maxWorkers )
 	s_bSmokeFillPoolTried = true;
 	IThreadPool *pPool = CreateThreadPool();
 	ThreadPoolStartParams_t params;
-	params.nThreads = SmokeFillWorkers( maxWorkers );
+	params.nThreads = SmokeFillWorkers();
 	params.nThreadsMax = params.nThreads;
 	params.fDistribute = TRS_FALSE;
 	params.iThreadPriority = TP_PRIORITY_LOW;
