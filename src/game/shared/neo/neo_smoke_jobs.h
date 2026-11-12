@@ -27,7 +27,7 @@ static constexpr int NEO_SMOKE_FILL_CHUNK_QUERIES = 128;
 static constexpr int NEO_SMOKE_FILL_MAX_WORKERS = 8;
 
 // The pool of this DLL, started on the first call with a worker count that
-// follows the machine. NULL when it cannot start: the caller then fills on
+// follows the machine. nullptr when it cannot start: the caller then fills on
 // its own thread.
 IThreadPool *NEOSmokeFillPool();
 void NEOSmokeFillPoolShutdown();

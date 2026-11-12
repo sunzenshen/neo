@@ -168,8 +168,8 @@ SHADER_DRAW
 		// c7: half-texel offset for the frame buffer lookup, path length decode
 		int w, h;
 		pShaderAPI->GetBackBufferDimensions( w, h );
-		c[0] = 0.5f / (float)MAX( w, 1 );
-		c[1] = 0.5f / (float)MAX( h, 1 );
+		c[0] = 0.5f / (float)Max( w, 1 );
+		c[1] = 0.5f / (float)Max( h, 1 );
 		c[2] = front[1];
 		c[3] = front[2];
 		pShaderAPI->SetPixelShaderConstant( 7, c );
@@ -190,8 +190,8 @@ SHADER_DRAW
 		// c11: half a texel of a tile, per axis
 		float tile[2];
 		params[TILECELLS]->GetVecValue( tile, 2 );
-		c[0] = 0.5f / MAX( tile[0], 1.0f );
-		c[1] = 0.5f / MAX( tile[1], 1.0f );
+		c[0] = 0.5f / Max( tile[0], 1.0f );
+		c[1] = 0.5f / Max( tile[1], 1.0f );
 		c[2] = 0.0f;
 		c[3] = 0.0f;
 		pShaderAPI->SetPixelShaderConstant( 11, c );

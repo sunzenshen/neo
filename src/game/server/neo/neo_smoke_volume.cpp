@@ -105,7 +105,7 @@ public:
 	int Step( int cells );
 
 	bool WantsFill() const { return !m_pFillJob && !m_Fill.IsDone(); }
-	bool IsFilling() const { return m_pFillJob != NULL; }
+	bool IsFilling() const { return m_pFillJob != nullptr; }
 	void StartJob( IThreadPool *pPool );
 
 	// Picks up the job once it is finished.
@@ -185,9 +185,9 @@ static CUtlVector< CNEOSmokeVolume * > s_SmokeVolumes;
 static int s_nLateLive = 0;
 
 CNEOSmokeVolume::CNEOSmokeVolume( const Vector &origin, CBaseEntity *pGrenade )
-	: m_nId( s_nNextId++ ), m_vecOrigin( origin ), m_flStartTime( gpGlobals->curtime ), m_hGrenade( pGrenade ), m_pWorld( NULL ),
+	: m_nId( s_nNextId++ ), m_vecOrigin( origin ), m_flStartTime( gpGlobals->curtime ), m_hGrenade( pGrenade ), m_pWorld( nullptr ),
 	  m_nLiveTick( gpGlobals->tickcount + TIME_TO_TICKS( NEO_SMOKE_FIELD_LIVE_DELAY ) ), m_bLive( false ), m_flLiveAge( -1.0f ),
-	  m_pFillJob( NULL ), m_flFrontUnits( 0.0f ), m_flDistRange( 0.0f ), m_nFieldHash( 0 )
+	  m_pFillJob( nullptr ), m_flFrontUnits( 0.0f ), m_flDistRange( 0.0f ), m_nFieldHash( 0 )
 {
 	// The same box and lattice as the client's volume, so the queries and
 	// the field are the same.
@@ -228,7 +228,7 @@ int CNEOSmokeVolume::Step( int cells )
 	// A slice cut short by its queries is charged for them, so a tick of
 	// fills along walls costs no more than a tick in the open.
 	const int queryCells = ( m_Fill.WorldQueries() - queriesBefore ) / NEO_SMOKE_SERVER_QUERIES_PER_CELL;
-	const int taken = MAX( 1, MAX( m_Fill.LatticeCount() - cellsBefore, queryCells ) );
+	const int taken = Max( 1, Max( m_Fill.LatticeCount() - cellsBefore, queryCells ) );
 	if ( m_Fill.IsDone() )
 	{
 		PrepareField();
@@ -275,7 +275,7 @@ void CNEOSmokeVolume::CollectJob()
 	}
 
 	m_pFillJob->Release();
-	m_pFillJob = NULL;
+	m_pFillJob = nullptr;
 	if ( m_Fill.IsDone() )
 	{
 		FinishFill();
@@ -298,7 +298,7 @@ void CNEOSmokeVolume::GoLive()
 void CNEOSmokeVolume::ReleaseWorld()
 {
 	delete m_pWorld;
-	m_pWorld = NULL;
+	m_pWorld = nullptr;
 }
 
 void CNEOSmokeVolume::FinishFill()
@@ -317,7 +317,7 @@ void CNEOSmokeVolume::PrepareField()
 	m_Fill.BoxSize( m_nBox );
 	m_Fill.BoxSeedCorner( m_nSeedCorner );
 	m_flFrontUnits = CNEOSmokeFill::DistToUnits( m_Fill.FrontDist() );
-	m_flDistRange = MAX( NEO_VOLSMOKE_DIST_RANGE, m_flFrontUnits );
+	m_flDistRange = Max( NEO_VOLSMOKE_DIST_RANGE, m_flFrontUnits );
 
 	int lo[3] = { m_nBox[0], m_nBox[1], m_nBox[2] };
 	int hi[3] = { -1, -1, -1 };
@@ -327,8 +327,8 @@ void CNEOSmokeVolume::PrepareField()
 		const int c[3] = { idx % m_nBox[0], ( idx / m_nBox[0] ) % m_nBox[1], idx / ( m_nBox[0] * m_nBox[1] ) };
 		for ( int a = 0; a < 3; ++a )
 		{
-			lo[a] = MIN( lo[a], c[a] );
-			hi[a] = MAX( hi[a], c[a] );
+			lo[a] = Min( lo[a], c[a] );
+			hi[a] = Max( hi[a], c[a] );
 		}
 	}
 
@@ -339,8 +339,8 @@ void CNEOSmokeVolume::PrepareField()
 	{
 		m_vecGridMin[a] = m_vecOrigin[a] - m_nSeedCorner[a] * cell;
 		const float gridMax = m_vecGridMin[a] + m_nBox[a] * cell;
-		m_vecSmokeMin[a] = MAX( m_vecGridMin[a], m_vecGridMin[a] + ( lo[a] - 1 ) * cell );
-		m_vecSmokeMax[a] = MIN( gridMax, m_vecGridMin[a] + ( hi[a] + 2 ) * cell );
+		m_vecSmokeMin[a] = Max( m_vecGridMin[a], m_vecGridMin[a] + ( lo[a] - 1 ) * cell );
+		m_vecSmokeMax[a] = Min( gridMax, m_vecGridMin[a] + ( hi[a] + 2 ) * cell );
 	}
 
 	m_nFieldHash = LatticeHash();
@@ -376,7 +376,7 @@ void CNEOSmokeVolume::CornerValue( int x, int y, int z, float &dist, float &weig
 				const int nIdx = ( n[2] * m_nBox[1] + n[1] ) * m_nBox[0] + n[0];
 				if ( m_Fill.IsFinalized( nIdx ) )
 				{
-					dist = MIN( dist, CNEOSmokeFill::DistToUnits( m_Fill.Dist( nIdx ) ) );
+					dist = Min( dist, CNEOSmokeFill::DistToUnits( m_Fill.Dist( nIdx ) ) );
 				}
 			}
 		}
@@ -392,7 +392,7 @@ float CNEOSmokeVolume::Density( const Vector &pos, float front ) const
 	for ( int a = 0; a < 3; ++a )
 	{
 		const float g = clamp( ( pos[a] - m_vecGridMin[a] ) / CNEOSmokeFill::CELL_SIZE - 0.5f, 0.0f, (float)( m_nBox[a] - 1 ) );
-		base[a] = MIN( (int)g, m_nBox[a] - 2 );
+		base[a] = Min( (int)g, m_nBox[a] - 2 );
 		frac[a] = g - base[a];
 	}
 
@@ -427,7 +427,7 @@ float CNEOSmokeVolume::Density( const Vector &pos, float front ) const
 		return 0.0f;
 	}
 
-	const float edge = MIN( depth / NEO_VOLSMOKE_EDGE, 1.0f );
+	const float edge = Min( depth / NEO_VOLSMOKE_EDGE, 1.0f );
 	return weight * edge * edge * ( 3.0f - 2.0f * edge );
 }
 
@@ -440,7 +440,7 @@ float CNEOSmokeVolume::DomeDensity( const Vector &pos, float front ) const
 		return 0.0f;
 	}
 
-	const float edge = MIN( depth / NEO_VOLSMOKE_EDGE, 1.0f );
+	const float edge = Min( depth / NEO_VOLSMOKE_EDGE, 1.0f );
 	return edge * edge * ( 3.0f - 2.0f * edge );
 }
 
@@ -477,8 +477,8 @@ static bool ClipSegmentToBox( const Vector &from, const Vector &unit, float len,
 
 		const float ta = ( boxMin[a] - from[a] ) / unit[a];
 		const float tb = ( boxMax[a] - from[a] ) / unit[a];
-		t0 = MAX( t0, MIN( ta, tb ) );
-		t1 = MIN( t1, MAX( ta, tb ) );
+		t0 = Max( t0, Min( ta, tb ) );
+		t1 = Min( t1, Max( ta, tb ) );
 	}
 
 	return t0 < t1;
@@ -525,7 +525,7 @@ float CNEOSmokeVolume::PathOpticalDepth( const Vector &from, const Vector &to ) 
 	float tau = 0.0f;
 	for ( float t = span.t0; t < span.t1; t += NEO_VOLSMOKE_PATH_STEP )
 	{
-		const float step = MIN( NEO_VOLSMOKE_PATH_STEP, span.t1 - t );
+		const float step = Min( NEO_VOLSMOKE_PATH_STEP, span.t1 - t );
 		tau += SpanExtinction( from + unit * ( t + 0.5f * step ), span ) * step;
 	}
 
@@ -673,7 +673,7 @@ private:
 				continue;
 			}
 
-			budget -= pVol->Step( MIN( budget, NEO_SMOKE_SERVER_CELLS_PER_FILL ) );
+			budget -= pVol->Step( Min( budget, NEO_SMOKE_SERVER_CELLS_PER_FILL ) );
 		}
 	}
 };
@@ -718,14 +718,14 @@ float NEOSmoke_SightBlockFraction( const Vector &from, const Vector &to )
 		}
 
 		spans.AddToTail( span );
-		start = MIN( start, span.t0 );
-		end = MAX( end, span.t1 );
+		start = Min( start, span.t0 );
+		end = Max( end, span.t1 );
 	}
 
 	float tau = 0.0f;
 	for ( float t = start; t < end; t += NEO_VOLSMOKE_PATH_STEP )
 	{
-		const float step = MIN( NEO_VOLSMOKE_PATH_STEP, end - t );
+		const float step = Min( NEO_VOLSMOKE_PATH_STEP, end - t );
 		const float mid = t + 0.5f * step;
 		const Vector pos = from + unit * mid;
 

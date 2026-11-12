@@ -91,8 +91,8 @@ static constexpr int NEO_SMOKE_FILL_HEAP_START = 8192;
 static constexpr int NEO_SMOKE_FILL_BRICKS_START = 256;
 
 CNEOSmokeFill::CNEOSmokeFill()
-	: m_pWorld( NULL ), m_pBrickDir( NULL ), m_ppBricks( NULL ), m_nBricks( 0 ), m_nBrickCap( 0 ), m_pHeap( NULL ),
-	  m_nHeapCap( 0 ), m_pOrder( NULL ), m_pOrderDist( NULL ), m_pBoxOrder( NULL ), m_pFinalBits( NULL ), m_pWordRank( NULL ), m_pFinalDist( NULL ), m_nHeapCount( 0 ),
+	: m_pWorld( nullptr ), m_pBrickDir( nullptr ), m_ppBricks( nullptr ), m_nBricks( 0 ), m_nBrickCap( 0 ), m_pHeap( nullptr ),
+	  m_nHeapCap( 0 ), m_pOrder( nullptr ), m_pOrderDist( nullptr ), m_pBoxOrder( nullptr ), m_pFinalBits( nullptr ), m_pWordRank( nullptr ), m_pFinalDist( nullptr ), m_nHeapCount( 0 ),
 	  m_nFinalized( 0 ), m_nFrontDist( 0 ), m_nBoxFinalized( 0 ), m_nBoxFront( 0 ), m_nWords( 0 ), m_nDropped( 0 ), m_nQueries( 0 ), m_nPeakBytes( 0 ), m_bDone( true ), m_bBegun( false )
 {
 }
@@ -129,9 +129,9 @@ void CNEOSmokeFill::FreeWork()
 	delete[] m_ppBricks;
 	delete[] m_pBrickDir;
 	delete[] m_pHeap;
-	m_ppBricks = NULL;
-	m_pBrickDir = NULL;
-	m_pHeap = NULL;
+	m_ppBricks = nullptr;
+	m_pBrickDir = nullptr;
+	m_pHeap = nullptr;
 	m_nBricks = 0;
 	m_nBrickCap = 0;
 	m_nHeapCap = 0;
@@ -159,7 +159,7 @@ int CNEOSmokeFill::BrickSlot( int cell )
 const CNEOSmokeFill::Brick_t *CNEOSmokeFill::FindBrick( int cell ) const
 {
 	const int n = m_pBrickDir[BrickOf( cell )];
-	return n ? m_ppBricks[n - 1] : NULL;
+	return n ? m_ppBricks[n - 1] : nullptr;
 }
 
 CNEOSmokeFill::Brick_t &CNEOSmokeFill::TouchBrick( int cell )
@@ -210,7 +210,7 @@ int CNEOSmokeFill::CellDist( int cell ) const
 
 void CNEOSmokeFill::NoteMemory()
 {
-	m_nPeakBytes = MAX( m_nPeakBytes, MemoryBytes() );
+	m_nPeakBytes = Max( m_nPeakBytes, MemoryBytes() );
 }
 
 static int NeoSmokePopCount( unsigned long long v )
@@ -224,7 +224,7 @@ static int NeoSmokePopCount( unsigned long long v )
 
 static void ShrinkToCount( int *&pArray, int count )
 {
-	int *pShrunk = new int[MAX( count, 1 )];
+	int *pShrunk = new int[Max( count, 1 )];
 	memcpy( pShrunk, pArray, count * sizeof( int ) );
 	delete[] pArray;
 	pArray = pShrunk;
@@ -246,8 +246,8 @@ void CNEOSmokeFill::FitBox()
 			hi = m_nHi[k] + 1;
 		}
 
-		lo = MAX( lo, 0 );
-		hi = MIN( hi, latticeHi[k] );
+		lo = Max( lo, 0 );
+		hi = Min( hi, latticeHi[k] );
 		m_nBoxLo[k] = lo;
 		m_nBoxSize[k] = hi - lo + 1;
 	}
@@ -283,7 +283,7 @@ void CNEOSmokeFill::Finish()
 	m_nWords = ( m_nBoxSize[0] * m_nBoxSize[1] * m_nBoxSize[2] + 63 ) / 64;
 	m_pFinalBits = new unsigned long long[m_nWords];
 	m_pWordRank = new int[m_nWords];
-	m_pFinalDist = new unsigned short[MAX( m_nBoxFinalized, 1 )];
+	m_pFinalDist = new unsigned short[Max( m_nBoxFinalized, 1 )];
 	memset( m_pFinalBits, 0, m_nWords * sizeof( *m_pFinalBits ) );
 
 	for ( int i = 0; i < m_nBoxFinalized; ++i )
@@ -306,7 +306,7 @@ void CNEOSmokeFill::Finish()
 		const int y = ( idx / m_nBoxSize[0] ) % m_nBoxSize[1];
 		const int z = idx / ( m_nBoxSize[0] * m_nBoxSize[1] );
 		const int cell = LatticeIndex( x + m_nBoxLo[0], y + m_nBoxLo[1], z + m_nBoxLo[2] );
-		m_pFinalDist[FinalRank( idx )] = (unsigned short)MIN( CellDist( cell ), NEO_SMOKE_FILL_MAX_FINAL_DIST );
+		m_pFinalDist[FinalRank( idx )] = (unsigned short)Min( CellDist( cell ), NEO_SMOKE_FILL_MAX_FINAL_DIST );
 	}
 
 	ShrinkToCount( m_pOrder, m_nFinalized );
@@ -395,12 +395,12 @@ void CNEOSmokeFill::Start( INEOSmokeFillWorld *pWorld )
 	delete[] m_pFinalBits;
 	delete[] m_pWordRank;
 	delete[] m_pFinalDist;
-	m_pOrder = NULL;
-	m_pOrderDist = NULL;
-	m_pBoxOrder = NULL;
-	m_pFinalBits = NULL;
-	m_pWordRank = NULL;
-	m_pFinalDist = NULL;
+	m_pOrder = nullptr;
+	m_pOrderDist = nullptr;
+	m_pBoxOrder = nullptr;
+	m_pFinalBits = nullptr;
+	m_pWordRank = nullptr;
+	m_pFinalDist = nullptr;
 
 	m_pWorld = pWorld;
 	m_nHeapCount = 0;
@@ -587,8 +587,8 @@ bool CNEOSmokeFill::FitsAtlas( int cell )
 	int hi[3];
 	for ( int k = 0; k < 3; ++k )
 	{
-		lo[k] = MIN( m_nLo[k], c[k] );
-		hi[k] = MAX( m_nHi[k], c[k] );
+		lo[k] = Min( m_nLo[k], c[k] );
+		hi[k] = Max( m_nHi[k], c[k] );
 	}
 
 	const int w = hi[0] - lo[0] + 3;
@@ -661,7 +661,7 @@ void CNEOSmokeFill::Relax( int cell )
 
 				// Only these two values can be written, so when neither improves
 				// the neighbor no world answer can change the field.
-				if ( MIN( lineDist, stepDist ) >= nextDist )
+				if ( Min( lineDist, stepDist ) >= nextDist )
 				{
 					continue;
 				}
@@ -777,8 +777,8 @@ bool CNEOSmokeFill::BlockOpenUncached( const int p[3], const int q[3] )
 	int hi[3];
 	for ( int k = 0; k < 3; ++k )
 	{
-		lo[k] = MIN( p[k], q[k] );
-		hi[k] = MAX( p[k], q[k] );
+		lo[k] = Min( p[k], q[k] );
+		hi[k] = Max( p[k], q[k] );
 	}
 
 	for ( int z = lo[2]; z <= hi[2]; ++z )
@@ -834,7 +834,7 @@ bool CNEOSmokeFill::LineOpen( int from, int to )
 	int span = 0;
 	for ( int k = 0; k < 3; ++k )
 	{
-		span = MAX( span, abs( b[k] - a[k] ) );
+		span = Max( span, abs( b[k] - a[k] ) );
 	}
 
 	const int samples = 2 * span;
