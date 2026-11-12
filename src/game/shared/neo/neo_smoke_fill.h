@@ -230,11 +230,9 @@ private:
 
 	int  m_nHeapCount;
 	int  m_nFinalized;
-	int  m_nFrontDist;
 	int  m_nBoxFinalized;
 	int  m_nBoxFront;
 	int  m_nWords;             // 64-cell words of m_pFinalBits
-	int  m_nDropped;
 	int  m_nQueries;
 	bool m_bDone;
 	bool m_bBegun;     // work arrays allocated and the seed placed

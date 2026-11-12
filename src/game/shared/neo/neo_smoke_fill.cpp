@@ -93,7 +93,7 @@ static constexpr int NEO_SMOKE_FILL_BRICKS_START = 256;
 CNEOSmokeFill::CNEOSmokeFill()
 	: m_pWorld( nullptr ), m_pBrickDir( nullptr ), m_ppBricks( nullptr ), m_nBricks( 0 ), m_nBrickCap( 0 ), m_pHeap( nullptr ),
 	  m_nHeapCap( 0 ), m_pOrder( nullptr ), m_pOrderDist( nullptr ), m_pBoxOrder( nullptr ), m_pFinalBits( nullptr ), m_pWordRank( nullptr ), m_pFinalDist( nullptr ), m_nHeapCount( 0 ),
-	  m_nFinalized( 0 ), m_nFrontDist( 0 ), m_nBoxFinalized( 0 ), m_nBoxFront( 0 ), m_nWords( 0 ), m_nDropped( 0 ), m_nQueries( 0 ), m_bDone( true ), m_bBegun( false )
+	  m_nFinalized( 0 ), m_nBoxFinalized( 0 ), m_nBoxFront( 0 ), m_nWords( 0 ), m_nQueries( 0 ), m_bDone( true ), m_bBegun( false )
 {
 }
 
@@ -372,10 +372,8 @@ void CNEOSmokeFill::Start( INEOSmokeFillWorld *pWorld )
 	m_pWorld = pWorld;
 	m_nHeapCount = 0;
 	m_nFinalized = 0;
-	m_nFrontDist = 0;
 	m_nBoxFinalized = 0;
 	m_nBoxFront = 0;
-	m_nDropped = 0;
 	m_nQueries = 0;
 	m_bDone = false;
 	m_bBegun = false;
@@ -515,7 +513,6 @@ bool CNEOSmokeFill::Step( int maxCells, int maxQueries )
 		if ( !FitsAtlas( cell ) )
 		{
 			TouchBrick( cell ).state[BrickSlot( cell )] = STATE_DROPPED;
-			++m_nDropped;
 			continue;
 		}
 
@@ -523,7 +520,6 @@ bool CNEOSmokeFill::Step( int maxCells, int maxQueries )
 		m_pOrder[m_nFinalized] = cell;
 		m_pOrderDist[m_nFinalized] = top.dist;
 		++m_nFinalized;
-		m_nFrontDist = top.dist;
 
 		Relax( cell );
 	}
