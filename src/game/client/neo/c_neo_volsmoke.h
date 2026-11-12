@@ -53,8 +53,6 @@ public:
 	// Carves a capsule out of every live volume (bullet trace / explosion).
 	static void CarveAll( const Vector &start, const Vector &end, float radius );
 
-	static void RemoveAll();
-
 	// Cancels and joins every running fill job.
 	static void StopAllFills();
 
@@ -63,13 +61,9 @@ public:
 	// it runs.
 	static void RemoveExpired();
 
-	static void PrintOpticalDepth( const Vector &from, const Vector &to );
-
 	// The translucent sort key of a volume: the view depth of the nearest
 	// corner of its smoke box. False when the renderable is not a volume.
 	static bool SortDepth( IClientRenderable *pRenderable, const Vector &viewOrigin, const Vector &viewForward, float &depth );
-
-	static int  LiveCount() { return s_Volumes.Count(); }
 
 	// C_BaseEntity
 	virtual void ClientThink() override;
