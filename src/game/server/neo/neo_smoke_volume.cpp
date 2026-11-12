@@ -189,6 +189,14 @@ static CUtlVector< CNEOSmokeVolume * > s_SmokeVolumes;
 // Fields that went live after their tick, since the last print.
 static int s_nLateLive = 0;
 
+// Bumped whenever the set of fields or a field's shape changes, so a
+// remembered sight result is not reused across such a change.
+static int s_nVolumeGeneration = 0;
+
+// Sight queries and the marches they ran, since the last print.
+static int s_nSightQueries = 0;
+static int s_nSightMarches = 0;
+
 CNEOSmokeVolume::CNEOSmokeVolume( const Vector &origin, CBaseEntity *pGrenade )
 	: m_nId( s_nNextId++ ), m_vecOrigin( origin ), m_flStartTime( gpGlobals->curtime ), m_nStartTick( gpGlobals->tickcount ), m_hGrenade( pGrenade ), m_pWorld( nullptr ),
 	  m_nLiveTick( gpGlobals->tickcount + TIME_TO_TICKS( NEO_SMOKE_FIELD_LIVE_DELAY ) ), m_bLive( false ), m_flLiveAge( -1.0f ),
@@ -292,6 +300,7 @@ void CNEOSmokeVolume::GoLive()
 {
 	m_bLive = true;
 	m_flLiveAge = Age();
+	++s_nVolumeGeneration;
 	if ( gpGlobals->tickcount > m_nLiveTick )
 	{
 		++s_nLateLive;
@@ -589,11 +598,13 @@ void CNEOSmokeVolume::Print() const
 void NEOSmokeVolume_Create( const Vector &origin, CBaseEntity *pGrenade )
 {
 	s_SmokeVolumes.AddToTail( new CNEOSmokeVolume( origin, pGrenade ) );
+	++s_nVolumeGeneration;
 }
 
 static void NEOSmokeVolume_RemoveAll()
 {
 	s_SmokeVolumes.PurgeAndDeleteElements();
+	++s_nVolumeGeneration;
 }
 
 // Steps the pending fills once a tick and removes the fields whose smoke is
@@ -611,6 +622,7 @@ public:
 			{
 				delete s_SmokeVolumes[i];
 				s_SmokeVolumes.Remove( i );
+				++s_nVolumeGeneration;
 			}
 		}
 
@@ -701,8 +713,10 @@ typedef CUtlVectorFixedGrowable< NEOSmokeSightSpan_t, 16 > SightSpans_t;
 // One march from `from`: the depth adds up step by step and the march stops
 // where it reaches the block depth, so a line costs one pass through the
 // volumes it crosses.
-float NEOSmoke_SightBlockFraction( const Vector &from, const Vector &to )
+static float SightBlockMarch( const Vector &from, const Vector &to )
 {
+	++s_nSightMarches;
+
 	const Vector delta = to - from;
 	const float len = delta.Length();
 	if ( len < 1.0f )
@@ -758,6 +772,31 @@ float NEOSmoke_SightBlockFraction( const Vector &from, const Vector &to )
 	return 1.0f;
 }
 
+// Each blocker whose box the line crosses asks for the same line in the same
+// tick, so overlapping clouds share one march. The result does not depend on
+// who looks: a viewer who sees through smoke never reaches this query.
+float NEOSmoke_SightBlockFraction( const Vector &from, const Vector &to )
+{
+	static Vector s_vecFrom;
+	static Vector s_vecTo;
+	static int s_nTick = -1;
+	static int s_nGeneration = -1;
+	static float s_flFraction = 1.0f;
+
+	++s_nSightQueries;
+	if ( s_nTick == gpGlobals->tickcount && s_nGeneration == s_nVolumeGeneration && s_vecFrom == from && s_vecTo == to )
+	{
+		return s_flFraction;
+	}
+
+	s_vecFrom = from;
+	s_vecTo = to;
+	s_nTick = gpGlobals->tickcount;
+	s_nGeneration = s_nVolumeGeneration;
+	s_flFraction = SightBlockMarch( from, to );
+	return s_flFraction;
+}
+
 bool NEOSmokeVolume_SmokeBox( const CBaseEntity *pGrenade, Vector &mins, Vector &maxs )
 {
 	for ( const CNEOSmokeVolume *pVol : s_SmokeVolumes )
@@ -783,6 +822,8 @@ CON_COMMAND_F( neo_smoke_server_stats, "Print the server's smoke fields.", FCVAR
 		pVol->Print();
 	}
 
-	Msg( "neo_smoke_server_stats: live %d, late %d\n", s_SmokeVolumes.Count(), s_nLateLive );
+	Msg( "neo_smoke_server_stats: live %d, late %d, sight queries %d, marches %d\n", s_SmokeVolumes.Count(), s_nLateLive, s_nSightQueries, s_nSightMarches );
 	s_nLateLive = 0;
+	s_nSightQueries = 0;
+	s_nSightMarches = 0;
 }
