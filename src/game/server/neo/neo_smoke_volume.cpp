@@ -27,6 +27,14 @@ static constexpr int NEO_SMOKE_SERVER_CELLS_PER_FILL = 700;
 static constexpr int NEO_SMOKE_SERVER_CELLS_PER_TICK = 2800;
 static constexpr int NEO_SMOKE_SERVER_QUERIES_PER_CELL = 8;
 
+// The client's step for its CPU smoke path; the same step gives the same
+// sum.
+static constexpr float NEO_SMOKE_PATH_STEP = 16.0f;
+
+// A cell beside the gas without a gas neighbor reads this path length, as
+// the client's empty texel does.
+static constexpr float NEO_SMOKE_DIST_RANGE = 64 * CNeoSmokeFill::CELL_SIZE;
+
 class CNeoSmokeVolume
 {
 public:
@@ -48,9 +56,14 @@ public:
 	unsigned long long LatticeHash() const;
 	void Print() const;
 
+	float PathOpticalDepth( const Vector &from, const Vector &to ) const;
+
 private:
 	void RunFill();
 	void FinishFill();
+	float Density( const Vector &pos, float front ) const;
+	float DomeDensity( const Vector &pos, float front ) const;
+	void CornerValue( int x, int y, int z, float &dist, float &weight ) const;
 
 	int m_nId;
 	Vector m_vecOrigin;
@@ -70,6 +83,16 @@ private:
 	CJob *m_pFillJob;
 	CInterlockedInt m_nFillCancel;
 	double m_flJobSeconds;
+
+	// The finished field's box, as the client lays it out, and the box that
+	// holds its smoke.
+	int m_nBox[3];
+	int m_nSeedCorner[3];
+	Vector m_vecGridMin;
+	Vector m_vecSmokeMin;
+	Vector m_vecSmokeMax;
+	float m_flFrontUnits;
+	float m_flDistRange;
 
 	static int s_nNextId;
 };
@@ -186,6 +209,181 @@ void CNeoSmokeVolume::FinishFill()
 	delete m_pWorld;
 	m_pWorld = NULL;
 	m_flDoneAge = gpGlobals->curtime - m_flStartTime;
+
+	m_Fill.BoxSize( m_nBox );
+	m_Fill.BoxSeedCorner( m_nSeedCorner );
+	m_flFrontUnits = CNeoSmokeFill::DistToUnits( m_Fill.FrontDist() );
+	m_flDistRange = MAX( NEO_SMOKE_DIST_RANGE, m_flFrontUnits );
+
+	int lo[3] = { m_nBox[0], m_nBox[1], m_nBox[2] };
+	int hi[3] = { -1, -1, -1 };
+	for ( int i = 0; i < m_Fill.FinalizedCount(); ++i )
+	{
+		const int idx = m_Fill.FinalizedCell( i );
+		const int c[3] = { idx % m_nBox[0], ( idx / m_nBox[0] ) % m_nBox[1], idx / ( m_nBox[0] * m_nBox[1] ) };
+		for ( int a = 0; a < 3; ++a )
+		{
+			lo[a] = MIN( lo[a], c[a] );
+			hi[a] = MAX( hi[a], c[a] );
+		}
+	}
+
+	// One cell of margin: the trilinear lookup spreads a cell's smoke half a
+	// cell past it.
+	const float cell = CNeoSmokeFill::CELL_SIZE;
+	for ( int a = 0; a < 3; ++a )
+	{
+		m_vecGridMin[a] = m_vecOrigin[a] - m_nSeedCorner[a] * cell;
+		const float gridMax = m_vecGridMin[a] + m_nBox[a] * cell;
+		m_vecSmokeMin[a] = MAX( m_vecGridMin[a], m_vecGridMin[a] + ( lo[a] - 1 ) * cell );
+		m_vecSmokeMax[a] = MIN( gridMax, m_vecGridMin[a] + ( hi[a] + 2 ) * cell );
+	}
+}
+
+// A box cell's path length and weight as the client's atlas holds them: a
+// cell without gas has no weight and takes the shortest path length of its
+// gas neighbors, so the lookup fades the edge instead of cutting it.
+void CNeoSmokeVolume::CornerValue( int x, int y, int z, float &dist, float &weight ) const
+{
+	const int idx = ( z * m_nBox[1] + y ) * m_nBox[0] + x;
+	if ( m_Fill.IsFinalized( idx ) )
+	{
+		dist = CNeoSmokeFill::DistToUnits( m_Fill.Dist( idx ) );
+		weight = VolSmokeCellVariation( x - m_nSeedCorner[0], y - m_nSeedCorner[1], z - m_nSeedCorner[2] );
+		return;
+	}
+
+	weight = 0.0f;
+	dist = m_flDistRange;
+	for ( int dz = -1; dz <= 1; ++dz )
+	{
+		for ( int dy = -1; dy <= 1; ++dy )
+		{
+			for ( int dx = -1; dx <= 1; ++dx )
+			{
+				const int n[3] = { x + dx, y + dy, z + dz };
+				if ( n[0] < 0 || n[1] < 0 || n[2] < 0 || n[0] >= m_nBox[0] || n[1] >= m_nBox[1] || n[2] >= m_nBox[2] )
+				{
+					continue;
+				}
+
+				const int nIdx = ( n[2] * m_nBox[1] + n[1] ) * m_nBox[0] + n[0];
+				if ( m_Fill.IsFinalized( nIdx ) )
+				{
+					dist = MIN( dist, CNeoSmokeFill::DistToUnits( m_Fill.Dist( nIdx ) ) );
+				}
+			}
+		}
+	}
+}
+
+// The client's smoke density without the look noise: trilinear over the
+// eight nearest cell centers, then the soft edge behind the front.
+float CNeoSmokeVolume::Density( const Vector &pos, float front ) const
+{
+	int base[3];
+	float frac[3];
+	for ( int a = 0; a < 3; ++a )
+	{
+		const float g = clamp( ( pos[a] - m_vecGridMin[a] ) / CNeoSmokeFill::CELL_SIZE - 0.5f, 0.0f, (float)( m_nBox[a] - 1 ) );
+		base[a] = MIN( (int)g, m_nBox[a] - 2 );
+		frac[a] = g - base[a];
+	}
+
+	float dist = 0.0f;
+	float weight = 0.0f;
+	for ( int corner = 0; corner < 8; ++corner )
+	{
+		float w = 1.0f;
+		int c[3];
+		for ( int a = 0; a < 3; ++a )
+		{
+			const int bit = ( corner >> a ) & 1;
+			c[a] = base[a] + bit;
+			w *= bit ? frac[a] : 1.0f - frac[a];
+		}
+
+		if ( w <= 0.0f )
+		{
+			continue;
+		}
+
+		float cornerDist;
+		float cornerWeight;
+		CornerValue( c[0], c[1], c[2], cornerDist, cornerWeight );
+		dist += w * cornerDist;
+		weight += w * cornerWeight;
+	}
+
+	const float depth = front - dist;
+	if ( weight <= 0.001f || depth <= 0.0f )
+	{
+		return 0.0f;
+	}
+
+	const float edge = MIN( depth / NEO_VOLSMOKE_EDGE, 1.0f );
+	return weight * edge * edge * ( 3.0f - 2.0f * edge );
+}
+
+// Before the field is filled: the dome the client draws then.
+float CNeoSmokeVolume::DomeDensity( const Vector &pos, float front ) const
+{
+	const float depth = front - pos.DistTo( m_vecOrigin );
+	if ( depth <= 0.0f )
+	{
+		return 0.0f;
+	}
+
+	const float edge = MIN( depth / NEO_VOLSMOKE_EDGE, 1.0f );
+	return edge * edge * ( 3.0f - 2.0f * edge );
+}
+
+float CNeoSmokeVolume::PathOpticalDepth( const Vector &from, const Vector &to ) const
+{
+	const float age = gpGlobals->curtime - m_flStartTime;
+	const float bloom = VolSmokeBloom( age );
+	const bool filled = IsDone();
+	const float front = ( filled ? m_flFrontUnits : CNeoSmokeFill::DOME_RADIUS ) * bloom;
+	const Vector boxMin = filled ? m_vecSmokeMin : m_vecOrigin - Vector( front, front, front );
+	const Vector boxMax = filled ? m_vecSmokeMax : m_vecOrigin + Vector( front, front, front );
+
+	const Vector delta = to - from;
+	const float len = delta.Length();
+	if ( len < 1.0f || front <= 0.0f )
+	{
+		return 0.0f;
+	}
+
+	// Clip the segment to the smoke box.
+	const Vector unit = delta / len;
+	float t0 = 0.0f;
+	float t1 = len;
+	for ( int a = 0; a < 3; ++a )
+	{
+		if ( fabsf( unit[a] ) < 1.0e-6f )
+		{
+			if ( from[a] < boxMin[a] || from[a] > boxMax[a] )
+			{
+				return 0.0f;
+			}
+			continue;
+		}
+
+		const float ta = ( boxMin[a] - from[a] ) / unit[a];
+		const float tb = ( boxMax[a] - from[a] ) / unit[a];
+		t0 = MAX( t0, MIN( ta, tb ) );
+		t1 = MIN( t1, MAX( ta, tb ) );
+	}
+
+	float path = 0.0f;
+	for ( float t = t0; t < t1; t += NEO_SMOKE_PATH_STEP )
+	{
+		const float step = MIN( NEO_SMOKE_PATH_STEP, t1 - t );
+		const Vector pos = from + unit * ( t + 0.5f * step );
+		path += ( filled ? Density( pos, front ) : DomeDensity( pos, front ) ) * step;
+	}
+
+	return path * NEO_VOLSMOKE_EXTINCTION * bloom * VolSmokeFade( age );
 }
 
 bool CNeoSmokeVolume::Expired() const
@@ -336,6 +534,42 @@ private:
 };
 
 static CNeoSmokeVolumeSystem s_SmokeVolumeSystem;
+
+float NEOSmoke_OpticalDepth( const Vector &from, const Vector &to )
+{
+	float tau = 0.0f;
+	for ( const CNeoSmokeVolume *pVol : s_SmokeVolumes )
+	{
+		tau += pVol->PathOpticalDepth( from, to );
+	}
+
+	return tau;
+}
+
+static constexpr int NEO_SMOKE_DEPTH_BENCH_RUNS = 1000;
+
+CON_COMMAND_F( neo_smoke_server_depth, "Print the server's smoke optical depth on a segment and its cost. Args: x1 y1 z1 x2 y2 z2", FCVAR_CHEAT )
+{
+	if ( !UTIL_IsCommandIssuedByServerAdmin() || args.ArgC() < 7 )
+	{
+		return;
+	}
+
+	const Vector from( atof( args[1] ), atof( args[2] ), atof( args[3] ) );
+	const Vector to( atof( args[4] ), atof( args[5] ), atof( args[6] ) );
+	const float tau = NEOSmoke_OpticalDepth( from, to );
+
+	const double start = Plat_FloatTime();
+	float sink = 0.0f;
+	for ( int i = 0; i < NEO_SMOKE_DEPTH_BENCH_RUNS; ++i )
+	{
+		sink += NEOSmoke_OpticalDepth( from, to );
+	}
+	const double each = ( Plat_FloatTime() - start ) / NEO_SMOKE_DEPTH_BENCH_RUNS;
+
+	Msg( "neo_smoke_server_depth: (%g %g %g) -> (%g %g %g) depth %.4f, %.2f us a query (%d volumes, check %.1f)\n",
+		from.x, from.y, from.z, to.x, to.y, to.z, tau, each * 1.0e6, s_SmokeVolumes.Count(), sink / NEO_SMOKE_DEPTH_BENCH_RUNS );
+}
 
 CON_COMMAND_F( neo_smoke_server_stats, "Print the server's smoke fields, and the fill time a tick since the last print.", FCVAR_CHEAT )
 {

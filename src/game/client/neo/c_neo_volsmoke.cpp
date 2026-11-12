@@ -2424,6 +2424,12 @@ float C_NeoVolSmoke::OpticalDepth( const Vector &eye, const Vector &point )
 	return tau;
 }
 
+void C_NeoVolSmoke::PrintOpticalDepth( const Vector &from, const Vector &to )
+{
+	Msg( "neo_volsmoke_depth: (%g %g %g) -> (%g %g %g) depth %.4f (%d volumes)\n",
+		from.x, from.y, from.z, to.x, to.y, to.z, OpticalDepth( from, to ), s_Volumes.Count() );
+}
+
 float C_NeoVolSmoke::FlashFactor( const Vector &eye, const Vector &point )
 {
 	return expf( -NEO_VOLSMOKE_FLASH_DEPTH_SHARE * OpticalDepth( eye, point ) );
@@ -3061,6 +3067,18 @@ CON_COMMAND_F( neo_volsmoke_explode, "Carve an explosion-sized sphere out of smo
 CON_COMMAND_F( neo_volsmoke_clear, "Remove all volumetric smoke.", FCVAR_CHEAT )
 {
 	C_NeoVolSmoke::RemoveAll();
+}
+
+CON_COMMAND_F( neo_volsmoke_depth, "Print the smoke optical depth on a segment, as the flash and silhouette read it. Args: x1 y1 z1 x2 y2 z2", FCVAR_CHEAT )
+{
+	if ( args.ArgC() < 7 )
+	{
+		return;
+	}
+
+	const Vector from( atof( args[1] ), atof( args[2] ), atof( args[3] ) );
+	const Vector to( atof( args[4] ), atof( args[5] ), atof( args[6] ) );
+	C_NeoVolSmoke::PrintOpticalDepth( from, to );
 }
 
 // A volume material holds its atlas, so a leaked material also shows up here.
