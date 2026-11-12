@@ -31,6 +31,12 @@ ConVar sv_neo_smoke_bloom_duration("sv_neo_smoke_bloom_duration", "25", FCVAR_CH
 ConVar sv_neo_smoke_bloom_layers("sv_neo_smoke_bloom_layers", "2", FCVAR_CHEAT, "Amount of smoke layers atop each other.", true, 0.0, true, 32.0);
 ConVar sv_neo_smoke_blocker_size("sv_neo_smoke_blocker_size", "140", FCVAR_CHEAT, "Size of each LOS blocker per smoke particle.", true, 0.0, true, 200.0);
 ConVar sv_neo_smoke_blocker_delay("sv_neo_smoke_blocker_delay", "1.0", FCVAR_CHEAT, "Time after spawn before LOS blocker activates LOS blocking", true, 0.0, true, 10.0);
+// Depth below the water surface where a smoke grenade stops and detonates.
+// Deep enough that the whole grenade is under water.
+static constexpr float NEO_SMOKE_WATER_HOLD_DEPTH = 6.0f;
+// How far above the grenade to look for the water surface.
+static constexpr float NEO_SMOKE_WATER_SURFACE_SEARCH = 32.0f;
+
 extern ConVar sv_neo_grenade_cor;
 extern ConVar sv_neo_grenade_gravity;
 extern ConVar sv_neo_grenade_friction;
@@ -72,6 +78,24 @@ int CNEOGrenadeSmoke::OnTakeDamage(const CTakeDamageInfo& inputInfo)
 {
 	// NEO smokes can't be detonated by damage.
 	return 0;
+}
+
+void CNEOGrenadeSmoke::Splash()
+{
+	// Without this the grenade sinks to the pool floor and the smoke starts there.
+	// Holding it just under the surface keeps the cloud where the grenade went in.
+	const Vector vecOrigin = GetAbsOrigin();
+	const float flSurfaceZ = UTIL_WaterLevel(vecOrigin, vecOrigin.z, vecOrigin.z + NEO_SMOKE_WATER_SURFACE_SEARCH);
+	const Vector vecHold(vecOrigin.x, vecOrigin.y, flSurfaceZ - NEO_SMOKE_WATER_HOLD_DEPTH);
+
+	// Shallow water: the floor stops the grenade above the hold depth.
+	trace_t tr;
+	UTIL_TraceEntity(this, vecOrigin, vecHold, MASK_SOLID, &tr);
+	SetAbsOrigin(tr.endpos);
+
+	SetAbsVelocity(vec3_origin);
+	SetLocalAngularVelocity(vec3_angle);
+	SetMoveType(MOVETYPE_NONE);
 }
 
 void CNEOGrenadeSmoke::DelayThink()
