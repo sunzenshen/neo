@@ -148,9 +148,14 @@ private:
 	float DomeDensity( const Vector &pos, float front ) const;
 	void CornerValue( int x, int y, int z, float &dist, float &weight ) const;
 
+	// Age in whole ticks, so a depth at a given age does not depend on when
+	// the grenade went off.
+	float Age() const { return TICKS_TO_TIME( gpGlobals->tickcount - m_nStartTick ); }
+
 	int m_nId;
 	Vector m_vecOrigin;
 	float m_flStartTime;
+	int m_nStartTick;
 	EHANDLE m_hGrenade;
 	CHandle< CNEOSmokeVolumeEnt > m_hNetworked;
 	CNEOSmokeFill m_Fill;
@@ -185,7 +190,7 @@ static CUtlVector< CNEOSmokeVolume * > s_SmokeVolumes;
 static int s_nLateLive = 0;
 
 CNEOSmokeVolume::CNEOSmokeVolume( const Vector &origin, CBaseEntity *pGrenade )
-	: m_nId( s_nNextId++ ), m_vecOrigin( origin ), m_flStartTime( gpGlobals->curtime ), m_hGrenade( pGrenade ), m_pWorld( nullptr ),
+	: m_nId( s_nNextId++ ), m_vecOrigin( origin ), m_flStartTime( gpGlobals->curtime ), m_nStartTick( gpGlobals->tickcount ), m_hGrenade( pGrenade ), m_pWorld( nullptr ),
 	  m_nLiveTick( gpGlobals->tickcount + TIME_TO_TICKS( NEO_SMOKE_FIELD_LIVE_DELAY ) ), m_bLive( false ), m_flLiveAge( -1.0f ),
 	  m_pFillJob( nullptr ), m_flFrontUnits( 0.0f ), m_flDistRange( 0.0f ), m_nFieldHash( 0 )
 {
@@ -286,7 +291,7 @@ void CNEOSmokeVolume::CollectJob()
 void CNEOSmokeVolume::GoLive()
 {
 	m_bLive = true;
-	m_flLiveAge = gpGlobals->curtime - m_flStartTime;
+	m_flLiveAge = Age();
 	if ( gpGlobals->tickcount > m_nLiveTick )
 	{
 		++s_nLateLive;
@@ -447,7 +452,7 @@ float CNEOSmokeVolume::DomeDensity( const Vector &pos, float front ) const
 bool CNEOSmokeVolume::CurrentBox( Vector &boxMin, Vector &boxMax, float &front ) const
 {
 	const bool filled = IsLive();
-	front = ( filled ? m_flFrontUnits : CNEOSmokeFill::DOME_RADIUS ) * VolSmokeBloom( gpGlobals->curtime - m_flStartTime );
+	front = ( filled ? m_flFrontUnits : CNEOSmokeFill::DOME_RADIUS ) * VolSmokeBloom( Age() );
 	if ( front <= 0.0f )
 	{
 		return false;
@@ -493,7 +498,7 @@ bool CNEOSmokeVolume::SightSpan( const Vector &from, const Vector &unit, float l
 		return false;
 	}
 
-	const float age = gpGlobals->curtime - m_flStartTime;
+	const float age = Age();
 	span.pVolume = this;
 	span.filled = IsLive();
 	span.scale = NEO_VOLSMOKE_EXTINCTION * VolSmokeBloom( age ) * VolSmokeFade( age );
@@ -546,7 +551,7 @@ bool CNEOSmokeVolume::SmokeBox( Vector &mins, Vector &maxs ) const
 
 bool CNEOSmokeVolume::Expired() const
 {
-	return !m_hGrenade.Get() || gpGlobals->curtime - m_flStartTime > NEO_VOLSMOKE_FADE_END;
+	return !m_hGrenade.Get() || Age() > NEO_VOLSMOKE_FADE_END;
 }
 
 // The client's lattice hash (neo_volsmoke_stats): cells relative to the
@@ -577,7 +582,7 @@ unsigned long long CNEOSmokeVolume::LatticeHash() const
 void CNEOSmokeVolume::Print() const
 {
 	Msg( "neo_smoke_server_stats: volume %d origin (%.9g %.9g %.9g) age %.2f live at age %.2f lattice %016llx (%d cells, front %.1f)\n",
-		m_nId, m_vecOrigin.x, m_vecOrigin.y, m_vecOrigin.z, gpGlobals->curtime - m_flStartTime, m_flLiveAge,
+		m_nId, m_vecOrigin.x, m_vecOrigin.y, m_vecOrigin.z, Age(), m_flLiveAge,
 		IsDone() ? LatticeHash() : 0ull, IsDone() ? m_Fill.LatticeCount() : 0, IsDone() ? CNEOSmokeFill::DistToUnits( m_Fill.LatticeFrontDist() ) : 0.0f );
 }
 
