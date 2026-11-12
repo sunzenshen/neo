@@ -151,10 +151,9 @@ private:
 	void SetDrawParams( IMaterial *pMat ) const;
 	void SampleAtlas( const Vector &pos, float &dist, float &weight, float &wallCut ) const;
 	float DensityLowerBound( const Vector &pos, float front, float bite ) const;
-	float OpaqueDepth( const Vector &eye, const Vector &dir, float front, float bite, float extinction ) const;
-	bool BuildCullGrid( IMatRenderContext *pRenderContext, const Vector view[8], float zMin, float zMax, VolSmokeCullGrid_t &grid ) const;
+	bool BuildCullGrid( VolSmokeCullGrid_t &grid ) const;
 	bool StartsRender();
-	static float SheetOpaqueDepth( const VolSmokeSheetVolume_t *vols, int nVols, const Vector &eye, const Vector &dir );
+	static float SheetOpaqueDepth( const VolSmokeSheetVolume_t *vols, int nVols, const Vector &eye, const Vector &dir, float *own );
 	static void DrawOpaqueSheet( IMatRenderContext *pRenderContext );
 	void DrawFarSlabs( IMatRenderContext *pRenderContext );
 	void DrawNearPass( IMatRenderContext *pRenderContext );
