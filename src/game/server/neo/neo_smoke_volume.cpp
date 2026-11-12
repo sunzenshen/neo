@@ -122,8 +122,6 @@ public:
 	unsigned long long LatticeHash() const;
 	void Print() const;
 
-	float PathOpticalDepth( const Vector &from, const Vector &to ) const;
-
 	// The part of the segment from `from` along `unit` (length `len`) inside
 	// the box that can hold smoke now; false when it misses.
 	bool SightSpan( const Vector &from, const Vector &unit, float len, NEOSmokeSightSpan_t &span ) const;
@@ -520,32 +518,6 @@ float CNEOSmokeVolume::SpanExtinction( const Vector &pos, const NEOSmokeSightSpa
 	return density * span.scale;
 }
 
-float CNEOSmokeVolume::PathOpticalDepth( const Vector &from, const Vector &to ) const
-{
-	const Vector delta = to - from;
-	const float len = delta.Length();
-	if ( len < 1.0f )
-	{
-		return 0.0f;
-	}
-
-	const Vector unit = delta / len;
-	NEOSmokeSightSpan_t span;
-	if ( !SightSpan( from, unit, len, span ) )
-	{
-		return 0.0f;
-	}
-
-	float tau = 0.0f;
-	for ( float t = span.t0; t < span.t1; t += NEO_VOLSMOKE_PATH_STEP )
-	{
-		const float step = Min( NEO_VOLSMOKE_PATH_STEP, span.t1 - t );
-		tau += SpanExtinction( from + unit * ( t + 0.5f * step ), span ) * step;
-	}
-
-	return tau;
-}
-
 bool CNEOSmokeVolume::SmokeBox( Vector &mins, Vector &maxs ) const
 {
 	if ( !IsLive() )
@@ -696,17 +668,6 @@ private:
 };
 
 static CNEOSmokeVolumeSystem s_SmokeVolumeSystem;
-
-float NEOSmoke_OpticalDepth( const Vector &from, const Vector &to )
-{
-	float tau = 0.0f;
-	for ( const CNEOSmokeVolume *pVol : s_SmokeVolumes )
-	{
-		tau += pVol->PathOpticalDepth( from, to );
-	}
-
-	return tau;
-}
 
 typedef CUtlVectorFixedGrowable< NEOSmokeSightSpan_t, 16 > SightSpans_t;
 

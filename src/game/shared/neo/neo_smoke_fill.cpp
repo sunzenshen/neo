@@ -93,7 +93,7 @@ static constexpr int NEO_SMOKE_FILL_BRICKS_START = 256;
 CNEOSmokeFill::CNEOSmokeFill()
 	: m_pWorld( nullptr ), m_pBrickDir( nullptr ), m_ppBricks( nullptr ), m_nBricks( 0 ), m_nBrickCap( 0 ), m_pHeap( nullptr ),
 	  m_nHeapCap( 0 ), m_pOrder( nullptr ), m_pOrderDist( nullptr ), m_pBoxOrder( nullptr ), m_pFinalBits( nullptr ), m_pWordRank( nullptr ), m_pFinalDist( nullptr ), m_nHeapCount( 0 ),
-	  m_nFinalized( 0 ), m_nFrontDist( 0 ), m_nBoxFinalized( 0 ), m_nBoxFront( 0 ), m_nWords( 0 ), m_nDropped( 0 ), m_nQueries( 0 ), m_nPeakBytes( 0 ), m_bDone( true ), m_bBegun( false )
+	  m_nFinalized( 0 ), m_nFrontDist( 0 ), m_nBoxFinalized( 0 ), m_nBoxFront( 0 ), m_nWords( 0 ), m_nDropped( 0 ), m_nQueries( 0 ), m_bDone( true ), m_bBegun( false )
 {
 }
 
@@ -192,7 +192,6 @@ CNEOSmokeFill::Brick_t &CNEOSmokeFill::TouchBrick( int cell )
 
 	m_ppBricks[m_nBricks++] = pBrick;
 	n = m_nBricks;
-	NoteMemory();
 	return *pBrick;
 }
 
@@ -206,11 +205,6 @@ int CNEOSmokeFill::CellDist( int cell ) const
 {
 	const Brick_t *pBrick = FindBrick( cell );
 	return pBrick ? pBrick->dist[BrickSlot( cell )] : NEO_SMOKE_FILL_UNREACHED;
-}
-
-void CNEOSmokeFill::NoteMemory()
-{
-	m_nPeakBytes = Max( m_nPeakBytes, MemoryBytes() );
 }
 
 static int NeoSmokePopCount( unsigned long long v )
@@ -410,7 +404,6 @@ void CNEOSmokeFill::Start( INEOSmokeFillWorld *pWorld )
 	m_nBoxFront = 0;
 	m_nDropped = 0;
 	m_nQueries = 0;
-	m_nPeakBytes = 0;
 	m_bDone = false;
 	m_bBegun = false;
 }
@@ -429,7 +422,6 @@ void CNEOSmokeFill::Begin()
 		m_nLo[k] = LATTICE_XY;
 		m_nHi[k] = -1;
 	}
-	NoteMemory();
 
 	const int seed = FindSeed();
 	if ( seed < 0 )
@@ -895,7 +887,6 @@ void CNEOSmokeFill::HeapPush( int cell, int dist )
 		delete[] m_pHeap;
 		m_pHeap = pGrown;
 		m_nHeapCap *= 2;
-		NoteMemory();
 	}
 
 	TouchBrick( cell ).state[BrickSlot( cell )] = STATE_QUEUED;

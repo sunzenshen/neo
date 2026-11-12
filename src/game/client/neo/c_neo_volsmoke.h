@@ -1,14 +1,16 @@
-// NEO volumetric smoke - client-side voxel smoke volume (demo).
+// NEO volumetric smoke - the client's cloud of a smoke grenade.
 //
-// A CPU-simulated density grid that fills through world collision from a
-// spawn point (CNEOSmokeFill), is shaded by a top-down sweep, can be carved by
-// bullets/explosions (with regrow), and is uploaded as a 2D slice atlas to a
-// procedural texture. The atlas holds path lengths, not densities: the shader
-// applies the bloom front and the fade, so a grown volume uploads nothing. Rendering is a single raymarched box per volume via the
-// Neo_VolSmoke shader, so there is no intra-volume sorting and no OIT issue.
+// The server networks each grenade's smoke field (C_NEOSmokeVolumeEnt). The
+// client fills the same field from the same origin with the shared fill
+// (CNEOSmokeFill), so the cloud has the shape that the server's sight test
+// reads. A top-down sweep shades the field, and its cells go to a 2D slice
+// atlas in a procedural texture. The atlas holds path lengths, not densities:
+// the shader applies the bloom front and the fade, so a grown cloud uploads
+// nothing.
 //
-// This is a client-only prototype: spawn with `neo_volsmoke_spawn`, carve with
-// `neo_volsmoke_carve`, inspect with `neo_volsmoke_debug`.
+// The Neo_VolSmoke shader raymarches one box per volume in two parts: far
+// slabs that use the hardware depth test, and a near pass on the box's far
+// faces that clips in the shader. One box per volume needs no sorting inside it.
 
 #ifndef C_NEO_VOLSMOKE_H
 #define C_NEO_VOLSMOKE_H

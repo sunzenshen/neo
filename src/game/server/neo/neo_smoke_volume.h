@@ -21,11 +21,6 @@ class CBaseEntity;
 // as at a round restart.
 void NEOSmokeVolume_Create( const Vector &origin, CBaseEntity *pGrenade );
 
-// Optical depth of all smoke on the segment, as the clients draw it without
-// the look noise, at the smoke's current age. Until a field is filled its
-// smoke is the nominal dome.
-float NEOSmoke_OpticalDepth( const Vector &from, const Vector &to );
-
 // Optical depth at which a human stops seeing a player behind smoke in a lit scene.
 static constexpr float NEO_SMOKE_SIGHT_BLOCK_DEPTH = 4.4f;
 
