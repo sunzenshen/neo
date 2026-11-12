@@ -2766,6 +2766,17 @@ static void DrawSilhouette( C_BasePlayer *pPlayer, float alpha )
 	render->SetBlend( clamp( alpha, 0.0f, 1.0f ) );
 	modelrender->ForcedMaterialOverride( pMat );
 	pPlayer->DrawModel( STUDIO_RENDER | STUDIO_IGNORE_NEO_EFFECTS );
+
+	// Weapons in hand or carried on the body are child entities: draw them
+	// with the same alpha so they blend evenly into the body.
+	for ( C_BaseEntity *pChild = pPlayer->FirstMoveChild(); pChild; pChild = pChild->NextMovePeer() )
+	{
+		if ( pChild->ShouldDraw() )
+		{
+			pChild->DrawModel( STUDIO_RENDER | STUDIO_IGNORE_NEO_EFFECTS );
+		}
+	}
+
 	modelrender->ForcedMaterialOverride( nullptr );
 	render->SetBlend( oldBlend );
 	render->SetColorModulation( oldColor );
