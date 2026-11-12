@@ -223,6 +223,10 @@ static constexpr float NEO_VOLSMOKE_FLASH_POINT_RADIUS = 6.0f;
 static constexpr float NEO_VOLSMOKE_FLASH_MIN = 1.0f / 255.0f;
 static constexpr float NEO_VOLSMOKE_PATH_STEP = 16.0f;
 
+// Silhouette strength of a player the smoke hides while a muzzle flash
+// lights them.
+static constexpr float NEO_VOLSMOKE_FIRE_SILHOUETTE = 0.15f;
+
 // The legacy smoke's thermal-vision transparency.
 extern ConVar r_neo_thermal_smoke_alpha;
 
@@ -2691,6 +2695,20 @@ static IMaterial *VolSmokeFlashMaterial()
 	return s_pMat;
 }
 
+static IMaterial *VolSmokeSilhouetteMaterial()
+{
+	static IMaterial *s_pMat = nullptr;
+	if ( !s_pMat )
+	{
+		KeyValues *pVMT = new KeyValues( "UnlitGeneric" );
+		pVMT->SetInt( "$model", 1 );
+		pVMT->SetInt( "$translucent", 1 );
+		s_pMat = materials->CreateMaterial( "__neo_volsmoke_silhouette", pVMT );
+	}
+
+	return s_pMat;
+}
+
 static void DrawFlashPoint( IMatRenderContext *pRenderContext, const Vector &origin, float strength )
 {
 	IMaterial *pMat = VolSmokeFlashMaterial();
@@ -2728,6 +2746,29 @@ static void DrawFlashPoint( IMatRenderContext *pRenderContext, const Vector &ori
 	pRenderContext->PopMatrix();
 }
 
+// Flat dark redraw of a player over the smoke in front of them.
+static void DrawSilhouette( C_BasePlayer *pPlayer, float alpha )
+{
+	IMaterial *pMat = VolSmokeSilhouetteMaterial();
+	if ( !pMat || pMat->IsErrorMaterial() )
+	{
+		return;
+	}
+
+	// The model draw sets the material's color and alpha from these.
+	static const float black[3] = { 0.0f, 0.0f, 0.0f };
+	float oldColor[3];
+	render->GetColorModulation( oldColor );
+	const float oldBlend = render->GetBlend();
+	render->SetColorModulation( black );
+	render->SetBlend( clamp( alpha, 0.0f, 1.0f ) );
+	modelrender->ForcedMaterialOverride( pMat );
+	pPlayer->DrawModel( STUDIO_RENDER | STUDIO_IGNORE_NEO_EFFECTS );
+	modelrender->ForcedMaterialOverride( nullptr );
+	render->SetBlend( oldBlend );
+	render->SetColorModulation( oldColor );
+}
+
 // The player a muzzle-flash light belongs to, or null for another light or
 // the local view model's flash.
 static C_BasePlayer *MuzzleFlashOwner( const dlight_t *pLight )
@@ -2748,7 +2789,8 @@ static C_BasePlayer *MuzzleFlashOwner( const dlight_t *pLight )
 }
 
 // What the smoke reveals, drawn over the volume: the point of each muzzle
-// flash, scaled with the smoke between it and the eye, so it fades with depth.
+// flash and the players the flash lights. Flash and players
+// scale with the smoke between them and the eye, so they fade with depth.
 // Thermal vision shows none of it, as legacy.
 void C_NeoVolSmoke::DrawRevealed( IMatRenderContext *pRenderContext )
 {
@@ -2759,6 +2801,8 @@ void C_NeoVolSmoke::DrawRevealed( IMatRenderContext *pRenderContext )
 
 	const Vector &eye = CurrentViewOrigin();
 	const float overlayClear = 1.0f - clamp( g_SmokeFogOverlayAlpha, 0.0f, 1.0f );
+	float silhouette[MAX_PLAYERS + 1] = {};
+	bool any = false;
 
 	dlight_t *lights[MAX_DLIGHTS];
 	const int nLights = effects->CL_GetActiveDLights( lights );
@@ -2779,6 +2823,38 @@ void C_NeoVolSmoke::DrawRevealed( IMatRenderContext *pRenderContext )
 		}
 
 		DrawFlashPoint( pRenderContext, pLight->origin, flash );
+
+		const float reachSqr = Square( pLight->radius + NEO_VOLSMOKE_DLIGHT_MARGIN );
+		for ( int p = 1; p <= gpGlobals->maxClients && p <= MAX_PLAYERS; ++p )
+		{
+			C_BasePlayer *pPlayer = UTIL_PlayerByIndex( p );
+			if ( !pPlayer || ( pPlayer != pShooter && pPlayer->WorldSpaceCenter().DistToSqr( pLight->origin ) > reachSqr ) )
+			{
+				continue;
+			}
+
+			const float tau = OpticalDepth( eye, pPlayer->WorldSpaceCenter() );
+			const float hidden = 1.0f - expf( -tau );
+			const float shown = FlashShows( tau ) * overlayClear * life;
+			silhouette[p] = MAX( silhouette[p], NEO_VOLSMOKE_FIRE_SILHOUETTE * shown * hidden );
+			any = true;
+		}
+	}
+
+	if ( !any )
+	{
+		return;
+	}
+
+	for ( int p = 1; p <= gpGlobals->maxClients && p <= MAX_PLAYERS; ++p )
+	{
+		C_BasePlayer *pPlayer = UTIL_PlayerByIndex( p );
+		if ( silhouette[p] < NEO_VOLSMOKE_FLASH_MIN || !pPlayer || pPlayer->IsDormant() || !pPlayer->IsAlive() || !pPlayer->ShouldDraw() )
+		{
+			continue;
+		}
+
+		DrawSilhouette( pPlayer, silhouette[p] );
 	}
 }
 
