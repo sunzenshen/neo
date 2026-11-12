@@ -21,6 +21,7 @@
 #include "iefx.h"
 #include "cdll_util.h"
 #include "c_neo_player.h"
+#include "vstdlib/jobthread.h"
 
 // memdbgon must be the last include file in a .cpp file!!!
 #include "tier0/memdbgon.h"
@@ -67,19 +68,14 @@ static constexpr float NEO_VOLSMOKE_DIST_RANGE = 64 * CNeoSmokeFill::CELL_SIZE;
 // it is uploaded then, at most this often, and never after.
 static constexpr float NEO_VOLSMOKE_UPLOAD_HZ = 15.0f;
 
-// Fill work per frame, shared by all volumes, in small chunks so a frame
-// overruns the budget by at most one chunk. A slow machine blooms later,
-// never differently.
-static constexpr double NEO_VOLSMOKE_FILL_BUDGET = 0.0015; // seconds, the least a frame gets
-
-// With many fills waiting a fixed slice per frame starves the last ones, and
-// more so at a low frame rate. The frame then gets a share of the frame
-// time instead, sized to finish the waiting fills by the time the oldest
-// reaches the target age.
-static constexpr double NEO_VOLSMOKE_FILL_TARGET_AGE = 2.0; // seconds
-static constexpr double NEO_VOLSMOKE_FILL_MAX_SHARE = 0.7;
-static constexpr double NEO_VOLSMOKE_FILL_MAX_BUDGET = 0.016; // seconds a frame
-static constexpr double NEO_VOLSMOKE_FILL_FIRST_GUESS = 0.05; // seconds per fill, until one is measured
+// Fills run on worker threads, one job per fill, so a frame never pays for
+// one. The main thread keeps a physical core of its own; the cap bounds the
+// fill memory held at once. Without a worker pool the
+// frame takes a fixed slice of fill work instead, in small chunks so it
+// overruns by at most one chunk. A slow machine blooms later, never
+// differently.
+static constexpr int NEO_VOLSMOKE_FILL_MAX_WORKERS = 8;
+static constexpr double NEO_VOLSMOKE_FILL_BUDGET = 0.0015; // seconds a frame, without workers
 static constexpr float NEO_VOLSMOKE_FILL_SAME_AGE = 0.25f; // seconds apart that count as one age
 static constexpr int NEO_VOLSMOKE_FILL_CHUNK_CELLS = 64;
 static constexpr int NEO_VOLSMOKE_FILL_CHUNK_QUERIES = 128;
@@ -912,6 +908,63 @@ static void VolSmokeDeleteRetired( VolSmokeRetireWait_t wait )
 	}
 }
 
+// ---------------------------------------------------------------------------
+// Fill workers
+// ---------------------------------------------------------------------------
+// The fill's world queries are world-only traces. The SDK runs world traces
+// from its thread pool beside the main thread (the query cache and the nav
+// visibility pass), so they are taken from the workers too. The map must
+// stay loaded while a job runs: every job is joined before its volume goes,
+// and all of them at level shutdown.
+static IThreadPool *s_pVolSmokeFillPool = NULL;
+static bool s_bVolSmokeFillPoolTried = false;
+
+static int VolSmokeFillWorkers()
+{
+	const int cores = GetCPUInformation()->m_nPhysicalProcessors;
+	return clamp( cores - 1, 1, NEO_VOLSMOKE_FILL_MAX_WORKERS );
+}
+
+static IThreadPool *VolSmokeFillPool()
+{
+	if ( s_bVolSmokeFillPoolTried )
+	{
+		return s_pVolSmokeFillPool;
+	}
+
+	s_bVolSmokeFillPoolTried = true;
+	IThreadPool *pPool = CreateThreadPool();
+	ThreadPoolStartParams_t params;
+	params.nThreads = VolSmokeFillWorkers();
+	params.nThreadsMax = params.nThreads;
+	if ( !pPool || !pPool->Start( params ) || pPool->NumThreads() < 1 )
+	{
+		Warning( "neo_volsmoke: no fill workers, filling on the main thread\n" );
+		if ( pPool )
+		{
+			DestroyThreadPool( pPool );
+		}
+
+		return NULL;
+	}
+
+	DevMsg( "neo_volsmoke: %d fill workers\n", pPool->NumThreads() );
+	s_pVolSmokeFillPool = pPool;
+	return s_pVolSmokeFillPool;
+}
+
+static void VolSmokeFillPoolShutdown()
+{
+	if ( !s_pVolSmokeFillPool )
+	{
+		return;
+	}
+
+	s_pVolSmokeFillPool->Stop();
+	DestroyThreadPool( s_pVolSmokeFillPool );
+	s_pVolSmokeFillPool = NULL;
+}
+
 // Deletes retired resources each frame, and all of them when the level or the
 // client shuts down (no frame is queued then).
 class CNeoVolSmokeRetireSystem final : public CAutoGameSystemPerFrame
@@ -925,9 +978,14 @@ public:
 		VolSmokeDeleteRetired( VOLSMOKE_RETIRE_AFTER_FRAMES );
 	}
 
+	// The fill jobs trace the map, so they stop before it unloads.
+	virtual void LevelShutdownPreEntity() override { C_NeoVolSmoke::StopAllFills(); }
 	virtual void LevelShutdownPostEntity() override { VolSmokeDeleteRetired( VOLSMOKE_RETIRE_NOW ); }
 	virtual void Shutdown() override
 	{
+		C_NeoVolSmoke::StopAllFills();
+		VolSmokeFillPoolShutdown();
+
 		// The retired materials reference the noise texture.
 		VolSmokeDeleteRetired( VOLSMOKE_RETIRE_NOW );
 		VolSmokeNoiseShutdown();
@@ -944,7 +1002,7 @@ int C_NeoVolSmoke::s_nNextId = 0;
 
 // ---------------------------------------------------------------------------
 C_NeoVolSmoke::C_NeoVolSmoke()
-	: m_nId( s_nNextId++ ), m_flSpawnTime( 0 ), m_pWorld( NULL ), m_flFillSeconds( 0 ), m_flFillPeakFrame( 0 ), m_flFillDoneAge( -1.0f ), m_nLagFrames( 0 ),
+	: m_nId( s_nNextId++ ), m_flSpawnTime( 0 ), m_pWorld( NULL ), m_pFillJob( NULL ), m_bFillDone( false ), m_flFillSeconds( 0 ), m_flFillPeakFrame( 0 ), m_flFillDoneAge( -1.0f ), m_nLagFrames( 0 ),
 	  m_nBounded( 0 ), m_pRegen( NULL ), m_nPacked( 0 ), m_flNextUpload( 0 ), m_flRegrowEnd( -1.0f ), m_flUploadedFront( 0 ), m_bUploadPending( false ), m_nSlabTiles( 0 ), m_nSlabTilesCulled( 0 ), m_flDistRange( NEO_VOLSMOKE_DIST_RANGE ), m_nAtlasCols( 0 ), m_nAtlasW( 0 ), m_nAtlasH( 0 )
 {
 	for ( int a = 0; a < 3; ++a )
@@ -959,6 +1017,7 @@ C_NeoVolSmoke::C_NeoVolSmoke()
 
 C_NeoVolSmoke::~C_NeoVolSmoke()
 {
+	StopFill();
 	Shutdown();
 	delete m_pWorld;
 	s_Volumes.FindAndRemove( this );
@@ -1286,14 +1345,12 @@ bool C_NeoVolSmoke::GasReached( const Vector &pos ) const
 	return InBox( c[0], c[1], c[2] ) && m_Fill.IsFinalized( CellIndex( c[0], c[1], c[2] ) );
 }
 
-// Runs the frame's fill work for all volumes, once a frame. One fill at a
-// time, the oldest first so no volume waits without bound, and among
+// Picks up finished fill jobs and starts new ones, once a frame. One job per
+// worker, the oldest fill first so no volume waits without bound, and among
 // volumes of one age the nearest to the camera first.
 void C_NeoVolSmoke::StepFills()
 {
 	static int s_nFillFrame = -1;
-	static double s_flFillEstimate = NEO_VOLSMOKE_FILL_FIRST_GUESS;
-	static double s_flLastSpent = 0.0;
 	if ( s_nFillFrame == gpGlobals->framecount )
 	{
 		return;
@@ -1301,56 +1358,45 @@ void C_NeoVolSmoke::StepFills()
 
 	s_nFillFrame = gpGlobals->framecount;
 
-	// The last frame's time without its fill work, so a long fill slice
-	// does not earn the next frame a longer one.
-	const double frame = MAX( 0.0, (double)gpGlobals->absoluteframetime - s_flLastSpent );
-	s_flLastSpent = 0.0;
-
-	int waiting = 0;
-	float oldest = gpGlobals->curtime;
-	for ( int i = 0; i < s_Volumes.Count(); ++i )
+	IThreadPool *pPool = VolSmokeFillPool();
+	int running = 0;
+	for ( C_NeoVolSmoke *pVol : s_Volumes )
 	{
-		if ( !s_Volumes[i]->m_Fill.IsDone() )
+		if ( !pVol->m_pFillJob )
 		{
-			++waiting;
-			oldest = MIN( oldest, s_Volumes[i]->m_flSpawnTime );
+			continue;
 		}
-	}
 
-	if ( waiting == 0 )
-	{
-		return;
-	}
-
-	const double work = waiting * s_flFillEstimate;
-	const double timeLeft = NEO_VOLSMOKE_FILL_TARGET_AGE - ( gpGlobals->curtime - oldest );
-	double share = NEO_VOLSMOKE_FILL_MAX_SHARE;
-	if ( work < share * timeLeft )
-	{
-		share = work / timeLeft;
-	}
-
-	const double budget = clamp( frame * share / ( 1.0 - share ), NEO_VOLSMOKE_FILL_BUDGET, NEO_VOLSMOKE_FILL_MAX_BUDGET );
-	const Vector eye = MainViewOrigin();
-
-	double spent = 0.0;
-	while ( spent < budget )
-	{
-		oldest = gpGlobals->curtime;
-		for ( int i = 0; i < s_Volumes.Count(); ++i )
+		if ( !pVol->m_pFillJob->IsFinished() )
 		{
-			if ( !s_Volumes[i]->m_Fill.IsDone() )
+			++running;
+			continue;
+		}
+
+		pVol->m_pFillJob->Release();
+		pVol->m_pFillJob = NULL;
+		pVol->m_bFillDone = pVol->m_Fill.IsDone();
+		pVol->m_flFillDoneAge = gpGlobals->curtime - pVol->m_flSpawnTime;
+	}
+
+	const int slots = pPool ? pPool->NumThreads() : 1;
+	const Vector eye = MainViewOrigin();
+	while ( running < slots )
+	{
+		float oldest = gpGlobals->curtime;
+		for ( const C_NeoVolSmoke *pVol : s_Volumes )
+		{
+			if ( pVol->WantsFill() )
 			{
-				oldest = MIN( oldest, s_Volumes[i]->m_flSpawnTime );
+				oldest = MIN( oldest, pVol->m_flSpawnTime );
 			}
 		}
 
 		C_NeoVolSmoke *pNearest = NULL;
 		float nearestSqr = 0.0f;
-		for ( int i = 0; i < s_Volumes.Count(); ++i )
+		for ( C_NeoVolSmoke *pVol : s_Volumes )
 		{
-			C_NeoVolSmoke *pVol = s_Volumes[i];
-			if ( pVol->m_Fill.IsDone() || pVol->m_flSpawnTime > oldest + NEO_VOLSMOKE_FILL_SAME_AGE )
+			if ( !pVol->WantsFill() || pVol->m_flSpawnTime > oldest + NEO_VOLSMOKE_FILL_SAME_AGE )
 			{
 				continue;
 			}
@@ -1368,17 +1414,19 @@ void C_NeoVolSmoke::StepFills()
 			break;
 		}
 
-		spent += pNearest->StepFill( budget - spent );
-		if ( pNearest->m_Fill.IsDone() )
+		if ( !pPool )
 		{
-			s_flFillEstimate = pNearest->m_flFillSeconds;
+			pNearest->StepFill( NEO_VOLSMOKE_FILL_BUDGET );
+			break;
 		}
-	}
 
-	s_flLastSpent = spent;
+		pNearest->m_pFillJob = pPool->QueueCall( pNearest, &C_NeoVolSmoke::RunFill );
+		++running;
+	}
 }
 
-// Works on this volume's fill for up to `budget` seconds. Returns the time spent.
+// Works on this volume's fill on the main thread for up to `budget` seconds.
+// Returns the time spent.
 double C_NeoVolSmoke::StepFill( double budget )
 {
 	const double start = Plat_FloatTime();
@@ -1393,10 +1441,46 @@ double C_NeoVolSmoke::StepFill( double budget )
 	m_flFillPeakFrame = MAX( m_flFillPeakFrame, spent );
 	if ( m_Fill.IsDone() )
 	{
+		m_bFillDone = true;
 		m_flFillDoneAge = gpGlobals->curtime - m_flSpawnTime;
 	}
 
 	return spent;
+}
+
+// The fill job, on a worker. It touches only the fill, its world and the
+// fill time; the chunks let StopFill cancel it quickly.
+void C_NeoVolSmoke::RunFill()
+{
+	const double start = Plat_FloatTime();
+	while ( !m_Fill.IsDone() && m_nFillCancel == 0 )
+	{
+		m_Fill.Step( NEO_VOLSMOKE_FILL_CHUNK_CELLS, NEO_VOLSMOKE_FILL_CHUNK_QUERIES );
+	}
+
+	m_flFillSeconds += Plat_FloatTime() - start;
+}
+
+// Cancels this volume's fill job and waits for it, so the fill, its world and
+// the map outlive it. A cancelled fill is never shown.
+void C_NeoVolSmoke::StopFill()
+{
+	if ( !m_pFillJob )
+	{
+		return;
+	}
+
+	m_nFillCancel = 1;
+	m_pFillJob->WaitForFinishAndRelease();
+	m_pFillJob = NULL;
+}
+
+void C_NeoVolSmoke::StopAllFills()
+{
+	for ( C_NeoVolSmoke *pVol : s_Volumes )
+	{
+		pVol->StopFill();
+	}
 }
 
 bool C_NeoVolSmoke::IsRegrowing( float now ) const
@@ -1458,7 +1542,7 @@ float C_NeoVolSmoke::FrontRadius( float age ) const
 float C_NeoVolSmoke::BloomRadius( float age ) const
 {
 	const float bloom = VolSmokeBloom( age );
-	if ( m_Fill.IsDone() )
+	if ( FillDone() )
 	{
 		return CNeoSmokeFill::DistToUnits( m_Fill.FrontDist() ) * bloom;
 	}
@@ -2021,6 +2105,12 @@ unsigned long long C_NeoVolSmoke::AtlasHash() const
 // ---------------------------------------------------------------------------
 void C_NeoVolSmoke::PrintStats() const
 {
+	if ( m_pFillJob )
+	{
+		Msg( "neo_volsmoke_stats: volume %d age %.2f done 0 (filling on a worker)\n", m_nId, gpGlobals->curtime - m_flSpawnTime );
+		return;
+	}
+
 	// FNV-1a over the finalized cells and their path lengths: equal hashes mean
 	// equal fields.
 	unsigned int hash = 2166136261u;
@@ -2037,7 +2127,7 @@ void C_NeoVolSmoke::PrintStats() const
 	const double queryMs = m_pWorld ? m_pWorld->QuerySeconds() * 1000.0 : 0.0;
 	const int traces = m_pWorld ? m_pWorld->Traces() : 0;
 	Msg( "neo_volsmoke_stats: volume %d age %.2f done %d (at age %.2f) cells %d radius %.1f queries %d traces %d fill %.1f ms (world %.1f ms, peak frame %.2f ms), hash %08x, front ahead of the fill in %d frames\n",
-		m_nId, gpGlobals->curtime - m_flSpawnTime, m_Fill.IsDone() ? 1 : 0, m_flFillDoneAge, m_Fill.FinalizedCount(),
+		m_nId, gpGlobals->curtime - m_flSpawnTime, FillDone() ? 1 : 0, m_flFillDoneAge, m_Fill.FinalizedCount(),
 		CNeoSmokeFill::DistToUnits( m_Fill.FrontDist() ), m_Fill.WorldQueries(), traces,
 		m_flFillSeconds * 1000.0, queryMs, m_flFillPeakFrame * 1000.0, hash, m_nLagFrames );
 	const int fillBytes = m_Fill.MemoryBytes();
@@ -2075,7 +2165,7 @@ void C_NeoVolSmoke::ClientThink()
 		StepFills();
 		if ( !m_bFitted )
 		{
-			if ( !m_Fill.IsDone() )
+			if ( !FillDone() )
 			{
 				return;
 			}
