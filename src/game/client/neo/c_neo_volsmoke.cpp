@@ -264,6 +264,7 @@ struct VolSmokePerf_t
 	double frameTotal;     // this frame so far, all stages and volumes
 	double framePeak;
 	double frameTime;      // engine frame time summed over counted frames
+	double frameTimePeak;  // the slowest engine frame
 	int    frames;
 	int    lastFrame;
 	int    uploads;
@@ -313,6 +314,7 @@ static void VolSmokePerfFrame()
 	p.frameTotal = 0.0;
 	p.lastFrame = gpGlobals->framecount;
 	p.frameTime += gpGlobals->absoluteframetime;
+	p.frameTimePeak = MAX( p.frameTimePeak, (double)gpGlobals->absoluteframetime );
 	++p.frames;
 }
 
@@ -342,9 +344,11 @@ class CNeoVolSmokeWorld final : public CNEOSmokeWorld
 {
 public:
 	CNeoVolSmokeWorld( const Vector &gridMin, const int boxSize[3], const int seedCorner[3], const int latticeLo[3], const int latticeHi[3] )
-		: CNEOSmokeWorld( gridMin, boxSize, seedCorner, latticeLo, latticeHi )
+		: CNEOSmokeWorld( gridMin, boxSize, seedCorner, latticeLo, latticeHi ), m_nWallTraces( 0 )
 	{
 	}
+
+	int WallTraces() const { return m_nWallTraces; }
 
 	// The client's box, in query coordinates, for LinkWall.
 	void SetDrawBox( const int offset[3], const int size[3] )
@@ -376,6 +380,7 @@ public:
 		}
 
 		++m_nTraces;
+		++m_nWallTraces;
 		Ray_t ray;
 		ray.Init( Center( x, y, z ), Center( n[0], n[1], n[2] ) );
 		CTraceFilterWorldOnly filter;
@@ -412,6 +417,8 @@ public:
 
 private:
 	virtual bool Auditing() const override { return neo_volsmoke_fill_audit.GetBool(); }
+
+	int m_nWallTraces;
 };
 
 // ---------------------------------------------------------------------------
@@ -1809,6 +1816,7 @@ void C_NeoVolSmoke::PrintStats() const
 	Msg( "neo_volsmoke_stats: volume %d memory %d KB (fill %d KB, carve times %d KB, world cache %d KB, atlas copy %d KB)\n",
 		m_nId, ( fillBytes + carveBytes + worldBytes + atlasBytes ) / 1024, fillBytes / 1024, carveBytes / 1024,
 		worldBytes / 1024, atlasBytes / 1024 );
+	Msg( "neo_volsmoke_stats: volume %d wall link traces %d\n", m_nId, m_pWorld ? m_pWorld->WallTraces() : 0 );
 	Msg( "neo_volsmoke_stats: volume %d far slab tiles last frame %d, behind opaque smoke %d\n", m_nId, m_nSlabTiles, m_nSlabTilesCulled );
 	if ( m_pWorld && m_pWorld->AuditChecks() > 0 )
 	{
@@ -3385,9 +3393,9 @@ CON_COMMAND_F( neo_volsmoke_perf, "Print the smoke's CPU time per frame by stage
 		total += p.stage[s];
 	}
 
-	Msg( "neo_volsmoke_perf: live %d frames %d over %.2f s, engine frame %.3f ms, smoke cpu %.3f ms/frame (peak frame %.2f ms), uploads %d (%.1f/s)\n",
-		C_NeoVolSmoke::LiveCount(), p.frames, seconds, 1000.0 * p.frameTime / frames, 1000.0 * total / frames,
-		1000.0 * framePeak, p.uploads, p.uploads / seconds );
+	Msg( "neo_volsmoke_perf: live %d frames %d over %.2f s, engine frame %.3f ms (worst %.2f ms), smoke cpu %.3f ms/frame (peak frame %.2f ms), uploads %d (%.1f/s)\n",
+		C_NeoVolSmoke::LiveCount(), p.frames, seconds, 1000.0 * p.frameTime / frames, 1000.0 * p.frameTimePeak,
+		1000.0 * total / frames, 1000.0 * framePeak, p.uploads, p.uploads / seconds );
 	for ( int s = 0; s < VOLSMOKE_PERF_STAGES; ++s )
 	{
 		Msg( "neo_volsmoke_perf:   %-8s %.3f ms/frame (peak %.2f ms)\n", s_VolSmokePerfNames[s],
