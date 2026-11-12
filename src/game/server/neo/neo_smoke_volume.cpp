@@ -509,6 +509,11 @@ public:
 
 	virtual void FrameUpdatePostEntityThink() override
 	{
+		if ( s_SmokeVolumes.Count() == 0 )
+		{
+			return;
+		}
+
 		for ( int i = s_SmokeVolumes.Count() - 1; i >= 0; --i )
 		{
 			if ( s_SmokeVolumes[i]->Expired() )
