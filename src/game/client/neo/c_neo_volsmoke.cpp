@@ -204,7 +204,7 @@ static constexpr float NEO_VOLSMOKE_OVERLAY_FULL = 0.5f;
 // scale matches the legacy flash on a cloud in a lit room. The shader takes
 // the brightest few that reach the smoke.
 static constexpr float NEO_VOLSMOKE_DLIGHT_SHARE = 0.1f;
-static constexpr float NEO_VOLSMOKE_DLIGHT_LINEAR = 0.75f;
+static constexpr float NEO_VOLSMOKE_DLIGHT_LINEAR = 1.9f;
 static constexpr float NEO_VOLSMOKE_DLIGHT_MARGIN = SMOKEPARTICLE_SIZE;
 static constexpr int NEO_VOLSMOKE_MAX_DLIGHTS = 2;
 

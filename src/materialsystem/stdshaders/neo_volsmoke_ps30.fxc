@@ -68,6 +68,8 @@ const float4 g_DLight1Color : register( c16 ); // as c14, second light
 #define PUFF_SPIN   0.035f  // radians per second about the vertical axis
 #define PUFF_RISE   1.5f    // world units per second
 #define PUFF_SHADE  0.45f   // light lost in a crevice, where the noise bites
+#define FLASH_GRAIN_SCALE 4.0f // grain of a dynamic light's glow, against the billows
+#define FLASH_GRAIN 0.6f       // its strength: the glow varies by this share either way
 
 // Noise texture layout, set by the client: layer z of the lattice is the
 // texture shifted by z times NOISE_Z_SHIFT texels.
@@ -308,10 +310,15 @@ float4 main( PS_INPUT i ) : COLOR
 				float a     = 1.0f - exp( -sigma );
 
 				float shade = 1.0f - g_Misc.x * PUFF_SHADE * puff;
-				float3 lit = ( g_Ambient.rgb + g_Light.rgb * v.g ) * shade;
+				float3 lit = g_Ambient.rgb + g_Light.rgb * v.g;
 #if DLIGHTS > 0
-				lit += DynamicLight( p );
+				// The billows shade a near light more than the sky, and a finer
+				// noise breaks it up: without them the lit core is a smooth
+				// plateau where the legacy particles are grainy.
+				float grain = ValueNoise3( q * ( PUFF_SCALE * FLASH_GRAIN_SCALE ) + 31.0f );
+				lit += DynamicLight( p ) * ( shade * shade * shade ) * ( 1.0f + FLASH_GRAIN * ( 2.0f * grain - 1.0f ) );
 #endif
+				lit *= shade;
 				col += T * a * lit;
 				T   *= 1.0f - a;
 			}
