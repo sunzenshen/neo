@@ -20,12 +20,14 @@
 #include "materialsystem/itexture.h"
 #include "materialsystem/MaterialSystemUtil.h"
 #include "utlvector.h"
+#include "tier0/threadtools.h"
 #include "neo_smoke_fill.h"
 
 class CNeoVolSmokeRegenerator;
 class IMatRenderContext;
 class IMaterial;
 class CNeoVolSmokeWorld;
+class CJob;
 struct VolSmokeCullGrid_t;
 
 class C_NeoVolSmoke : public C_BaseEntity
@@ -47,6 +49,9 @@ public:
 	static void CarveAll( const Vector &start, const Vector &end, float radius );
 
 	static void RemoveAll();
+
+	// Cancels and joins every running fill job.
+	static void StopAllFills();
 
 	// Releases the volumes whose time is over. Called once a frame, outside
 	// the client think, which cannot release the entity it runs.
@@ -87,6 +92,10 @@ private:
 	static void StepFills();
 	static C_NeoVolSmoke *UploadTurn();
 	double StepFill( double budget );
+	void RunFill();
+	void StopFill();
+	bool FillDone() const { return m_bFillDone; }
+	bool WantsFill() const { return !m_bFillDone && !m_pFillJob && m_nFillCancel == 0; }
 	void FitToField();
 	void CreateAtlas();
 	Vector CellCenter( const int c[3] ) const;
@@ -163,8 +172,13 @@ private:
 	// Gas fill and the world it queries
 	CNeoSmokeFill      m_Fill;
 	CNeoVolSmokeWorld *m_pWorld;
+	// While a job runs, the worker owns m_Fill, m_pWorld and m_flFillSeconds;
+	// the main thread reads them only after the job is finished.
+	CJob  *m_pFillJob;
+	CInterlockedInt m_nFillCancel;
+	bool   m_bFillDone;        // the fill is done and the main thread has seen it
 	double m_flFillSeconds;    // CPU time spent in the fill
-	double m_flFillPeakFrame;  // longest single fill slice
+	double m_flFillPeakFrame;  // longest fill slice a frame paid for
 	float  m_flFillDoneAge;    // age when the fill finished, <0 = not yet
 	int    m_nLagFrames;       // frames the fill or the upload held the bloom front back
 
