@@ -395,6 +395,12 @@ static constexpr int NEO_VOLSMOKE_COARSE_EMPTY = -1;
 
 static constexpr int NEO_VOLSMOKE_AUDIT_MAX_WARNINGS = 10; // per volume
 
+struct VolSmokeAuditCell_t
+{
+	int nCell[3];
+	int nAxis; // -1 for a point query
+};
+
 enum VolSmokeBlockState_t
 {
 	VOLSMOKE_BLOCK_UNKNOWN = 0,
@@ -593,10 +599,25 @@ private:
 			return;
 		}
 
-		const Vector pos = Center( x, y, z );
-		Warning( "neo_volsmoke_fill_audit: block says open, %s says solid at cell (%d %d %d) axis %d, world (%.1f %.1f %.1f)\n",
-			axis < 0 ? "point" : "segment", x, y, z, axis, pos.x, pos.y, pos.z );
+		// Runs on a fill worker, so it only records; PrintAudit reports on the
+		// main thread.
+		const VolSmokeAuditCell_t cell = { { x, y, z }, axis };
+		m_AuditCells.AddToTail( cell );
 	}
+
+public:
+	void PrintAudit( int volumeId ) const
+	{
+		for ( const VolSmokeAuditCell_t &cell : m_AuditCells )
+		{
+			const Vector pos = Center( cell.nCell[0], cell.nCell[1], cell.nCell[2] );
+			Warning( "neo_volsmoke_fill_audit: volume %d block says open, %s says solid at cell (%d %d %d) axis %d, world (%.1f %.1f %.1f)\n",
+				volumeId, cell.nAxis < 0 ? "point" : "segment", cell.nCell[0], cell.nCell[1], cell.nCell[2], cell.nAxis,
+				pos.x, pos.y, pos.z );
+		}
+	}
+
+private:
 
 	bool InBox( int x, int y, int z ) const
 	{
@@ -700,6 +721,7 @@ private:
 	int m_nTraces;
 	int m_nAuditChecks;
 	int m_nAuditDisagree;
+	CUtlVector<VolSmokeAuditCell_t> m_AuditCells; // the first disagreements
 };
 
 // ---------------------------------------------------------------------------
@@ -913,18 +935,25 @@ static void VolSmokeDeleteRetired( VolSmokeRetireWait_t wait )
 // ---------------------------------------------------------------------------
 // Fill workers
 // ---------------------------------------------------------------------------
-// The fill's world queries are world-only traces. The SDK runs world traces
-// from its thread pool beside the main thread (the query cache and the nav
-// visibility pass), so they are taken from the workers too. The map must
-// stay loaded while a job runs: every job is joined before its volume goes,
-// and all of them at level shutdown.
+// The fill's world queries are world-only traces, taken from the workers.
+// The SDK client traces from pool threads too (threaded particle simulation,
+// whose collision queries trace the world), though it waits for those jobs
+// within the frame; the SDK does not document traces running while the main
+// thread is inside the engine. The map must stay loaded while a job runs:
+// every job is joined before its volume goes, and all of them at level
+// shutdown.
 static IThreadPool *s_pVolSmokeFillPool = NULL;
 static bool s_bVolSmokeFillPoolTried = false;
 
 static int VolSmokeFillWorkers()
 {
-	const int cores = GetCPUInformation()->m_nPhysicalProcessors;
-	return clamp( cores - 1, 1, NEO_VOLSMOKE_FILL_MAX_WORKERS );
+	// With SMT the sibling threads absorb the main, render and sound threads.
+	// Without it, half the cores stay free for them.
+	const CPUInformation *pCpu = GetCPUInformation();
+	const int cores = pCpu->m_nPhysicalProcessors;
+	const bool smt = pCpu->m_nLogicalProcessors > pCpu->m_nPhysicalProcessors;
+	const int workers = smt ? cores - 1 : cores / 2;
+	return clamp( workers, 1, NEO_VOLSMOKE_FILL_MAX_WORKERS );
 }
 
 static IThreadPool *VolSmokeFillPool()
@@ -939,6 +968,8 @@ static IThreadPool *VolSmokeFillPool()
 	ThreadPoolStartParams_t params;
 	params.nThreads = VolSmokeFillWorkers();
 	params.nThreadsMax = params.nThreads;
+	params.fDistribute = TRS_FALSE;
+	params.iThreadPriority = TP_PRIORITY_LOW;
 	if ( !pPool || !pPool->Start( params ) || pPool->NumThreads() < 1 )
 	{
 		Warning( "neo_volsmoke: no fill workers, filling on the main thread\n" );
@@ -980,7 +1011,9 @@ public:
 		VolSmokeDeleteRetired( VOLSMOKE_RETIRE_AFTER_FRAMES );
 	}
 
-	// The fill jobs trace the map, so they stop before it unloads.
+	// The fill jobs trace the map, so they stop before it unloads. The level
+	// init stop guards a path that skips the client level shutdown.
+	virtual void LevelInitPreEntity() override { C_NeoVolSmoke::StopAllFills(); }
 	virtual void LevelShutdownPreEntity() override { C_NeoVolSmoke::StopAllFills(); }
 	virtual void LevelShutdownPostEntity() override { VolSmokeDeleteRetired( VOLSMOKE_RETIRE_NOW ); }
 	virtual void Shutdown() override
@@ -1472,8 +1505,11 @@ void C_NeoVolSmoke::StopFill()
 		return;
 	}
 
+	// Wait through the pool that runs the job: CJob::WaitForFinish waits
+	// through the global pool.
 	m_nFillCancel = 1;
-	m_pFillJob->WaitForFinishAndRelease();
+	s_pVolSmokeFillPool->YieldWait( m_pFillJob );
+	m_pFillJob->Release();
 	m_pFillJob = NULL;
 }
 
@@ -2147,6 +2183,10 @@ void C_NeoVolSmoke::PrintStats() const
 	{
 		Msg( "neo_volsmoke_stats: volume %d audit: %d block answers checked, %d disagreements\n",
 			m_nId, m_pWorld->AuditChecks(), m_pWorld->AuditDisagreements() );
+		if ( m_bFillDone )
+		{
+			m_pWorld->PrintAudit( m_nId );
+		}
 	}
 }
 
