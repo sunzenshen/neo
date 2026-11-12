@@ -32,7 +32,7 @@ enum NeoSmokeBlockState_t
 };
 
 CNeoSmokeWorld::CNeoSmokeWorld( const Vector &gridMin, const int boxSize[3], const int seedCorner[3], const int latticeLo[3], const int latticeHi[3] )
-	: m_vecGridMin( gridMin ), m_flQuerySeconds( 0.0 ), m_nTraces( 0 ), m_nAuditChecks( 0 ), m_nAuditDisagree( 0 )
+	: m_vecGridMin( gridMin ), m_nTraces( 0 ), m_nAuditChecks( 0 ), m_nAuditDisagree( 0 )
 {
 	int blocks = 1;
 	for ( int a = 0; a < 3; ++a )
@@ -67,7 +67,6 @@ bool CNeoSmokeWorld::PointSolid( const Vector &pos )
 
 bool CNeoSmokeWorld::CellSolid( int x, int y, int z )
 {
-	const double start = Plat_FloatTime();
 	bool solid = false;
 	const bool inEmpty = InEmptyBlock( x, y, z );
 	if ( !inEmpty || Auditing() )
@@ -81,13 +80,11 @@ bool CNeoSmokeWorld::CellSolid( int x, int y, int z )
 		Audit( solid, x, y, z, -1 );
 	}
 
-	m_flQuerySeconds += Plat_FloatTime() - start;
 	return solid;
 }
 
 bool CNeoSmokeWorld::LinkBlocked( int x, int y, int z, int axis )
 {
-	const double start = Plat_FloatTime();
 	int n[3] = { x, y, z };
 	++n[axis];
 
@@ -109,20 +106,17 @@ bool CNeoSmokeWorld::LinkBlocked( int x, int y, int z, int axis )
 		Audit( blocked, x, y, z, axis );
 	}
 
-	m_flQuerySeconds += Plat_FloatTime() - start;
 	return blocked;
 }
 
 bool CNeoSmokeWorld::SeedBlocked( int x, int y, int z )
 {
-	const double start = Plat_FloatTime();
 	++m_nTraces;
 	Ray_t ray;
 	ray.Init( Grenade(), Center( x, y, z ) );
 	CTraceFilterWorldOnly filter;
 	trace_t tr;
 	enginetrace->TraceRay( ray, NEO_VOLSMOKE_FILL_MASK, &filter, &tr );
-	m_flQuerySeconds += Plat_FloatTime() - start;
 	return tr.startsolid || tr.fraction < 1.0f;
 }
 

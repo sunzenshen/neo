@@ -357,14 +357,12 @@ public:
 			return false;
 		}
 
-		const double start = Plat_FloatTime();
 		++m_nTraces;
 		Ray_t ray;
 		ray.Init( Center( x, y, z ), Center( n[0], n[1], n[2] ) );
 		CTraceFilterWorldOnly filter;
 		trace_t tr;
 		enginetrace->TraceRay( ray, NEO_VOLSMOKE_FILL_MASK, &filter, &tr );
-		m_flQuerySeconds += Plat_FloatTime() - start;
 		if ( tr.startsolid || tr.fraction >= 1.0f )
 		{
 			return false;
@@ -1777,12 +1775,11 @@ void C_NeoVolSmoke::PrintStats() const
 		}
 	}
 
-	const double queryMs = m_pWorld ? m_pWorld->QuerySeconds() * 1000.0 : 0.0;
 	const int traces = m_pWorld ? m_pWorld->Traces() : 0;
-	Msg( "neo_volsmoke_stats: volume %d age %.2f done %d (at age %.2f) cells %d radius %.1f queries %d traces %d fill %.1f ms (world %.1f ms, peak frame %.2f ms), hash %08x, front ahead of the fill in %d frames\n",
+	Msg( "neo_volsmoke_stats: volume %d age %.2f done %d (at age %.2f) cells %d radius %.1f queries %d traces %d fill %.1f ms (peak frame %.2f ms), hash %08x, front ahead of the fill in %d frames\n",
 		m_nId, gpGlobals->curtime - m_flSpawnTime, FillDone() ? 1 : 0, m_flFillDoneAge, m_Fill.FinalizedCount(),
 		CNeoSmokeFill::DistToUnits( m_Fill.FrontDist() ), m_Fill.WorldQueries(), traces,
-		m_flFillSeconds * 1000.0, queryMs, m_flFillPeakFrame * 1000.0, hash, m_nLagFrames );
+		m_flFillSeconds * 1000.0, m_flFillPeakFrame * 1000.0, hash, m_nLagFrames );
 	const int fillBytes = m_Fill.MemoryBytes();
 	const int carveBytes = m_CarveTime.Count() * (int)sizeof( float );
 	const int worldBytes = m_pWorld ? m_pWorld->MemoryBytes() : 0;

@@ -79,12 +79,8 @@ void CNEOSmokeLineOfSightBlocker::UpdateSmokeBounds()
 	SetCollisionBounds(m_mins, m_maxs);
 }
 
-static int s_nSmokeFieldTests = 0;
-
 bool CNEOSmokeLineOfSightBlocker::TestSmokeField(const Ray_t& ray, trace_t& tr) const
 {
-	++s_nSmokeFieldTests;
-
 	const Vector from = ray.m_Start + ray.m_StartOffset;
 	const float fraction = NEOSmoke_SightBlockFraction(from, from + ray.m_Delta);
 	if (fraction >= 1.0f)
@@ -95,26 +91,4 @@ bool CNEOSmokeLineOfSightBlocker::TestSmokeField(const Ray_t& ray, trace_t& tr) 
 	tr.fraction = fraction;
 	tr.endpos = from + ray.m_Delta * fraction;
 	return true;
-}
-
-CON_COMMAND_F(neo_smoke_server_los, "Trace a scoped smoke sight line as bots do and print what stops it. Args: x1 y1 z1 x2 y2 z2", FCVAR_CHEAT)
-{
-	if (!UTIL_IsCommandIssuedByServerAdmin() || args.ArgC() < 7)
-	{
-		return;
-	}
-
-	const Vector from(atof(args[1]), atof(args[2]), atof(args[3]));
-	const Vector to(atof(args[4]), atof(args[5]), atof(args[6]));
-	const int testsBefore = s_nSmokeFieldTests;
-
-	ScopedSmokeLOS smokeGuard(false);
-	trace_t tr;
-	CTraceFilterNoNPCsOrPlayer filter(nullptr, COLLISION_GROUP_NONE);
-	UTIL_TraceLine(from, to, MASK_BLOCKLOS_AND_NPCS | CONTENTS_IGNORE_NODRAW_OPAQUE, &filter, &tr);
-
-	const Vector expected = from + (to - from) * tr.fraction;
-	Msg("neo_smoke_server_los: (%g %g %g) -> (%g %g %g) fraction %.4f endpos (%.1f %.1f %.1f) off %.2f hit %s startsolid %d field tests %d depth %.3f\n",
-		from.x, from.y, from.z, to.x, to.y, to.z, tr.fraction, tr.endpos.x, tr.endpos.y, tr.endpos.z, tr.endpos.DistTo(expected),
-		tr.m_pEnt ? tr.m_pEnt->GetClassname() : "none", tr.startsolid ? 1 : 0, s_nSmokeFieldTests - testsBefore, NEOSmoke_OpticalDepth(from, to));
 }
