@@ -220,5 +220,11 @@ private:
 
 extern ITempEnts *tempents;
 
+#ifdef NEO
+// Removes the debris props that temp entities made since the last call.
+void NEO_RemoveTempEntDebris();
+
+#endif // NEO
+
 
 #endif // C_TE_LEGACYTEMPENTS_H
