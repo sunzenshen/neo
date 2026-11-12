@@ -105,6 +105,7 @@ private:
 	static C_NeoVolSmoke *UploadTurn();
 	double StepFill( double budget );
 	void RunFill();
+	void FindWalls();
 	void StopFill();
 	bool FillDone() const { return m_bFillDone; }
 	bool WantsFill() const { return !m_bFillDone && !m_pFillJob && m_nFillCancel == 0; }
@@ -197,6 +198,18 @@ private:
 	double m_flFillPeakFrame;  // longest fill slice a frame paid for
 	float  m_flFillDoneAge;    // age when the fill finished, <0 = not yet
 	int    m_nLagFrames;       // frames the fill or the upload held the bloom front back
+
+	// The faces that block each finalized cell's links, in finalized order,
+	// found by the fill job. Kept until the first pack reads them.
+	struct VolSmokeWall_t
+	{
+		Vector normal;
+		float  dist;
+	};
+	CUtlVector< VolSmokeWall_t > m_Walls;
+	CUtlVector< int > m_WallStart;  // first entry of m_Walls per finalized cell, then the end
+	int    m_nWallCells;       // finalized cells whose faces are in m_Walls
+	double m_flWallSeconds;    // worker time spent finding them
 
 	// Per-cell state
 	CUtlVector< float >         m_CarveTime;  // curtime of the last carve by FinalRank, <0 = never

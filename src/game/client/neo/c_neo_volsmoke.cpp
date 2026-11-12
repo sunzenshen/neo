@@ -680,7 +680,7 @@ int C_NeoVolSmoke::s_nNextId = 0;
 
 // ---------------------------------------------------------------------------
 C_NeoVolSmoke::C_NeoVolSmoke()
-	: m_nId( s_nNextId++ ), m_bHasGrenade( false ), m_flSpawnTime( 0 ), m_pWorld( NULL ), m_pFillJob( NULL ), m_bFillDone( false ), m_flFillSeconds( 0 ), m_flFillPeakFrame( 0 ), m_flFillDoneAge( -1.0f ), m_nLagFrames( 0 ),
+	: m_nId( s_nNextId++ ), m_bHasGrenade( false ), m_flSpawnTime( 0 ), m_pWorld( NULL ), m_pFillJob( NULL ), m_bFillDone( false ), m_flFillSeconds( 0 ), m_flFillPeakFrame( 0 ), m_flFillDoneAge( -1.0f ), m_nLagFrames( 0 ), m_nWallCells( 0 ), m_flWallSeconds( 0 ),
 	  m_nBounded( 0 ), m_pRegen( NULL ), m_nPacked( 0 ), m_flNextUpload( 0 ), m_flRegrowEnd( -1.0f ), m_flUploadedFront( 0 ), m_bUploadPending( false ), m_nSlabTiles( 0 ), m_nSlabTilesCulled( 0 ), m_flDistRange( NEO_VOLSMOKE_DIST_RANGE ), m_nAtlasCols( 0 ), m_nAtlasW( 0 ), m_nAtlasH( 0 ), m_nRenderSerial( -1 )
 {
 	for ( int a = 0; a < 3; ++a )
@@ -1126,7 +1126,55 @@ void C_NeoVolSmoke::RunFill()
 {
 	const double start = Plat_FloatTime();
 	NEOSmokeFillRun( m_Fill, m_nFillCancel );
-	m_flFillSeconds += Plat_FloatTime() - start;
+	const double filled = Plat_FloatTime();
+	m_flFillSeconds += filled - start;
+
+	if ( m_Fill.IsDone() )
+	{
+		FindWalls();
+		m_flWallSeconds = Plat_FloatTime() - filled;
+	}
+}
+
+// The faces that block the six links of every finalized cell. World traces
+// only, like the fill's, so the fill job runs them and the frame that first
+// packs the volume reads the answers instead of tracing. A cancelled job
+// leaves m_nWallCells at zero; the pack then traces for itself.
+void C_NeoVolSmoke::FindWalls()
+{
+	int box[3];
+	int offset[3];
+	m_Fill.BoxSize( box );
+	m_Fill.BoxOffset( offset );
+	m_pWorld->SetDrawBox( offset, box );
+
+	const int count = m_Fill.FinalizedCount();
+	m_Walls.RemoveAll();
+	m_WallStart.SetCount( count + 1 );
+	for ( int k = 0; k < count; ++k )
+	{
+		if ( ( k % NEO_SMOKE_FILL_CHUNK_CELLS ) == 0 && m_nFillCancel != 0 )
+		{
+			return;
+		}
+
+		m_WallStart[k] = m_Walls.Count();
+		const int i = m_Fill.FinalizedCell( k );
+		const int c[3] = { i % box[0], ( i / box[0] ) % box[1], i / ( box[0] * box[1] ) };
+		for ( int link = 0; link < 6; ++link )
+		{
+			int n[3] = { c[0], c[1], c[2] };
+			n[link >> 1] += ( link & 1 ) ? 1 : -1;
+			VolSmokeWall_t wall;
+			if ( m_pWorld->LinkWall( c, n, wall.normal, wall.dist ) )
+			{
+				m_Walls.AddToTail( wall );
+			}
+		}
+	}
+
+	m_WallStart[count] = m_Walls.Count();
+	m_nWallCells = count;
 }
 
 // Cancels this volume's fill job and waits for it, so the fill, its world and
@@ -1392,13 +1440,24 @@ bool C_NeoVolSmoke::PackNewCells( float now )
 		Vector wallNormal[6];
 		float wallDist[6];
 		int walls = 0;
-		for ( int link = 0; link < 6; ++link )
+		if ( m_nPacked < m_nWallCells )
 		{
-			int n[3] = { c[0], c[1], c[2] };
-			n[link >> 1] += ( link & 1 ) ? 1 : -1;
-			if ( m_pWorld->LinkWall( c, n, wallNormal[walls], wallDist[walls] ) )
+			for ( int w = m_WallStart[m_nPacked]; w < m_WallStart[m_nPacked + 1]; ++w, ++walls )
 			{
-				++walls;
+				wallNormal[walls] = m_Walls[w].normal;
+				wallDist[walls] = m_Walls[w].dist;
+			}
+		}
+		else
+		{
+			for ( int link = 0; link < 6; ++link )
+			{
+				int n[3] = { c[0], c[1], c[2] };
+				n[link >> 1] += ( link & 1 ) ? 1 : -1;
+				if ( m_pWorld->LinkWall( c, n, wallNormal[walls], wallDist[walls] ) )
+				{
+					++walls;
+				}
 			}
 		}
 
@@ -1486,6 +1545,14 @@ bool C_NeoVolSmoke::PackNewCells( float now )
 				}
 			}
 		}
+	}
+
+	// The fill is done before the first pack, so every cell is packed now.
+	if ( m_nPacked >= m_nWallCells )
+	{
+		m_Walls.Purge();
+		m_WallStart.Purge();
+		m_nWallCells = 0;
 	}
 
 	return packed;
@@ -1816,7 +1883,8 @@ void C_NeoVolSmoke::PrintStats() const
 	Msg( "neo_volsmoke_stats: volume %d memory %d KB (fill %d KB, carve times %d KB, world cache %d KB, atlas copy %d KB)\n",
 		m_nId, ( fillBytes + carveBytes + worldBytes + atlasBytes ) / 1024, fillBytes / 1024, carveBytes / 1024,
 		worldBytes / 1024, atlasBytes / 1024 );
-	Msg( "neo_volsmoke_stats: volume %d wall link traces %d\n", m_nId, m_pWorld ? m_pWorld->WallTraces() : 0 );
+	Msg( "neo_volsmoke_stats: volume %d wall link traces %d (%.1f ms on the fill job)\n", m_nId, m_pWorld ? m_pWorld->WallTraces() : 0,
+		m_flWallSeconds * 1000.0 );
 	Msg( "neo_volsmoke_stats: volume %d far slab tiles last frame %d, behind opaque smoke %d\n", m_nId, m_nSlabTiles, m_nSlabTilesCulled );
 	if ( m_pWorld && m_pWorld->AuditChecks() > 0 )
 	{
