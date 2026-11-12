@@ -1599,7 +1599,6 @@ set(UNITY_SOURCE_NEO_SRC_CLIENT
     neo/c_neo_player.cpp
     neo/c_neo_te_tocflash.cpp
     neo/c_neo_volsmoke.cpp
-    neo/neo_smoke_fill.cpp
     neo/neo_fixup_glshaders.cpp
     neo/c_neo_bloom_controller.cpp
     neo/c_neo_killer_damage_infos.cpp
@@ -1620,7 +1619,6 @@ target_sources_grouped(
     neo/c_neo_player.h
     neo/c_neo_te_tocflash.h
     neo/c_neo_volsmoke.h
-    neo/neo_smoke_fill.h
     neo/neo_fixup_glshaders.h
     neo/c_neo_killer_damage_infos.h
     ${UNITY_SOURCE_NEO_SRC_CLIENT}
@@ -1773,6 +1771,7 @@ set(UNITY_SOURCE_NEO_SHARED
     ${CMAKE_SOURCE_DIR}/game/shared/neo/neo_worldpos_marker.cpp
     ${CMAKE_SOURCE_DIR}/game/shared/neo/neo_crosshair.cpp
     ${CMAKE_SOURCE_DIR}/game/shared/neo/neo_serial.cpp
+    ${CMAKE_SOURCE_DIR}/game/shared/neo/neo_smoke_fill.cpp
 )
 
 set_source_files_properties(
@@ -1803,6 +1802,7 @@ target_sources_grouped(
     ${CMAKE_SOURCE_DIR}/game/shared/neo/neo_enums.h
     ${CMAKE_SOURCE_DIR}/game/shared/neo/neo_crosshair.h
     ${CMAKE_SOURCE_DIR}/game/shared/neo/neo_serial.h
+    ${CMAKE_SOURCE_DIR}/game/shared/neo/neo_smoke_fill.h
     ${UNITY_SOURCE_NEO_SHARED}
 )
 

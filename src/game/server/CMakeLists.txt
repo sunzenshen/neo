@@ -1433,6 +1433,7 @@ set(UNITY_SOURCE_NEO_SHARED
     ${CMAKE_SOURCE_DIR}/game/shared/neo/neo_worldpos_marker.cpp
     ${CMAKE_SOURCE_DIR}/game/shared/neo/neo_crosshair.cpp
     ${CMAKE_SOURCE_DIR}/game/shared/neo/neo_serial.cpp
+    ${CMAKE_SOURCE_DIR}/game/shared/neo/neo_smoke_fill.cpp
 )
 
 set(UNITY_SOURCE_NEO_SRC_SERVER
@@ -1490,6 +1491,7 @@ target_sources_grouped(
     ${CMAKE_SOURCE_DIR}/game/shared/neo/neo_enums.h
     ${CMAKE_SOURCE_DIR}/game/shared/neo/neo_crosshair.h
     ${CMAKE_SOURCE_DIR}/game/shared/neo/neo_serial.h
+    ${CMAKE_SOURCE_DIR}/game/shared/neo/neo_smoke_fill.h
     ${UNITY_SOURCE_NEO_SHARED}
     neo/neo_detpack.h
     neo/neo_game_config.h
