@@ -30,14 +30,6 @@
 #include "tier0/memdbgon.h"
 
 // ---------------------------------------------------------------------------
-// ConVars
-// ---------------------------------------------------------------------------
-static ConVar neo_volsmoke_jitter( "neo_volsmoke_jitter", "1", FCVAR_CHEAT, "Per-pixel step jitter (grain) instead of banding." );
-static ConVar neo_volsmoke_debug( "neo_volsmoke_debug", "0", FCVAR_CHEAT, "0 off, 1 coverage, 2 scene depth as read by the shader, 3 box hit." );
-static ConVar neo_volsmoke_sheet( "neo_volsmoke_sheet", "1", FCVAR_CHEAT, "Hide slab tiles behind opaque smoke with a depth sheet. 0 draws every slab tile whole, the reference for checking what the sheet hides." );
-static ConVar neo_volsmoke_draw( "neo_volsmoke_draw", "1", FCVAR_CHEAT, "Draw smoke volumes." );
-
-// ---------------------------------------------------------------------------
 // Fixed values of the drawing. The gameplay values, which decide where the
 // smoke blocks sight, are in neo_smoke_shared.h.
 // ---------------------------------------------------------------------------
@@ -652,8 +644,6 @@ C_NeoVolSmoke *C_NeoVolSmoke::CreateForGrenade( const Vector &origin, float spaw
 		pVol->m_bHasGrenade = true;
 	}
 
-	DevMsg( "neo_volsmoke: grenade at (%.9g %.9g %.9g) spawned volume %d, age %.2f\n",
-		origin.x, origin.y, origin.z, pVol ? pVol->m_nId : -1, gpGlobals->curtime - spawnTime );
 	return pVol;
 }
 
@@ -797,12 +787,14 @@ void C_NeoVolSmoke::CreateAtlas()
 	KeyValues *pVMT = new KeyValues( "Neo_VolSmoke" );
 	pVMT->SetString( "$basetexture", texName );
 	pVMT->SetString( "$noisetexture", NEO_VOLSMOKE_NOISE_NAME );
+	pVMT->SetInt( "$jitter", 1 );
 	m_Material.Init( matName, pVMT );
 
 	Q_snprintf( matName, sizeof( matName ), "__neo_volsmoke_%d_slab", m_nId );
 	pVMT = new KeyValues( "Neo_VolSmoke" );
 	pVMT->SetString( "$basetexture", texName );
 	pVMT->SetString( "$noisetexture", NEO_VOLSMOKE_NOISE_NAME );
+	pVMT->SetInt( "$jitter", 1 );
 	pVMT->SetInt( "$slab", 1 );
 	m_SlabMaterial.Init( matName, pVMT );
 
@@ -1923,13 +1915,11 @@ void C_NeoVolSmoke::SetDrawParams( IMaterial *pMat ) const
 	SetFloatVar( pMat, "$extinction", DrawExtinction() );
 	SetVec3Var( pMat, "$front", Vector( FrontRadius( age ), m_flDistRange, 1.0f / NEO_VOLSMOKE_EDGE ) );
 	SetFloatVar( pMat, "$age", age );
-	SetIntVar( pMat, "$jitter", neo_volsmoke_jitter.GetInt() );
-	SetIntVar( pMat, "$debugmode", neo_volsmoke_debug.GetInt() );
 }
 
 int C_NeoVolSmoke::DrawModel( int flags )
 {
-	if ( !neo_volsmoke_draw.GetBool() || !m_Atlas.IsValid() )
+	if ( !m_Atlas.IsValid() )
 	{
 		return 0;
 	}
@@ -2612,10 +2602,6 @@ float C_NeoVolSmoke::SheetOpaqueDepth( const VolSmokeSheetVolume_t *vols, int nV
 void C_NeoVolSmoke::BuildOpaqueSheet( IMatRenderContext *pRenderContext )
 {
 	s_CullVolumes.RemoveAll();
-	if ( !neo_volsmoke_sheet.GetBool() )
-	{
-		return;
-	}
 
 	VMatrix proj;
 	pRenderContext->GetMatrix( MATERIAL_PROJECTION, &proj );
@@ -2792,7 +2778,7 @@ struct VolSmokeCullGrid_t
 // False when every slab is to be drawn whole.
 bool C_NeoVolSmoke::BuildCullGrid( VolSmokeCullGrid_t &grid ) const
 {
-	if ( !neo_volsmoke_sheet.GetBool() || s_nCullSerial != s_nSheetSerial )
+	if ( s_nCullSerial != s_nSheetSerial )
 	{
 		return false;
 	}
