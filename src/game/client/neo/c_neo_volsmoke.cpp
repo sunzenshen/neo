@@ -1933,11 +1933,15 @@ void C_NeoVolSmoke::ClientThink()
 		StepFills();
 		if ( !m_bFitted )
 		{
-			if ( !FillDone() )
+			// Creating a volume's atlas and materials takes a millisecond or
+			// two; clouds that appear together fit one a frame, as they pack.
+			static int s_nFitFrame = -1;
+			if ( !FillDone() || s_nFitFrame == gpGlobals->framecount )
 			{
 				return;
 			}
 
+			s_nFitFrame = gpGlobals->framecount;
 			FitToField();
 		}
 	}
