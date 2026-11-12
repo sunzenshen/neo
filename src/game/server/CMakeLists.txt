@@ -1453,6 +1453,7 @@ set(UNITY_SOURCE_NEO_SRC_SERVER
     neo/neo_smokelineofsightblocker.cpp
     neo/neo_spawn_manager.cpp
     neo/neo_smokegrenade.cpp
+    neo/neo_smoke_volume.cpp
     neo/neo_te_tocflash.cpp
     neo/neo_typeconverter.cpp
     neo/neo_dm_spawn.cpp
@@ -1509,6 +1510,7 @@ target_sources_grouped(
     neo/neo_smokelineofsightblocker.h
     neo/neo_spawn_manager.h
     neo/neo_smokegrenade.h
+    neo/neo_smoke_volume.h
     neo/neo_te_tocflash.h
     neo/neo_tracefilter_collisiongroupdelta.h
     neo/neo_dm_spawn.h

@@ -65,4 +65,18 @@ inline float VolSmokeCellVariation( int x, int y, int z )
 	return 1.0f - NEO_VOLSMOKE_CELL_VARIATION * (float)( h & 0xff ) / 255.0f;
 }
 
+// A cell's term in a field hash: a mix of its place relative to the grenade
+// and its value, so client and server prints of one field compare equal.
+inline unsigned long long VolSmokeCellKey( int x, int y, int z, unsigned long long value )
+{
+	const int bias = 512;
+	unsigned long long k = ( (unsigned long long)( x + bias ) << 40 ) ^ ( (unsigned long long)( y + bias ) << 28 )
+		^ ( (unsigned long long)( z + bias ) << 16 ) ^ value;
+	k *= 0x9E3779B97F4A7C15ull;
+	k ^= k >> 29;
+	k *= 0xBF58476D1CE4E5B9ull;
+	k ^= k >> 32;
+	return k;
+}
+
 #endif // NEO_SMOKE_SHARED_H
