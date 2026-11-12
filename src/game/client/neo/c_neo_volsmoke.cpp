@@ -220,7 +220,14 @@ static constexpr float NEO_VOLSMOKE_FLASH_DEPTH_SHARE = 0.15f;
 // transmittance: what the smoke reveals fades to nothing before the far side.
 static constexpr float NEO_VOLSMOKE_FLASH_CUTOFF = 0.05f;
 static constexpr float NEO_VOLSMOKE_FLASH_LIFE = 0.05f; // the weapon's muzzle light
-static constexpr float NEO_VOLSMOKE_FLASH_POINT_RADIUS = 6.0f;
+// The flash point fades smoothly with the smoke between it and the eye:
+// a clear point in the near half, dim in the far half, gone behind the
+// cloud, where the path holds about this optical depth.
+static constexpr float NEO_VOLSMOKE_FLASH_POINT_DEPTH = 16.0f;
+static constexpr float NEO_VOLSMOKE_FLASH_POINT_FALLOFF = 2.0f;
+static constexpr float NEO_VOLSMOKE_FLASH_POINT_RADIUS = 12.0f;
+// The muzzle flash sprite's orange, as the legacy sprite shows it.
+static const Vector NEO_VOLSMOKE_FLASH_POINT_TINT( 1.0f, 0.84f, 0.5f );
 static constexpr float NEO_VOLSMOKE_FLASH_MIN = 1.0f / 255.0f;
 static constexpr float NEO_VOLSMOKE_PATH_STEP = 16.0f;
 
@@ -2656,6 +2663,13 @@ static float FlashShows( float tau )
 	return MAX( through - NEO_VOLSMOKE_FLASH_CUTOFF, 0.0f ) / ( 1.0f - NEO_VOLSMOKE_FLASH_CUTOFF );
 }
 
+// How strongly the flash point shows through smoke of optical depth tau.
+static float FlashPointShows( float tau )
+{
+	const float depth = clamp( tau / NEO_VOLSMOKE_FLASH_POINT_DEPTH, 0.0f, 1.0f );
+	return 1.0f - powf( depth, NEO_VOLSMOKE_FLASH_POINT_FALLOFF );
+}
+
 // The volume that draws what the smoke reveals at a point: the one whose
 // smoke box is nearest, so a flash or a player draws once per frame.
 C_NeoVolSmoke *C_NeoVolSmoke::Owner( const Vector &point )
@@ -2721,7 +2735,10 @@ static void DrawFlashPoint( IMatRenderContext *pRenderContext, const Vector &ori
 
 	const Vector right = CurrentViewRight() * NEO_VOLSMOKE_FLASH_POINT_RADIUS;
 	const Vector up = CurrentViewUp() * NEO_VOLSMOKE_FLASH_POINT_RADIUS;
-	const unsigned char level = (unsigned char)( 255.0f * clamp( strength, 0.0f, 1.0f ) );
+	const float level = 255.0f * clamp( strength, 0.0f, 1.0f );
+	const unsigned char r = (unsigned char)( level * NEO_VOLSMOKE_FLASH_POINT_TINT.x );
+	const unsigned char g = (unsigned char)( level * NEO_VOLSMOKE_FLASH_POINT_TINT.y );
+	const unsigned char b = (unsigned char)( level * NEO_VOLSMOKE_FLASH_POINT_TINT.z );
 
 	pRenderContext->MatrixMode( MATERIAL_MODEL );
 	pRenderContext->PushMatrix();
@@ -2737,7 +2754,7 @@ static void DrawFlashPoint( IMatRenderContext *pRenderContext, const Vector &ori
 	for ( int i = 0; i < 4; ++i )
 	{
 		meshBuilder.Position3fv( corners[i].Base() );
-		meshBuilder.Color4ub( level, level, level, 255 );
+		meshBuilder.Color4ub( r, g, b, 255 );
 		meshBuilder.TexCoord2f( 0, us[i], vs[i] );
 		meshBuilder.AdvanceVertex();
 	}
@@ -2829,13 +2846,11 @@ void C_NeoVolSmoke::DrawRevealed( IMatRenderContext *pRenderContext )
 		}
 
 		const float life = clamp( ( pLight->die - gpGlobals->curtime ) / NEO_VOLSMOKE_FLASH_LIFE, 0.0f, 1.0f );
-		const float flash = FlashShows( OpticalDepth( eye, pLight->origin ) ) * overlayClear * life;
-		if ( flash < NEO_VOLSMOKE_FLASH_MIN )
+		const float point = FlashPointShows( OpticalDepth( eye, pLight->origin ) ) * overlayClear * life;
+		if ( point >= NEO_VOLSMOKE_FLASH_MIN )
 		{
-			continue;
+			DrawFlashPoint( pRenderContext, pLight->origin, point );
 		}
-
-		DrawFlashPoint( pRenderContext, pLight->origin, flash );
 
 		const float reachSqr = Square( pLight->radius + NEO_VOLSMOKE_DLIGHT_MARGIN );
 		for ( int p = 1; p <= gpGlobals->maxClients && p <= MAX_PLAYERS; ++p )
