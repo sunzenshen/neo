@@ -594,18 +594,27 @@ enum VolSmokeRetireWait_t
 	VOLSMOKE_RETIRE_NOW,
 };
 
+// Deleting a volume's materials and atlas is the heavy part of its teardown;
+// a round restart or a clear retires many at once, so a frame deletes only a
+// few of them and the rest wait for later frames.
+static constexpr int NEO_VOLSMOKE_RETIRE_PER_FRAME = 2;
+
 static void VolSmokeDeleteRetired( VolSmokeRetireWait_t wait )
 {
-	for ( int i = s_VolSmokeRetired.Count() - 1; i >= 0; --i )
+	// The list is in retire order, so the oldest go first.
+	int deleted = 0;
+	for ( int i = 0; i < s_VolSmokeRetired.Count(); )
 	{
 		if ( wait == VOLSMOKE_RETIRE_AFTER_FRAMES
-			&& gpGlobals->framecount - s_VolSmokeRetired[i].nFrame < NEO_VOLSMOKE_RETIRE_FRAMES )
+			&& ( deleted >= NEO_VOLSMOKE_RETIRE_PER_FRAME
+				|| gpGlobals->framecount - s_VolSmokeRetired[i].nFrame < NEO_VOLSMOKE_RETIRE_FRAMES ) )
 		{
-			continue;
+			break;
 		}
 
 		VolSmokeDeleteRetired( s_VolSmokeRetired[i] );
 		s_VolSmokeRetired.Remove( i );
+		++deleted;
 	}
 }
 
