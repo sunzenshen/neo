@@ -208,6 +208,14 @@ static constexpr float NEO_VOLSMOKE_DLIGHT_LINEAR = 1.9f;
 static constexpr float NEO_VOLSMOKE_DLIGHT_MARGIN = SMOKEPARTICLE_SIZE;
 static constexpr int NEO_VOLSMOKE_MAX_DLIGHTS = 2;
 
+// A muzzle flash is far brighter than the display range, so it shows through
+// smoke that hides a surface: it sees this share of the smoke's optical depth.
+// The flash point and the firing player's silhouette draw after the volume,
+// scaled by what gets through, so they fade with depth into the cloud instead
+// of switching at a plane as the legacy draw order does.
+static constexpr float NEO_VOLSMOKE_FLASH_DEPTH_SHARE = 0.15f;
+static constexpr float NEO_VOLSMOKE_PATH_STEP = 16.0f;
+
 // The legacy smoke's thermal-vision transparency.
 extern ConVar r_neo_thermal_smoke_alpha;
 
@@ -2560,6 +2568,69 @@ float C_NeoVolSmoke::OpaqueDepth( const Vector &eye, const Vector &dir, float fr
 	}
 
 	return FLT_MAX;
+}
+
+// Optical depth of this volume's smoke on the segment from the eye to a
+// point, without the look noise, at the strength the volume draws with.
+float C_NeoVolSmoke::PathOpticalDepth( const Vector &eye, const Vector &point ) const
+{
+	if ( !m_pRegen || m_vecSmokeMax.x <= m_vecSmokeMin.x )
+	{
+		return 0.0f;
+	}
+
+	const Vector delta = point - eye;
+	const float len = delta.Length();
+	if ( len < 1.0f )
+	{
+		return 0.0f;
+	}
+
+	const Vector unit = delta / len;
+	float t0 = 0.0f;
+	float t1 = len;
+	for ( int a = 0; a < 3; ++a )
+	{
+		if ( fabsf( unit[a] ) < 1.0e-6f )
+		{
+			if ( eye[a] < m_vecSmokeMin[a] || eye[a] > m_vecSmokeMax[a] )
+			{
+				return 0.0f;
+			}
+			continue;
+		}
+
+		const float ta = ( m_vecSmokeMin[a] - eye[a] ) / unit[a];
+		const float tb = ( m_vecSmokeMax[a] - eye[a] ) / unit[a];
+		t0 = MAX( t0, MIN( ta, tb ) );
+		t1 = MIN( t1, MAX( ta, tb ) );
+	}
+
+	const float front = FrontRadius( gpGlobals->curtime - m_flSpawnTime );
+	float path = 0.0f;
+	for ( float t = t0; t < t1; t += NEO_VOLSMOKE_PATH_STEP )
+	{
+		const float step = MIN( NEO_VOLSMOKE_PATH_STEP, t1 - t );
+		path += DensityLowerBound( eye + unit * ( t + 0.5f * step ), front, 0.0f ) * step;
+	}
+
+	return path * DrawExtinction();
+}
+
+float C_NeoVolSmoke::OpticalDepth( const Vector &eye, const Vector &point )
+{
+	float tau = 0.0f;
+	for ( const C_NeoVolSmoke *pVol : s_Volumes )
+	{
+		tau += pVol->PathOpticalDepth( eye, point );
+	}
+
+	return tau;
+}
+
+float C_NeoVolSmoke::FlashFactor( const Vector &eye, const Vector &point )
+{
+	return expf( -NEO_VOLSMOKE_FLASH_DEPTH_SHARE * OpticalDepth( eye, point ) );
 }
 
 // Screen tiles over the smoke, as view-space x / z and y / z, each with the

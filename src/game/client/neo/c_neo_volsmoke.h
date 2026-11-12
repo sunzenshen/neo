@@ -58,6 +58,11 @@ public:
 	// corner of its smoke box. False when the renderable is not a volume.
 	static bool SortDepth( IClientRenderable *pRenderable, const Vector &viewOrigin, const Vector &viewForward, float &depth );
 
+	// The share of a bright flash at a point that the smoke of every volume
+	// between the eye and the point lets through: 1 in clear air, toward 0
+	// deep behind smoke.
+	static float FlashFactor( const Vector &eye, const Vector &point );
+
 	static int  LiveCount() { return s_Volumes.Count(); }
 	static int  NextId() { return s_nNextId; }
 
@@ -128,6 +133,10 @@ private:
 	bool BuildCullGrid( IMatRenderContext *pRenderContext, const Vector view[8], float zMin, float zMax, VolSmokeCullGrid_t &grid ) const;
 	void DrawFarSlabs( IMatRenderContext *pRenderContext );
 	void DrawNearPass( IMatRenderContext *pRenderContext );
+
+	// What shows through the smoke after the volume draws
+	static float OpticalDepth( const Vector &eye, const Vector &point );
+	float PathOpticalDepth( const Vector &eye, const Vector &point ) const;
 
 private:
 	static CUtlVector< C_NeoVolSmoke * > s_Volumes;
