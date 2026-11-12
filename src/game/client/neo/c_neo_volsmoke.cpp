@@ -168,6 +168,13 @@ static constexpr float NEO_VOLSMOKE_GREY = 0.55f;
 static constexpr float NEO_VOLSMOKE_DESATURATE = 0.5f;
 static constexpr float NEO_VOLSMOKE_DISPLAY_GAMMA = 2.2f;
 
+// Below the knee the cloud darkens with its surroundings, as a grey wall
+// would, instead of keeping the legacy color's floor. The floor keeps a
+// cloud in a black room faintly visible, so a throw stays readable.
+static constexpr float NEO_VOLSMOKE_DARK_KNEE = 0.15f;
+static constexpr float NEO_VOLSMOKE_DARK_FLOOR = 0.03f;
+static const Vector NEO_VOLSMOKE_LUMINANCE( 0.2126f, 0.7152f, 0.0722f ); // Rec. 709 weights
+
 // Shade from a top-down light sweep: the top keeps full color, fully shaded
 // smoke keeps the ambient share, so nothing goes black. The legacy sprites
 // shade their base only a little.
@@ -1195,6 +1202,14 @@ Vector C_NeoVolSmoke::SampleColor( const Vector &origin )
 	{
 		const float display = ( NEO_VOLSMOKE_GREY * clamp( light[k], 0.0f, 1.0f ) + NEO_VOLSMOKE_DESATURATE ) * 0.5f;
 		color[k] = powf( display, NEO_VOLSMOKE_DISPLAY_GAMMA );
+	}
+
+	const Vector clamped( clamp( light.x, 0.0f, 1.0f ), clamp( light.y, 0.0f, 1.0f ), clamp( light.z, 0.0f, 1.0f ) );
+	const float luminance = clamped.Dot( NEO_VOLSMOKE_LUMINANCE );
+	const float dark = clamp( ( luminance + NEO_VOLSMOKE_DARK_FLOOR ) / NEO_VOLSMOKE_DARK_KNEE, 0.0f, 1.0f );
+	if ( dark < 1.0f )
+	{
+		color *= dark;
 	}
 
 	return color;
