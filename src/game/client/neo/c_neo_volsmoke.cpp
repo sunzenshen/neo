@@ -32,9 +32,6 @@
 // ---------------------------------------------------------------------------
 // ConVars
 // ---------------------------------------------------------------------------
-static ConVar neo_volsmoke_regrow( "neo_volsmoke_regrow", "4.0", FCVAR_CHEAT, "Seconds for a carved cell to refill.", true, 0.1f, true, 60.0f );
-static ConVar neo_volsmoke_carve_radius( "neo_volsmoke_carve_radius", "24", FCVAR_CHEAT, "Capsule radius carved by neo_volsmoke_carve.", true, 1.0f, true, 512.0f );
-static ConVar neo_volsmoke_explode_radius( "neo_volsmoke_explode_radius", "110", FCVAR_CHEAT, "Sphere radius carved by neo_volsmoke_explode.", true, 1.0f, true, 1024.0f );
 static ConVar neo_volsmoke_noise_amp( "neo_volsmoke_noise_amp", "1", FCVAR_CHEAT, "Test: look noise strength, 0 (smooth) to 1.", true, 0.0f, true, 1.0f );
 static ConVar neo_volsmoke_jitter( "neo_volsmoke_jitter", "1", FCVAR_CHEAT, "Per-pixel step jitter (grain) instead of banding." );
 static ConVar neo_volsmoke_debug( "neo_volsmoke_debug", "0", FCVAR_CHEAT, "0 off, 1 coverage, 2 scene depth as read by the shader, 3 box hit." );
@@ -106,6 +103,12 @@ static constexpr float NEO_VOLSMOKE_CULL_MIN_DEPTH = 1.0f;
 
 // View depth range of a whole-volume march; farther than any volume is drawn.
 static constexpr float NEO_VOLSMOKE_MAX_DEPTH = 65536.0f;
+
+// A carved cell refills over this many seconds. The radii are those of the
+// developer carve commands: a bullet's path and an explosion.
+static constexpr float NEO_VOLSMOKE_REGROW_TIME = 4.0f;
+static constexpr float NEO_VOLSMOKE_CARVE_RADIUS = 24.0f;
+static constexpr float NEO_VOLSMOKE_EXPLODE_RADIUS = 110.0f;
 
 // All smoke lies inside a sphere about the gas seed this much wider than the
 // front: a gas path is never shorter than the straight line from the seed,
@@ -1299,7 +1302,7 @@ float C_NeoVolSmoke::CellWeight( int idx, float now ) const
 	const float carveTime = CarveTime( idx );
 	if ( carveTime >= 0.0f )
 	{
-		hole = clamp( ( now - carveTime ) / neo_volsmoke_regrow.GetFloat(), 0.0f, 1.0f );
+		hole = clamp( ( now - carveTime ) / NEO_VOLSMOKE_REGROW_TIME, 0.0f, 1.0f );
 		hole = hole * hole; // slow start, then refill
 	}
 
@@ -1652,7 +1655,7 @@ void C_NeoVolSmoke::Carve( const Vector &start, const Vector &end, float radius 
 
 	if ( touched )
 	{
-		m_flRegrowEnd = MAX( m_flRegrowEnd, now + neo_volsmoke_regrow.GetFloat() );
+		m_flRegrowEnd = MAX( m_flRegrowEnd, now + NEO_VOLSMOKE_REGROW_TIME );
 	}
 }
 
@@ -3445,7 +3448,7 @@ CON_COMMAND_F( neo_volsmoke_carve, "Carve a bullet-sized hole through smoke alon
 	trace_t tr;
 	if ( !ViewTrace( tr, 4096.0f ) )
 		return;
-	C_NeoVolSmoke::CarveAll( tr.startpos, tr.endpos, neo_volsmoke_carve_radius.GetFloat() );
+	C_NeoVolSmoke::CarveAll( tr.startpos, tr.endpos, NEO_VOLSMOKE_CARVE_RADIUS );
 }
 
 CON_COMMAND_F( neo_volsmoke_explode, "Carve an explosion-sized sphere out of smoke at the crosshair.", FCVAR_CHEAT )
@@ -3453,7 +3456,7 @@ CON_COMMAND_F( neo_volsmoke_explode, "Carve an explosion-sized sphere out of smo
 	trace_t tr;
 	if ( !ViewTrace( tr, 4096.0f ) )
 		return;
-	C_NeoVolSmoke::CarveAll( tr.endpos, tr.endpos, neo_volsmoke_explode_radius.GetFloat() );
+	C_NeoVolSmoke::CarveAll( tr.endpos, tr.endpos, NEO_VOLSMOKE_EXPLODE_RADIUS );
 }
 
 CON_COMMAND_F( neo_volsmoke_clear, "Remove all volumetric smoke.", FCVAR_CHEAT )
