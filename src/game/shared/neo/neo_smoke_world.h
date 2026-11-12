@@ -17,22 +17,22 @@
 #include "neo_smoke_fill.h"
 #include "utlvector.h"
 
-struct NeoSmokeAuditCell_t
+struct NEOSmokeAuditCell_t
 {
 	int nCell[3];
 	int nAxis; // -1 for a point query
 };
 
-class CNeoSmokeWorld : public INeoSmokeFillWorld
+class CNEOSmokeWorld : public INEOSmokeFillWorld
 {
 public:
-	CNeoSmokeWorld( const Vector &gridMin, const int boxSize[3], const int seedCorner[3], const int latticeLo[3], const int latticeHi[3] );
-	virtual ~CNeoSmokeWorld() {}
+	CNEOSmokeWorld( const Vector &gridMin, const int boxSize[3], const int seedCorner[3], const int latticeLo[3], const int latticeHi[3] );
+	virtual ~CNEOSmokeWorld() {}
 
 	static bool PointIn( const Vector &pos, int mask );
 	static bool PointSolid( const Vector &pos );
 
-	// INeoSmokeFillWorld
+	// INEOSmokeFillWorld
 	virtual bool CellSolid( int x, int y, int z ) override;
 	virtual bool LinkBlocked( int x, int y, int z, int axis ) override;
 	virtual bool SeedBlocked( int x, int y, int z ) override;
@@ -58,7 +58,7 @@ protected:
 
 	Vector Center( int x, int y, int z ) const
 	{
-		const float c = CNeoSmokeFill::CELL_SIZE;
+		const float c = CNEOSmokeFill::CELL_SIZE;
 		return m_vecGridMin + Vector( ( x + 0.5f ) * c, ( y + 0.5f ) * c, ( z + 0.5f ) * c );
 	}
 
@@ -66,7 +66,7 @@ protected:
 	int m_nBoxSize[3];      // the drawn box, from m_nDrawOffset
 	int m_nDrawOffset[3];
 	int m_nTraces;
-	CUtlVector<NeoSmokeAuditCell_t> m_AuditCells; // the first disagreements
+	CUtlVector<NEOSmokeAuditCell_t> m_AuditCells; // the first disagreements
 
 private:
 	void Audit( bool directSolid, int x, int y, int z, int axis );
@@ -81,7 +81,7 @@ private:
 
 	Vector Grenade() const
 	{
-		const float c = CNeoSmokeFill::CELL_SIZE;
+		const float c = CNEOSmokeFill::CELL_SIZE;
 		return m_vecGridMin + Vector( m_nSeedCorner[0] * c, m_nSeedCorner[1] * c, m_nSeedCorner[2] * c );
 	}
 
@@ -90,7 +90,7 @@ private:
 	int m_nLatticeHi[3];
 	int m_nCoarse[3];
 	CUtlVector<int> m_Coarse;          // NEO_SMOKE_COARSE_* or fine offset + 1
-	CUtlVector<unsigned char> m_Fine;  // NeoSmokeBlockState_t
+	CUtlVector<unsigned char> m_Fine;  // NEOSmokeBlockState_t
 	int m_nAuditChecks;
 	int m_nAuditDisagree;
 };

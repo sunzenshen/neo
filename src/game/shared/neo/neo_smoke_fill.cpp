@@ -6,16 +6,16 @@
 // memdbgon must be the last include file in a .cpp file!!!
 #include "tier0/memdbgon.h"
 
-static constexpr double NEO_SMOKE_FILL_DOME_RADIUS = CNeoSmokeFill::DOME_RADIUS;
+static constexpr double NEO_SMOKE_FILL_DOME_RADIUS = CNEOSmokeFill::DOME_RADIUS;
 static constexpr double NEO_SMOKE_FILL_PI = 3.14159265358979323846;
 static constexpr int NEO_SMOKE_FILL_BUDGET = (int)( ( 2.0 / 3.0 ) * NEO_SMOKE_FILL_PI
 	* NEO_SMOKE_FILL_DOME_RADIUS * NEO_SMOKE_FILL_DOME_RADIUS * NEO_SMOKE_FILL_DOME_RADIUS
-	/ ( (double)CNeoSmokeFill::CELL_SIZE * CNeoSmokeFill::CELL_SIZE * CNeoSmokeFill::CELL_SIZE ) + 0.5 );
+	/ ( (double)CNEOSmokeFill::CELL_SIZE * CNEOSmokeFill::CELL_SIZE * CNEOSmokeFill::CELL_SIZE ) + 0.5 );
 
 // The gas box, padded by a cell on each side, must fit a square atlas of
 // this many texels a side in z slices, or the cell that would grow it past
 // that is dropped.
-static constexpr int NEO_SMOKE_FILL_ATLAS_SIZE = CNeoSmokeFill::ATLAS_SIZE;
+static constexpr int NEO_SMOKE_FILL_ATLAS_SIZE = CNEOSmokeFill::ATLAS_SIZE;
 
 // Finished path lengths are 16 bits; a longer path, possible only in a
 // winding duct, is stored as the longest.
@@ -37,7 +37,7 @@ static constexpr int NEO_SMOKE_FILL_STEP_CORNER = 28;
 static constexpr int NEO_SMOKE_FILL_UNREACHED = 0x7fffffff;
 
 // Occupancy cache: two bits per question, the cell and its +x, +y, +z links.
-enum NeoSmokeOcc_t
+enum NEOSmokeOcc_t
 {
 	NEO_SMOKE_OCC_UNKNOWN = 0,
 	NEO_SMOKE_OCC_OPEN = 1,
@@ -90,14 +90,14 @@ static constexpr int NEO_SMOKE_FILL_HEAP_START = 8192;
 // Bricks a fill usually touches; the list grows past this as needed.
 static constexpr int NEO_SMOKE_FILL_BRICKS_START = 256;
 
-CNeoSmokeFill::CNeoSmokeFill()
+CNEOSmokeFill::CNEOSmokeFill()
 	: m_pWorld( NULL ), m_pBrickDir( NULL ), m_ppBricks( NULL ), m_nBricks( 0 ), m_nBrickCap( 0 ), m_pHeap( NULL ),
 	  m_nHeapCap( 0 ), m_pOrder( NULL ), m_pOrderDist( NULL ), m_pBoxOrder( NULL ), m_pFinalBits( NULL ), m_pWordRank( NULL ), m_pFinalDist( NULL ), m_nHeapCount( 0 ),
 	  m_nFinalized( 0 ), m_nFrontDist( 0 ), m_nBoxFinalized( 0 ), m_nBoxFront( 0 ), m_nWords( 0 ), m_nDropped( 0 ), m_nQueries( 0 ), m_nPeakBytes( 0 ), m_bDone( true ), m_bBegun( false )
 {
 }
 
-CNeoSmokeFill::~CNeoSmokeFill()
+CNEOSmokeFill::~CNEOSmokeFill()
 {
 	FreeWork();
 	delete[] m_pOrder;
@@ -108,7 +108,7 @@ CNeoSmokeFill::~CNeoSmokeFill()
 	delete[] m_pFinalDist;
 }
 
-void CNeoSmokeFill::AllocWork()
+void CNEOSmokeFill::AllocWork()
 {
 	m_pBrickDir = new int[BRICKS];
 	memset( m_pBrickDir, 0, BRICKS * sizeof( int ) );
@@ -119,7 +119,7 @@ void CNeoSmokeFill::AllocWork()
 	m_pHeap = new HeapEntry_t[m_nHeapCap];
 }
 
-void CNeoSmokeFill::FreeWork()
+void CNEOSmokeFill::FreeWork()
 {
 	for ( int i = 0; i < m_nBricks; ++i )
 	{
@@ -137,7 +137,7 @@ void CNeoSmokeFill::FreeWork()
 	m_nHeapCap = 0;
 }
 
-int CNeoSmokeFill::BrickOf( int cell )
+int CNEOSmokeFill::BrickOf( int cell )
 {
 	int x;
 	int y;
@@ -146,7 +146,7 @@ int CNeoSmokeFill::BrickOf( int cell )
 	return ( ( z >> BRICK_SHIFT ) * BRICKS_XY + ( y >> BRICK_SHIFT ) ) * BRICKS_XY + ( x >> BRICK_SHIFT );
 }
 
-int CNeoSmokeFill::BrickSlot( int cell )
+int CNEOSmokeFill::BrickSlot( int cell )
 {
 	int x;
 	int y;
@@ -156,13 +156,13 @@ int CNeoSmokeFill::BrickSlot( int cell )
 	return ( ( ( ( z & mask ) << BRICK_SHIFT ) + ( y & mask ) ) << BRICK_SHIFT ) + ( x & mask );
 }
 
-const CNeoSmokeFill::Brick_t *CNeoSmokeFill::FindBrick( int cell ) const
+const CNEOSmokeFill::Brick_t *CNEOSmokeFill::FindBrick( int cell ) const
 {
 	const int n = m_pBrickDir[BrickOf( cell )];
 	return n ? m_ppBricks[n - 1] : NULL;
 }
 
-CNeoSmokeFill::Brick_t &CNeoSmokeFill::TouchBrick( int cell )
+CNEOSmokeFill::Brick_t &CNEOSmokeFill::TouchBrick( int cell )
 {
 	int &n = m_pBrickDir[BrickOf( cell )];
 	if ( n )
@@ -196,19 +196,19 @@ CNeoSmokeFill::Brick_t &CNeoSmokeFill::TouchBrick( int cell )
 	return *pBrick;
 }
 
-int CNeoSmokeFill::CellState( int cell ) const
+int CNEOSmokeFill::CellState( int cell ) const
 {
 	const Brick_t *pBrick = FindBrick( cell );
 	return pBrick ? pBrick->state[BrickSlot( cell )] : (int)STATE_NONE;
 }
 
-int CNeoSmokeFill::CellDist( int cell ) const
+int CNEOSmokeFill::CellDist( int cell ) const
 {
 	const Brick_t *pBrick = FindBrick( cell );
 	return pBrick ? pBrick->dist[BrickSlot( cell )] : NEO_SMOKE_FILL_UNREACHED;
 }
 
-void CNeoSmokeFill::NoteMemory()
+void CNEOSmokeFill::NoteMemory()
 {
 	m_nPeakBytes = MAX( m_nPeakBytes, MemoryBytes() );
 }
@@ -232,7 +232,7 @@ static void ShrinkToCount( int *&pArray, int count )
 
 // The listed box: the gas box with a cell of margin, so a trilinear lookup
 // beside the gas stays inside it.
-void CNeoSmokeFill::FitBox()
+void CNEOSmokeFill::FitBox()
 {
 	const int latticeHi[3] = { LATTICE_XY - 1, LATTICE_XY - 1, LATTICE_Z - 1 };
 	const int seed[3] = { LATTICE_XY / 2, LATTICE_XY / 2, LATTICE_SEED_Z };
@@ -276,7 +276,7 @@ void CNeoSmokeFill::FitBox()
 }
 
 // Keeps what the finished field needs and frees the work arrays.
-void CNeoSmokeFill::Finish()
+void CNEOSmokeFill::Finish()
 {
 	FitBox();
 
@@ -316,7 +316,7 @@ void CNeoSmokeFill::Finish()
 	FreeWork();
 }
 
-void CNeoSmokeFill::BoxSize( int size[3] ) const
+void CNEOSmokeFill::BoxSize( int size[3] ) const
 {
 	const int frame[3] = { GRID_XY, GRID_XY, GRID_Z };
 	for ( int k = 0; k < 3; ++k )
@@ -325,7 +325,7 @@ void CNeoSmokeFill::BoxSize( int size[3] ) const
 	}
 }
 
-void CNeoSmokeFill::BoxSeedCorner( int corner[3] ) const
+void CNEOSmokeFill::BoxSeedCorner( int corner[3] ) const
 {
 	int offset[3];
 	BoxOffset( offset );
@@ -334,7 +334,7 @@ void CNeoSmokeFill::BoxSeedCorner( int corner[3] ) const
 	corner[2] = SEED_CELL_Z - offset[2];
 }
 
-void CNeoSmokeFill::BoxOffset( int offset[3] ) const
+void CNEOSmokeFill::BoxOffset( int offset[3] ) const
 {
 	const int shift[3] = { BOX_SHIFT_XY, BOX_SHIFT_XY, BOX_SHIFT_Z };
 	for ( int k = 0; k < 3; ++k )
@@ -343,7 +343,7 @@ void CNeoSmokeFill::BoxOffset( int offset[3] ) const
 	}
 }
 
-void CNeoSmokeFill::LatticeCell( int i, int &x, int &y, int &z ) const
+void CNEOSmokeFill::LatticeCell( int i, int &x, int &y, int &z ) const
 {
 	LatticeCoords( m_pOrder[i], x, y, z );
 	x -= BOX_SHIFT_XY;
@@ -351,24 +351,24 @@ void CNeoSmokeFill::LatticeCell( int i, int &x, int &y, int &z ) const
 	z -= BOX_SHIFT_Z;
 }
 
-bool CNeoSmokeFill::IsFinalized( int idx ) const
+bool CNEOSmokeFill::IsFinalized( int idx ) const
 {
 	return m_pFinalBits && ( ( m_pFinalBits[idx >> 6] >> ( idx & 63 ) ) & 1 ) != 0;
 }
 
-int CNeoSmokeFill::Dist( int idx ) const
+int CNEOSmokeFill::Dist( int idx ) const
 {
 	return m_pFinalDist[FinalRank( idx )];
 }
 
-int CNeoSmokeFill::FinalRank( int idx ) const
+int CNEOSmokeFill::FinalRank( int idx ) const
 {
 	const int w = idx >> 6;
 	const unsigned long long below = ( 1ull << ( idx & 63 ) ) - 1;
 	return m_pWordRank[w] + NeoSmokePopCount( m_pFinalBits[w] & below );
 }
 
-int CNeoSmokeFill::MemoryBytes() const
+int CNEOSmokeFill::MemoryBytes() const
 {
 	int bytes = 0;
 	if ( m_pBrickDir )
@@ -386,7 +386,7 @@ int CNeoSmokeFill::MemoryBytes() const
 	return bytes;
 }
 
-void CNeoSmokeFill::Start( INeoSmokeFillWorld *pWorld )
+void CNEOSmokeFill::Start( INEOSmokeFillWorld *pWorld )
 {
 	FreeWork();
 	delete[] m_pOrder;
@@ -417,7 +417,7 @@ void CNeoSmokeFill::Start( INeoSmokeFillWorld *pWorld )
 
 // The work arrays are allocated by the first step, not by Start: fills run
 // one at a time, so many waiting fills then hold one work set, not one each.
-void CNeoSmokeFill::Begin()
+void CNEOSmokeFill::Begin()
 {
 	m_bBegun = true;
 	AllocWork();
@@ -446,7 +446,7 @@ void CNeoSmokeFill::Begin()
 	HeapPush( seed, 0 );
 }
 
-bool CNeoSmokeFill::SeedCellOk( int x, int y, int z )
+bool CNEOSmokeFill::SeedCellOk( int x, int y, int z )
 {
 	if ( !CellOpen( x, y, z ) )
 	{
@@ -459,7 +459,7 @@ bool CNeoSmokeFill::SeedCellOk( int x, int y, int z )
 
 // The seed must be open and in plain sight of the grenade, or a grenade
 // resting against a thin wall or under a slab starts the gas on the far side.
-int CNeoSmokeFill::FindSeed()
+int CNEOSmokeFill::FindSeed()
 {
 	const int cx = LATTICE_XY / 2;
 	const int cy = LATTICE_XY / 2;
@@ -493,7 +493,7 @@ int CNeoSmokeFill::FindSeed()
 
 // A grenade under water starts the gas at the first air cell straight above
 // it, so it still smokes from the surface instead of making nothing.
-int CNeoSmokeFill::FindSeedAboveWater()
+int CNEOSmokeFill::FindSeedAboveWater()
 {
 	++m_nQueries;
 	if ( !m_pWorld->SeedInWater() )
@@ -523,7 +523,7 @@ int CNeoSmokeFill::FindSeedAboveWater()
 	return LatticeIndex( x, y, z );
 }
 
-bool CNeoSmokeFill::Step( int maxCells, int maxQueries )
+bool CNEOSmokeFill::Step( int maxCells, int maxQueries )
 {
 	if ( !m_bBegun && !m_bDone )
 	{
@@ -578,7 +578,7 @@ bool CNeoSmokeFill::Step( int maxCells, int maxQueries )
 
 // Grows the gas box by the cell when the padded box still fits the atlas.
 // Integer only and decided in pop order, so every client drops the same cells.
-bool CNeoSmokeFill::FitsAtlas( int cell )
+bool CNEOSmokeFill::FitsAtlas( int cell )
 {
 	int c[3];
 	LatticeCoords( cell, c[0], c[1], c[2] );
@@ -608,7 +608,7 @@ bool CNeoSmokeFill::FitsAtlas( int cell )
 	return true;
 }
 
-void CNeoSmokeFill::Relax( int cell )
+void CNEOSmokeFill::Relax( int cell )
 {
 	int c[3];
 	LatticeCoords( cell, c[0], c[1], c[2] );
@@ -704,7 +704,7 @@ void CNeoSmokeFill::Relax( int cell )
 // ---------------------------------------------------------------------------
 // World queries, cached
 // ---------------------------------------------------------------------------
-bool CNeoSmokeFill::CellOpen( int x, int y, int z )
+bool CNEOSmokeFill::CellOpen( int x, int y, int z )
 {
 	if ( !InLattice( x, y, z ) )
 	{
@@ -724,7 +724,7 @@ bool CNeoSmokeFill::CellOpen( int x, int y, int z )
 	return state == NEO_SMOKE_OCC_OPEN;
 }
 
-bool CNeoSmokeFill::LinkOpen( int x, int y, int z, int axis )
+bool CNEOSmokeFill::LinkOpen( int x, int y, int z, int axis )
 {
 	const int idx = LatticeIndex( x, y, z );
 	unsigned char &occ = TouchBrick( idx ).occ[BrickSlot( idx )];
@@ -743,7 +743,7 @@ bool CNeoSmokeFill::LinkOpen( int x, int y, int z, int axis )
 // p and q differ by at most one cell per axis. The answer depends only on the
 // cached occupancy, so it is remembered per cell and move: two bits for each
 // of the 13 moves, a move and its reverse sharing one entry.
-bool CNeoSmokeFill::BlockOpen( const int p[3], const int q[3] )
+bool CNEOSmokeFill::BlockOpen( const int p[3], const int q[3] )
 {
 	int move = ( q[0] - p[0] + 1 ) + 3 * ( q[1] - p[1] + 1 ) + 9 * ( q[2] - p[2] + 1 );
 	const int *base = p;
@@ -771,7 +771,7 @@ bool CNeoSmokeFill::BlockOpen( const int p[3], const int q[3] )
 // Every cell of the block p and q span must be open, and so must every link
 // inside it, so gas cannot slip through a wall thinner than a cell or around
 // a corner.
-bool CNeoSmokeFill::BlockOpenUncached( const int p[3], const int q[3] )
+bool CNEOSmokeFill::BlockOpenUncached( const int p[3], const int q[3] )
 {
 	int lo[3];
 	int hi[3];
@@ -824,7 +824,7 @@ bool CNeoSmokeFill::BlockOpenUncached( const int p[3], const int q[3] )
 // Walks the straight line between two cell centers in half-cell steps; each
 // step must pass BlockOpen. Integer only, so the answer is the same on every
 // compiler.
-bool CNeoSmokeFill::LineOpen( int from, int to )
+bool CNEOSmokeFill::LineOpen( int from, int to )
 {
 	int a[3];
 	int b[3];
@@ -870,7 +870,7 @@ bool CNeoSmokeFill::LineOpen( int from, int to )
 // Indexed binary heap keyed by (distance, cell index): a total order, so the
 // fill is the same on every machine.
 // ---------------------------------------------------------------------------
-bool CNeoSmokeFill::HeapLess( const HeapEntry_t &a, const HeapEntry_t &b )
+bool CNEOSmokeFill::HeapLess( const HeapEntry_t &a, const HeapEntry_t &b )
 {
 	if ( a.dist != b.dist )
 	{
@@ -880,13 +880,13 @@ bool CNeoSmokeFill::HeapLess( const HeapEntry_t &a, const HeapEntry_t &b )
 	return a.cell < b.cell;
 }
 
-void CNeoSmokeFill::HeapPlace( int pos, const HeapEntry_t &entry )
+void CNEOSmokeFill::HeapPlace( int pos, const HeapEntry_t &entry )
 {
 	m_pHeap[pos] = entry;
 	TouchBrick( entry.cell ).heapPos[BrickSlot( entry.cell )] = pos;
 }
 
-void CNeoSmokeFill::HeapPush( int cell, int dist )
+void CNEOSmokeFill::HeapPush( int cell, int dist )
 {
 	if ( m_nHeapCount == m_nHeapCap )
 	{
@@ -905,14 +905,14 @@ void CNeoSmokeFill::HeapPush( int cell, int dist )
 }
 
 // The cell's distance only ever drops while it is queued.
-void CNeoSmokeFill::HeapUpdate( int cell, int dist )
+void CNEOSmokeFill::HeapUpdate( int cell, int dist )
 {
 	const int pos = FindBrick( cell )->heapPos[BrickSlot( cell )];
 	m_pHeap[pos].dist = dist;
 	SiftUp( pos );
 }
 
-void CNeoSmokeFill::HeapPop()
+void CNEOSmokeFill::HeapPop()
 {
 	const int top = m_pHeap[0].cell;
 	TouchBrick( top ).heapPos[BrickSlot( top )] = -1;
@@ -925,7 +925,7 @@ void CNeoSmokeFill::HeapPop()
 	}
 }
 
-void CNeoSmokeFill::SiftUp( int pos )
+void CNEOSmokeFill::SiftUp( int pos )
 {
 	const HeapEntry_t entry = m_pHeap[pos];
 	while ( pos > 0 )
@@ -943,7 +943,7 @@ void CNeoSmokeFill::SiftUp( int pos )
 	HeapPlace( pos, entry );
 }
 
-void CNeoSmokeFill::SiftDown( int pos )
+void CNEOSmokeFill::SiftDown( int pos )
 {
 	const HeapEntry_t entry = m_pHeap[pos];
 	for ( ;; )

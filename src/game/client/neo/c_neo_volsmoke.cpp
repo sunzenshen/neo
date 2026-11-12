@@ -60,7 +60,7 @@ enum VolSmokeAtlasByte_t
 
 // The look noise turns about a point this far above the grenade, near the
 // middle of a cloud on open floor.
-static constexpr float NEO_VOLSMOKE_SPIN_HEIGHT = 8 * CNeoSmokeFill::CELL_SIZE;
+static constexpr float NEO_VOLSMOKE_SPIN_HEIGHT = 8 * CNEOSmokeFill::CELL_SIZE;
 
 // The atlas changes only while the fill, the bloom light or a regrow runs;
 // it is uploaded then, at most this often, and never after.
@@ -113,7 +113,7 @@ static constexpr float NEO_VOLSMOKE_MAX_DEPTH = 65536.0f;
 // One more cell covers the atlas rounding and the clamp at the grid's z ends,
 // and one march step keeps the cells the shader clips at the sphere empty.
 static constexpr float NEO_VOLSMOKE_MARCH_STEP = 8.0f; // the shader's STEP_LEN
-static constexpr float NEO_VOLSMOKE_SPHERE_MARGIN = ( 1.7321f + 1.0f ) * CNeoSmokeFill::CELL_SIZE + NEO_VOLSMOKE_MARCH_STEP;
+static constexpr float NEO_VOLSMOKE_SPHERE_MARGIN = ( 1.7321f + 1.0f ) * CNEOSmokeFill::CELL_SIZE + NEO_VOLSMOKE_MARCH_STEP;
 
 // The atlas's fourth byte holds the distance to the wall beside the gas, in
 // world units: positive on the gas side, negative past the wall's face. The
@@ -138,7 +138,7 @@ static constexpr float NEO_VOLSMOKE_WALL_MARGIN = 0.25f;
 static constexpr float NEO_VOLSMOKE_SLAB_MAX_TAN = 4.0f;
 
 // Until the fill finishes, the front grows as if toward the open-floor radius.
-static constexpr float NEO_VOLSMOKE_NOMINAL_RADIUS = CNeoSmokeFill::DOME_RADIUS;
+static constexpr float NEO_VOLSMOKE_NOMINAL_RADIUS = CNEOSmokeFill::DOME_RADIUS;
 
 // Look (cosmetic, may differ between clients).
 // The legacy particle color: a 0.5-0.6 grey times the light, desaturated
@@ -162,7 +162,7 @@ static constexpr float NEO_VOLSMOKE_SWEEP_EXTINCTION = 0.012f;
 
 // Light-grid samples: the grenade and four points at half the dome radius.
 static constexpr float NEO_VOLSMOKE_LIGHT_SAMPLE_UP = 32.0f;
-static constexpr float NEO_VOLSMOKE_LIGHT_SAMPLE_OUT = 0.5f * CNeoSmokeFill::DOME_RADIUS;
+static constexpr float NEO_VOLSMOKE_LIGHT_SAMPLE_OUT = 0.5f * CNEOSmokeFill::DOME_RADIUS;
 
 // The inside overlay averages the density over a cube of samples around the
 // camera, so it ramps in over about the cube's size while walking in, as the
@@ -315,11 +315,11 @@ private:
 // The fill's world queries (shared with the server), plus what only the
 // client draws: the walls beside the gas.
 // ---------------------------------------------------------------------------
-class CNeoVolSmokeWorld final : public CNeoSmokeWorld
+class CNeoVolSmokeWorld final : public CNEOSmokeWorld
 {
 public:
 	CNeoVolSmokeWorld( const Vector &gridMin, const int boxSize[3], const int seedCorner[3], const int latticeLo[3], const int latticeHi[3] )
-		: CNeoSmokeWorld( gridMin, boxSize, seedCorner, latticeLo, latticeHi )
+		: CNEOSmokeWorld( gridMin, boxSize, seedCorner, latticeLo, latticeHi )
 	{
 	}
 
@@ -378,7 +378,7 @@ public:
 
 	void PrintAudit( int volumeId ) const
 	{
-		for ( const NeoSmokeAuditCell_t &cell : m_AuditCells )
+		for ( const NEOSmokeAuditCell_t &cell : m_AuditCells )
 		{
 			const Vector pos = Center( cell.nCell[0], cell.nCell[1], cell.nCell[2] );
 			Warning( "neo_volsmoke_fill_audit: volume %d block says open, %s says solid at cell (%d %d %d) axis %d, world (%.1f %.1f %.1f)\n",
@@ -757,7 +757,7 @@ void C_NeoVolSmoke::Init( const Vector &origin, float spawnTime )
 	int *seedCorner = m_nSeedCorner;
 	m_Fill.BoxSize( m_nBox );
 	m_Fill.BoxSeedCorner( seedCorner );
-	const float cell = CNeoSmokeFill::CELL_SIZE;
+	const float cell = CNEOSmokeFill::CELL_SIZE;
 	for ( int a = 0; a < 3; ++a )
 	{
 		m_vecGridMin[a] = origin[a] - seedCorner[a] * cell;
@@ -787,7 +787,7 @@ void C_NeoVolSmoke::Init( const Vector &origin, float spawnTime )
 // point whatever box the volume is drawn in.
 Vector C_NeoVolSmoke::CellCenter( const int c[3] ) const
 {
-	const float cell = CNeoSmokeFill::CELL_SIZE;
+	const float cell = CNEOSmokeFill::CELL_SIZE;
 	return m_vecQueryMin + Vector( ( c[0] + m_nBoxOffset[0] + 0.5f ) * cell, ( c[1] + m_nBoxOffset[1] + 0.5f ) * cell,
 		( c[2] + m_nBoxOffset[2] + 0.5f ) * cell );
 }
@@ -800,7 +800,7 @@ void C_NeoVolSmoke::FitToField()
 	m_Fill.BoxSize( m_nBox );
 	m_Fill.BoxSeedCorner( m_nSeedCorner );
 	m_Fill.BoxOffset( m_nBoxOffset );
-	const float cell = CNeoSmokeFill::CELL_SIZE;
+	const float cell = CNEOSmokeFill::CELL_SIZE;
 	for ( int a = 0; a < 3; ++a )
 	{
 		m_vecGridMin[a] = m_vecSpawn[a] - m_nSeedCorner[a] * cell;
@@ -811,7 +811,7 @@ void C_NeoVolSmoke::FitToField()
 
 	SetCollisionBounds( m_vecGridMin - m_vecSpawn, m_vecGridMax - m_vecSpawn );
 	m_pWorld->SetDrawBox( m_nBoxOffset, m_nBox );
-	m_flDistRange = MAX( NEO_VOLSMOKE_DIST_RANGE, CNeoSmokeFill::DistToUnits( m_Fill.FrontDist() ) );
+	m_flDistRange = MAX( NEO_VOLSMOKE_DIST_RANGE, CNEOSmokeFill::DistToUnits( m_Fill.FrontDist() ) );
 
 	m_CarveTime.SetCount( m_Fill.FinalizedCount() );
 	for ( int k = 0; k < m_CarveTime.Count(); ++k )
@@ -828,7 +828,7 @@ void C_NeoVolSmoke::FitToField()
 void C_NeoVolSmoke::CreateAtlas()
 {
 	// As many tiles to a row as fit the atlas size; both sides a power of two.
-	m_nAtlasCols = MAX( 1, CNeoSmokeFill::ATLAS_SIZE / m_nBox[0] );
+	m_nAtlasCols = MAX( 1, CNEOSmokeFill::ATLAS_SIZE / m_nBox[0] );
 	const int rows = ( m_nBox[2] + m_nAtlasCols - 1 ) / m_nAtlasCols;
 	m_nAtlasW = VolSmokePow2( m_nAtlasCols * m_nBox[0] );
 	m_nAtlasH = VolSmokePow2( rows * m_nBox[1] );
@@ -981,7 +981,7 @@ Vector C_NeoVolSmoke::SampleColor() const
 // Whether the fill reached the cell holding the point.
 bool C_NeoVolSmoke::GasReached( const Vector &pos ) const
 {
-	const Vector g = ( pos - m_vecGridMin ) / CNeoSmokeFill::CELL_SIZE;
+	const Vector g = ( pos - m_vecGridMin ) / CNEOSmokeFill::CELL_SIZE;
 	const int c[3] = { (int)floorf( g.x ), (int)floorf( g.y ), (int)floorf( g.z ) };
 	return InBox( c[0], c[1], c[2] ) && m_Fill.IsFinalized( CellIndex( c[0], c[1], c[2] ) );
 }
@@ -1180,7 +1180,7 @@ float C_NeoVolSmoke::BloomRadius( float age ) const
 	const float bloom = VolSmokeBloom( age );
 	if ( FillDone() )
 	{
-		return CNeoSmokeFill::DistToUnits( m_Fill.FrontDist() ) * bloom;
+		return CNEOSmokeFill::DistToUnits( m_Fill.FrontDist() ) * bloom;
 	}
 
 	return NEO_VOLSMOKE_NOMINAL_RADIUS * bloom;
@@ -1190,7 +1190,7 @@ float C_NeoVolSmoke::BloomRadius( float age ) const
 // as the shader samples the atlas.
 float C_NeoVolSmoke::DensityAt( const Vector &pos, float front, float now ) const
 {
-	const Vector g = ( pos - m_vecGridMin ) / CNeoSmokeFill::CELL_SIZE - Vector( 0.5f, 0.5f, 0.5f );
+	const Vector g = ( pos - m_vecGridMin ) / CNEOSmokeFill::CELL_SIZE - Vector( 0.5f, 0.5f, 0.5f );
 	const int base[3] = { (int)floorf( g.x ), (int)floorf( g.y ), (int)floorf( g.z ) };
 	const float frac[3] = { g.x - base[0], g.y - base[1], g.z - base[2] };
 
@@ -1217,7 +1217,7 @@ float C_NeoVolSmoke::DensityAt( const Vector &pos, float front, float now ) cons
 			continue;
 		}
 
-		const float edge = clamp( ( front - CNeoSmokeFill::DistToUnits( m_Fill.Dist( i ) ) ) / NEO_VOLSMOKE_EDGE, 0.0f, 1.0f );
+		const float edge = clamp( ( front - CNEOSmokeFill::DistToUnits( m_Fill.Dist( i ) ) ) / NEO_VOLSMOKE_EDGE, 0.0f, 1.0f );
 		density += w * edge * edge * ( 3.0f - 2.0f * edge ) * CellWeight( i, now );
 	}
 
@@ -1348,7 +1348,7 @@ bool C_NeoVolSmoke::PackNewCells( float now )
 	for ( ; m_nPacked < count; ++m_nPacked )
 	{
 		const int i = m_Fill.FinalizedCell( m_nPacked );
-		const unsigned char dist = VolSmokeByte( CNeoSmokeFill::DistToUnits( m_Fill.Dist( i ) ) / m_flDistRange );
+		const unsigned char dist = VolSmokeByte( CNEOSmokeFill::DistToUnits( m_Fill.Dist( i ) ) / m_flDistRange );
 		unsigned char *texel = bits + AtlasOffset( i );
 		texel[VOLSMOKE_BYTE_DIST] = dist;
 		texel[VOLSMOKE_BYTE_WEIGHT] = VolSmokeByte( CellWeight( i, now ) );
@@ -1371,7 +1371,7 @@ bool C_NeoVolSmoke::PackNewCells( float now )
 			}
 		}
 
-		const float cell = CNeoSmokeFill::CELL_SIZE;
+		const float cell = CNEOSmokeFill::CELL_SIZE;
 		const Vector center = CellCenter( c );
 		float ownWall = NEO_VOLSMOKE_WALL_CAP;
 		for ( int w = 0; w < walls; ++w )
@@ -1480,7 +1480,7 @@ void C_NeoVolSmoke::UpdateBounds( float front )
 	for ( ; m_nBounded < count; ++m_nBounded )
 	{
 		const int i = m_Fill.FinalizedCell( m_nBounded );
-		if ( CNeoSmokeFill::DistToUnits( m_Fill.Dist( i ) ) >= front )
+		if ( CNEOSmokeFill::DistToUnits( m_Fill.Dist( i ) ) >= front )
 		{
 			break;
 		}
@@ -1502,7 +1502,7 @@ void C_NeoVolSmoke::UpdateBounds( float front )
 
 	// One cell of margin: the shader's trilinear lookup spreads a cell's
 	// smoke half a cell past it.
-	const float cell = CNeoSmokeFill::CELL_SIZE;
+	const float cell = CNEOSmokeFill::CELL_SIZE;
 	for ( int a = 0; a < 3; ++a )
 	{
 		m_vecSmokeMin[a] = MAX( m_vecGridMin[a], m_vecGridMin[a] + ( m_SmokeLo[a] - 1 ) * cell );
@@ -1553,7 +1553,7 @@ void C_NeoVolSmoke::SweepLight( float now )
 	}
 
 	unsigned char *bits = m_pRegen->Bits();
-	const float kStep = NEO_VOLSMOKE_SWEEP_EXTINCTION * CNeoSmokeFill::CELL_SIZE;
+	const float kStep = NEO_VOLSMOKE_SWEEP_EXTINCTION * CNEOSmokeFill::CELL_SIZE;
 	for ( int y = lo[1]; y <= hi[1]; ++y )
 	{
 		for ( int x = lo[0]; x <= hi[0]; ++x )
@@ -1598,7 +1598,7 @@ void C_NeoVolSmoke::Carve( const Vector &start, const Vector &end, float radius 
 	// Only visit the cells inside the capsule's bounding box.
 	Vector cmin = start.Min( end ) - Vector( radius, radius, radius );
 	Vector cmax = start.Max( end ) + Vector( radius, radius, radius );
-	const float cell = CNeoSmokeFill::CELL_SIZE;
+	const float cell = CNEOSmokeFill::CELL_SIZE;
 	int x0 = clamp( (int)floorf( ( cmin.x - m_vecGridMin.x ) / cell ), 0, m_nBox[0] - 1 );
 	int y0 = clamp( (int)floorf( ( cmin.y - m_vecGridMin.y ) / cell ), 0, m_nBox[1] - 1 );
 	int z0 = clamp( (int)floorf( ( cmin.z - m_vecGridMin.z ) / cell ), 0, m_nBox[2] - 1 );
@@ -1773,14 +1773,14 @@ void C_NeoVolSmoke::PrintStats() const
 	const int traces = m_pWorld ? m_pWorld->Traces() : 0;
 	Msg( "neo_volsmoke_stats: volume %d age %.2f done %d (at age %.2f) cells %d radius %.1f queries %d traces %d fill %.1f ms (peak frame %.2f ms), hash %08x, front ahead of the fill in %d frames\n",
 		m_nId, gpGlobals->curtime - m_flSpawnTime, FillDone() ? 1 : 0, m_flFillDoneAge, m_Fill.FinalizedCount(),
-		CNeoSmokeFill::DistToUnits( m_Fill.FrontDist() ), m_Fill.WorldQueries(), traces,
+		CNEOSmokeFill::DistToUnits( m_Fill.FrontDist() ), m_Fill.WorldQueries(), traces,
 		m_flFillSeconds * 1000.0, m_flFillPeakFrame * 1000.0, hash, m_nLagFrames );
 	const int fillBytes = m_Fill.MemoryBytes();
 	const int carveBytes = m_CarveTime.Count() * (int)sizeof( float );
 	const int worldBytes = m_pWorld ? m_pWorld->MemoryBytes() : 0;
 	const int atlasBytes = m_pRegen ? m_pRegen->MemoryBytes() : 0;
 	Msg( "neo_volsmoke_stats: volume %d field %016llx lattice %016llx (%d cells, front %.1f, dropped %d) atlas %016llx\n",
-		m_nId, ClientFieldHash(), LatticeFieldHash(), m_Fill.LatticeCount(), CNeoSmokeFill::DistToUnits( m_Fill.LatticeFrontDist() ),
+		m_nId, ClientFieldHash(), LatticeFieldHash(), m_Fill.LatticeCount(), CNEOSmokeFill::DistToUnits( m_Fill.LatticeFrontDist() ),
 		m_Fill.DroppedCount(), AtlasHash() );
 	Msg( "neo_volsmoke_stats: volume %d memory %d KB (fill %d KB, carve times %d KB, world cache %d KB, atlas copy %d KB)\n",
 		m_nId, ( fillBytes + carveBytes + worldBytes + atlasBytes ) / 1024, fillBytes / 1024, carveBytes / 1024,
@@ -1876,7 +1876,7 @@ void C_NeoVolSmoke::ClientThink()
 	m_flNextUpload = now + 1.0f / NEO_VOLSMOKE_UPLOAD_HZ;
 	if ( m_nPacked > 0 )
 	{
-		m_flUploadedFront = CNeoSmokeFill::DistToUnits( m_Fill.Dist( m_Fill.FinalizedCell( m_nPacked - 1 ) ) );
+		m_flUploadedFront = CNEOSmokeFill::DistToUnits( m_Fill.Dist( m_Fill.FinalizedCell( m_nPacked - 1 ) ) );
 	}
 }
 
@@ -2274,7 +2274,7 @@ void C_NeoVolSmoke::SampleAtlas( const Vector &pos, float &dist, float &weight, 
 	float frac[3];
 	for ( int a = 0; a < 3; ++a )
 	{
-		const float g = clamp( ( pos[a] - m_vecGridMin[a] ) / CNeoSmokeFill::CELL_SIZE - 0.5f, 0.0f, (float)( size[a] - 1 ) );
+		const float g = clamp( ( pos[a] - m_vecGridMin[a] ) / CNEOSmokeFill::CELL_SIZE - 0.5f, 0.0f, (float)( size[a] - 1 ) );
 		base[a] = MIN( (int)g, size[a] - 2 );
 		frac[a] = g - base[a];
 	}

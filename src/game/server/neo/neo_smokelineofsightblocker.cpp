@@ -46,7 +46,7 @@ CNEOSmokeLineOfSightBlocker *CNEOSmokeLineOfSightBlocker::CreateForSmokeField(co
 	}
 
 	// Until the field is filled the smoke is the nominal dome.
-	const float radius = CNeoSmokeFill::DOME_RADIUS;
+	const float radius = CNEOSmokeFill::DOME_RADIUS;
 	blocker->SetAbsOrigin(origin);
 	blocker->SetBounds(Vector(-radius), Vector(radius));
 	blocker->m_bFollowsSmokeField = true;

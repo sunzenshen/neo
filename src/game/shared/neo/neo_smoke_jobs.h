@@ -16,7 +16,7 @@
 
 class CJob;
 class IThreadPool;
-class CNeoSmokeFill;
+class CNEOSmokeFill;
 
 // A job works in chunks this size, so a cancel waits for one chunk at most.
 static constexpr int NEO_SMOKE_FILL_CHUNK_CELLS = 64;
@@ -33,7 +33,7 @@ IThreadPool *NEOSmokeFillPool();
 void NEOSmokeFillPoolShutdown();
 
 // Steps the fill until it is done or cancelled. Runs on a worker.
-void NEOSmokeFillRun( CNeoSmokeFill &fill, const CInterlockedInt &cancel );
+void NEOSmokeFillRun( CNEOSmokeFill &fill, const CInterlockedInt &cancel );
 
 // Waits for the job through the fill pool, releases it and clears the
 // pointer. The caller sets its cancel flag first.

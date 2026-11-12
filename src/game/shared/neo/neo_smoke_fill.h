@@ -14,7 +14,7 @@
 
 // Answers occupancy questions in grid coordinates. Implementations must see
 // only data every client shares (the world BSP).
-class INeoSmokeFillWorld
+class INEOSmokeFillWorld
 {
 public:
 	virtual bool CellSolid( int x, int y, int z ) = 0;
@@ -32,7 +32,7 @@ public:
 	virtual bool CellWater( int x, int y, int z ) = 0;
 };
 
-class CNeoSmokeFill
+class CNEOSmokeFill
 {
 public:
 	// World queries name cells in the frame of this seed-centered box inside
@@ -56,12 +56,12 @@ public:
 	// Path lengths are integers in 1/DIST_SCALE of a cell.
 	static constexpr int DIST_SCALE = 16;
 
-	CNeoSmokeFill();
-	~CNeoSmokeFill();
-	CNeoSmokeFill( const CNeoSmokeFill & ) = delete;
-	CNeoSmokeFill &operator=( const CNeoSmokeFill & ) = delete;
+	CNEOSmokeFill();
+	~CNEOSmokeFill();
+	CNEOSmokeFill( const CNEOSmokeFill & ) = delete;
+	CNEOSmokeFill &operator=( const CNEOSmokeFill & ) = delete;
 
-	void Start( INeoSmokeFillWorld *pWorld );
+	void Start( INEOSmokeFillWorld *pWorld );
 
 	// Finalizes up to maxCells cells, stopping early once the slice has made
 	// maxQueries world queries. Returns true when the fill is complete. The
@@ -228,7 +228,7 @@ private:
 	void SiftUp( int pos );
 	void SiftDown( int pos );
 
-	INeoSmokeFillWorld *m_pWorld;
+	INEOSmokeFillWorld *m_pWorld;
 
 	int *m_pBrickDir;          // brick number + 1 per brick of the grid, 0 = none
 	Brick_t **m_ppBricks;
