@@ -54,6 +54,14 @@ enum VolSmokeAtlasByte_t
 	VOLSMOKE_BYTE_ALPHA = 3,  // A: distance to the wall beside the gas
 };
 
+// The bytes the fill job builds per box cell for the first pack.
+enum VolSmokeCellByte_t
+{
+	VOLSMOKE_CELL_DIST = 0,
+	VOLSMOKE_CELL_WALL,
+	VOLSMOKE_CELL_BYTES,
+};
+
 // The look noise turns about a point this far above the grenade, near the
 // middle of a cloud on open floor.
 static constexpr float NEO_VOLSMOKE_SPIN_HEIGHT = 8 * CNEOSmokeFill::CELL_SIZE;
@@ -680,7 +688,7 @@ int C_NeoVolSmoke::s_nNextId = 0;
 
 // ---------------------------------------------------------------------------
 C_NeoVolSmoke::C_NeoVolSmoke()
-	: m_nId( s_nNextId++ ), m_bHasGrenade( false ), m_flSpawnTime( 0 ), m_pWorld( NULL ), m_pFillJob( NULL ), m_bFillDone( false ), m_flFillSeconds( 0 ), m_flFillPeakFrame( 0 ), m_flFillDoneAge( -1.0f ), m_nLagFrames( 0 ), m_nWallCells( 0 ), m_flWallSeconds( 0 ),
+	: m_nId( s_nNextId++ ), m_bHasGrenade( false ), m_flSpawnTime( 0 ), m_pWorld( NULL ), m_pFillJob( NULL ), m_bFillDone( false ), m_flFillSeconds( 0 ), m_flFillPeakFrame( 0 ), m_flFillDoneAge( -1.0f ), m_nLagFrames( 0 ), m_bCellBytes( false ), m_flCellBytesSeconds( 0 ),
 	  m_nBounded( 0 ), m_pRegen( NULL ), m_nPacked( 0 ), m_flNextUpload( 0 ), m_flRegrowEnd( -1.0f ), m_flUploadedFront( 0 ), m_bUploadPending( false ), m_nSlabTiles( 0 ), m_nSlabTilesCulled( 0 ), m_flDistRange( NEO_VOLSMOKE_DIST_RANGE ), m_nAtlasCols( 0 ), m_nAtlasW( 0 ), m_nAtlasH( 0 ), m_nRenderSerial( -1 )
 {
 	for ( int a = 0; a < 3; ++a )
@@ -823,6 +831,12 @@ Vector C_NeoVolSmoke::CellCenter( const int c[3] ) const
 		( c[2] + m_nBoxOffset[2] + 0.5f ) * cell );
 }
 
+// Path length at atlas value 1.
+float C_NeoVolSmoke::DistRange() const
+{
+	return MAX( NEO_VOLSMOKE_DIST_RANGE, CNEOSmokeFill::DistToUnits( m_Fill.FrontDist() ) );
+}
+
 // Once the fill is done: the box, the bounds and the atlas fitted to the field.
 // Nothing is drawn before, because the atlas layout depends on the box.
 void C_NeoVolSmoke::FitToField()
@@ -842,7 +856,7 @@ void C_NeoVolSmoke::FitToField()
 
 	SetCollisionBounds( m_vecGridMin - m_vecSpawn, m_vecGridMax - m_vecSpawn );
 	m_pWorld->SetDrawBox( m_nBoxOffset, m_nBox );
-	m_flDistRange = MAX( NEO_VOLSMOKE_DIST_RANGE, CNEOSmokeFill::DistToUnits( m_Fill.FrontDist() ) );
+	m_flDistRange = DistRange();
 
 	m_CarveTime.SetCount( m_Fill.FinalizedCount() );
 	for ( int k = 0; k < m_CarveTime.Count(); ++k )
@@ -1131,50 +1145,9 @@ void C_NeoVolSmoke::RunFill()
 
 	if ( m_Fill.IsDone() )
 	{
-		FindWalls();
-		m_flWallSeconds = Plat_FloatTime() - filled;
+		BuildCellBytes();
+		m_flCellBytesSeconds = Plat_FloatTime() - filled;
 	}
-}
-
-// The faces that block the six links of every finalized cell. World traces
-// only, like the fill's, so the fill job runs them and the frame that first
-// packs the volume reads the answers instead of tracing. A cancelled job
-// leaves m_nWallCells at zero; the pack then traces for itself.
-void C_NeoVolSmoke::FindWalls()
-{
-	int box[3];
-	int offset[3];
-	m_Fill.BoxSize( box );
-	m_Fill.BoxOffset( offset );
-	m_pWorld->SetDrawBox( offset, box );
-
-	const int count = m_Fill.FinalizedCount();
-	m_Walls.RemoveAll();
-	m_WallStart.SetCount( count + 1 );
-	for ( int k = 0; k < count; ++k )
-	{
-		if ( ( k % NEO_SMOKE_FILL_CHUNK_CELLS ) == 0 && m_nFillCancel != 0 )
-		{
-			return;
-		}
-
-		m_WallStart[k] = m_Walls.Count();
-		const int i = m_Fill.FinalizedCell( k );
-		const int c[3] = { i % box[0], ( i / box[0] ) % box[1], i / ( box[0] * box[1] ) };
-		for ( int link = 0; link < 6; ++link )
-		{
-			int n[3] = { c[0], c[1], c[2] };
-			n[link >> 1] += ( link & 1 ) ? 1 : -1;
-			VolSmokeWall_t wall;
-			if ( m_pWorld->LinkWall( c, n, wall.normal, wall.dist ) )
-			{
-				m_Walls.AddToTail( wall );
-			}
-		}
-	}
-
-	m_WallStart[count] = m_Walls.Count();
-	m_nWallCells = count;
 }
 
 // Cancels this volume's fill job and waits for it, so the fill, its world and
@@ -1415,61 +1388,70 @@ void C_NeoVolSmoke::ClearAtlas()
 	}
 }
 
-// Writes the cells the fill finalized since the last call. A trilinear lookup
-// beside the gas also reads cells without gas; those take the path length of
-// their nearest gas neighbor, so their zero weight fades the edge as before
-// instead of a jump in path length cutting it off.
-bool C_NeoVolSmoke::PackNewCells( float now )
+// The atlas's path length and wall distance of every cell of the box, from
+// the finished fill. A trilinear lookup beside the gas also reads cells
+// without gas; those take the path length of their nearest gas neighbor, so
+// their zero weight fades the edge instead of a jump in path length cutting
+// it off. Only world traces and the fill: the fill job runs it, so the frame
+// that first packs the volume copies bytes instead of tracing. A cancelled
+// job leaves the bytes unbuilt.
+void C_NeoVolSmoke::BuildCellBytes()
 {
-	unsigned char *bits = m_pRegen->Bits();
-	const int count = m_Fill.FinalizedCount();
-	const bool packed = m_nPacked < count;
-	for ( ; m_nPacked < count; ++m_nPacked )
-	{
-		const int i = m_Fill.FinalizedCell( m_nPacked );
-		const unsigned char dist = VolSmokeByte( CNEOSmokeFill::DistToUnits( m_Fill.Dist( i ) ) / m_flDistRange );
-		unsigned char *texel = bits + AtlasOffset( i );
-		texel[VOLSMOKE_BYTE_DIST] = dist;
-		texel[VOLSMOKE_BYTE_WEIGHT] = VolSmokeByte( CellWeight( i, now ) );
+	int box[3];
+	int offset[3];
+	m_Fill.BoxSize( box );
+	m_Fill.BoxOffset( offset );
+	m_pWorld->SetDrawBox( offset, box );
 
-		int c[3];
-		CellCoords( i, c[0], c[1], c[2] );
+	const float distRange = DistRange();
+	const float cell = CNEOSmokeFill::CELL_SIZE;
+	const int cells = box[0] * box[1] * box[2];
+	m_CellBytes.SetCount( cells * VOLSMOKE_CELL_BYTES );
+	Q_memset( m_CellBytes.Base(), 255, m_CellBytes.Count() );
+	unsigned char *bytes = m_CellBytes.Base();
+
+	const auto inBox = [&box]( int x, int y, int z )
+	{
+		return x >= 0 && y >= 0 && z >= 0 && x < box[0] && y < box[1] && z < box[2];
+	};
+
+	const int count = m_Fill.FinalizedCount();
+	for ( int k = 0; k < count; ++k )
+	{
+		if ( ( k % NEO_SMOKE_FILL_CHUNK_CELLS ) == 0 && m_nFillCancel != 0 )
+		{
+			return;
+		}
+
+		const int i = m_Fill.FinalizedCell( k );
+		const int c[3] = { i % box[0], ( i / box[0] ) % box[1], i / ( box[0] * box[1] ) };
+		const unsigned char dist = VolSmokeByte( CNEOSmokeFill::DistToUnits( m_Fill.Dist( i ) ) / distRange );
+		bytes[i * VOLSMOKE_CELL_BYTES + VOLSMOKE_CELL_DIST] = dist;
 
 		// The faces that block this cell's six links. A cell without gas beside
 		// it takes its distance to them, so the lookup crosses zero at the face.
 		Vector wallNormal[6];
 		float wallDist[6];
 		int walls = 0;
-		if ( m_nPacked < m_nWallCells )
+		for ( int link = 0; link < 6; ++link )
 		{
-			for ( int w = m_WallStart[m_nPacked]; w < m_WallStart[m_nPacked + 1]; ++w, ++walls )
+			int n[3] = { c[0], c[1], c[2] };
+			n[link >> 1] += ( link & 1 ) ? 1 : -1;
+			if ( m_pWorld->LinkWall( c, n, wallNormal[walls], wallDist[walls] ) )
 			{
-				wallNormal[walls] = m_Walls[w].normal;
-				wallDist[walls] = m_Walls[w].dist;
-			}
-		}
-		else
-		{
-			for ( int link = 0; link < 6; ++link )
-			{
-				int n[3] = { c[0], c[1], c[2] };
-				n[link >> 1] += ( link & 1 ) ? 1 : -1;
-				if ( m_pWorld->LinkWall( c, n, wallNormal[walls], wallDist[walls] ) )
-				{
-					++walls;
-				}
+				++walls;
 			}
 		}
 
-		const float cell = CNEOSmokeFill::CELL_SIZE;
-		const Vector center = CellCenter( c );
+		const Vector center = m_vecQueryMin + Vector( ( c[0] + offset[0] + 0.5f ) * cell, ( c[1] + offset[1] + 0.5f ) * cell,
+			( c[2] + offset[2] + 0.5f ) * cell );
 		float ownWall = NEO_VOLSMOKE_WALL_CAP;
 		for ( int w = 0; w < walls; ++w )
 		{
 			ownWall = MIN( ownWall, DotProduct( wallNormal[w], center ) - wallDist[w] );
 		}
 
-		texel[VOLSMOKE_BYTE_ALPHA] = VolSmokeWallByte( ownWall );
+		bytes[i * VOLSMOKE_CELL_BYTES + VOLSMOKE_CELL_WALL] = VolSmokeWallByte( ownWall );
 
 		for ( int dz = -1; dz <= 1; ++dz )
 		{
@@ -1477,18 +1459,18 @@ bool C_NeoVolSmoke::PackNewCells( float now )
 			{
 				for ( int dx = -1; dx <= 1; ++dx )
 				{
-					if ( !InBox( c[0] + dx, c[1] + dy, c[2] + dz ) )
+					if ( !inBox( c[0] + dx, c[1] + dy, c[2] + dz ) )
 					{
 						continue;
 					}
 
-					const int n = CellIndex( c[0] + dx, c[1] + dy, c[2] + dz );
+					const int n = ( ( c[2] + dz ) * box[1] + c[1] + dy ) * box[0] + c[0] + dx;
 					if ( m_Fill.IsFinalized( n ) )
 					{
 						continue;
 					}
 
-					unsigned char &nDist = bits[AtlasOffset( n ) + VOLSMOKE_BYTE_DIST];
+					unsigned char &nDist = bytes[n * VOLSMOKE_CELL_BYTES + VOLSMOKE_CELL_DIST];
 					nDist = MIN( nDist, dist );
 				}
 			}
@@ -1506,12 +1488,12 @@ bool C_NeoVolSmoke::PackNewCells( float now )
 			{
 				for ( int dx = -reach; dx <= reach; ++dx )
 				{
-					if ( !InBox( c[0] + dx, c[1] + dy, c[2] + dz ) )
+					if ( !inBox( c[0] + dx, c[1] + dy, c[2] + dz ) )
 					{
 						continue;
 					}
 
-					const int n = CellIndex( c[0] + dx, c[1] + dy, c[2] + dz );
+					const int n = ( ( c[2] + dz ) * box[1] + c[1] + dy ) * box[0] + c[0] + dx;
 					if ( m_Fill.IsFinalized( n ) )
 					{
 						continue;
@@ -1528,7 +1510,7 @@ bool C_NeoVolSmoke::PackNewCells( float now )
 					// say. Among the faces it is past, the nearest one counts: at an
 					// outside corner the farther face is not the one beside the gas.
 					const unsigned char newByte = MIN( VolSmokeWallByte( nWall ), NEO_VOLSMOKE_WALL_UNSET - 1 );
-					unsigned char &nWallByte = bits[AtlasOffset( n ) + VOLSMOKE_BYTE_ALPHA];
+					unsigned char &nWallByte = bytes[n * VOLSMOKE_CELL_BYTES + VOLSMOKE_CELL_WALL];
 					const bool bothPast = nWallByte < NEO_VOLSMOKE_WALL_ZERO_BYTE && newByte < NEO_VOLSMOKE_WALL_ZERO_BYTE;
 					if ( nWallByte == NEO_VOLSMOKE_WALL_UNSET )
 					{
@@ -1547,15 +1529,52 @@ bool C_NeoVolSmoke::PackNewCells( float now )
 		}
 	}
 
-	// The fill is done before the first pack, so every cell is packed now.
-	if ( m_nPacked >= m_nWallCells )
+	m_bCellBytes = true;
+}
+
+// Writes the finished fill into the atlas, once: the fill is done before the
+// first pack. The bytes come from the fill job, or are built here when it was
+// cancelled or there are no workers.
+bool C_NeoVolSmoke::PackNewCells( float now )
+{
+	const int count = m_Fill.FinalizedCount();
+	if ( m_nPacked >= count )
 	{
-		m_Walls.Purge();
-		m_WallStart.Purge();
-		m_nWallCells = 0;
+		return false;
 	}
 
-	return packed;
+	if ( !m_bCellBytes )
+	{
+		BuildCellBytes();
+		if ( !m_bCellBytes )
+		{
+			return false;
+		}
+	}
+
+	unsigned char *bits = m_pRegen->Bits();
+	const unsigned char *bytes = m_CellBytes.Base();
+	for ( int z = 0; z < m_nBox[2]; ++z )
+	{
+		for ( int y = 0; y < m_nBox[1]; ++y )
+		{
+			for ( int x = 0; x < m_nBox[0]; ++x, bytes += VOLSMOKE_CELL_BYTES )
+			{
+				unsigned char *texel = bits + AtlasOffset( x, y, z );
+				texel[VOLSMOKE_BYTE_DIST] = bytes[VOLSMOKE_CELL_DIST];
+				texel[VOLSMOKE_BYTE_ALPHA] = bytes[VOLSMOKE_CELL_WALL];
+			}
+		}
+	}
+
+	for ( ; m_nPacked < count; ++m_nPacked )
+	{
+		const int i = m_Fill.FinalizedCell( m_nPacked );
+		bits[AtlasOffset( i ) + VOLSMOKE_BYTE_WEIGHT] = VolSmokeByte( CellWeight( i, now ) );
+	}
+
+	m_CellBytes.Purge();
+	return true;
 }
 
 // Rewrites every cell's weight while carved cells refill.
@@ -1883,8 +1902,8 @@ void C_NeoVolSmoke::PrintStats() const
 	Msg( "neo_volsmoke_stats: volume %d memory %d KB (fill %d KB, carve times %d KB, world cache %d KB, atlas copy %d KB)\n",
 		m_nId, ( fillBytes + carveBytes + worldBytes + atlasBytes ) / 1024, fillBytes / 1024, carveBytes / 1024,
 		worldBytes / 1024, atlasBytes / 1024 );
-	Msg( "neo_volsmoke_stats: volume %d wall link traces %d (%.1f ms on the fill job)\n", m_nId, m_pWorld ? m_pWorld->WallTraces() : 0,
-		m_flWallSeconds * 1000.0 );
+	Msg( "neo_volsmoke_stats: volume %d wall link traces %d (cell bytes %.1f ms on the fill job)\n", m_nId, m_pWorld ? m_pWorld->WallTraces() : 0,
+		m_flCellBytesSeconds * 1000.0 );
 	Msg( "neo_volsmoke_stats: volume %d far slab tiles last frame %d, behind opaque smoke %d\n", m_nId, m_nSlabTiles, m_nSlabTilesCulled );
 	if ( m_pWorld && m_pWorld->AuditChecks() > 0 )
 	{
