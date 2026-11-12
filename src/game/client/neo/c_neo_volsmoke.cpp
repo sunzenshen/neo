@@ -35,7 +35,7 @@
 // ---------------------------------------------------------------------------
 
 // Atlas texel bytes in BGRA order. The atlas holds what does not change with
-// time: the gas path length, the cell weight (variation and carve hole) and
+// time: the gas path length, the cell weight (its variation) and
 // the light. The shader applies the bloom front and the fade.
 enum VolSmokeAtlasByte_t
 {
@@ -57,7 +57,7 @@ enum VolSmokeCellByte_t
 // middle of a cloud on open floor.
 static constexpr float NEO_VOLSMOKE_SPIN_HEIGHT = 8 * CNEOSmokeFill::CELL_SIZE;
 
-// The atlas changes only while the fill, the bloom light or a regrow runs;
+// The atlas changes only while the fill or the bloom light runs;
 // it is uploaded then, at most this often, and never after.
 static constexpr float NEO_VOLSMOKE_UPLOAD_HZ = 15.0f;
 
@@ -98,16 +98,6 @@ static constexpr float NEO_VOLSMOKE_PUFF_BITE = 28.0f;
 // front of the eye so a box around the camera keeps a finite screen size.
 static constexpr float NEO_VOLSMOKE_CULL_FRUSTUM_MARGIN = 1.02f;
 static constexpr float NEO_VOLSMOKE_CULL_MIN_DEPTH = 1.0f;
-
-// A carved cell refills over this many seconds. The radii are those of the
-// developer carve commands: a bullet's path and an explosion.
-static constexpr float NEO_VOLSMOKE_REGROW_TIME = 4.0f;
-static constexpr float NEO_VOLSMOKE_CARVE_RADIUS = 24.0f;
-static constexpr float NEO_VOLSMOKE_EXPLODE_RADIUS = 110.0f;
-
-// A carve segment shorter than this is a sphere about its start, which
-// keeps the projection onto it from dividing by zero.
-static constexpr float NEO_VOLSMOKE_POINT_CARVE_LEN_SQR = 1e-6f;
 
 // All smoke lies inside a sphere about the gas seed this much wider than the
 // front: a gas path is never shorter than the straight line from the seed,
@@ -586,7 +576,7 @@ int C_NeoVolSmoke::s_nNextId = 0;
 // ---------------------------------------------------------------------------
 C_NeoVolSmoke::C_NeoVolSmoke()
 	: m_nId( s_nNextId++ ), m_bHasGrenade( false ), m_flSpawnTime( 0 ), m_pWorld( nullptr ), m_pFillJob( nullptr ), m_bFillDone( false ), m_bCellBytes( false ),
-	  m_nBounded( 0 ), m_pRegen( nullptr ), m_nPacked( 0 ), m_flNextUpload( 0 ), m_flRegrowEnd( -1.0f ), m_flUploadedFront( 0 ), m_bUploadPending( false ), m_flDistRange( NEO_VOLSMOKE_DIST_RANGE ), m_nAtlasCols( 0 ), m_nAtlasW( 0 ), m_nAtlasH( 0 ), m_nRenderSerial( -1 )
+	  m_nBounded( 0 ), m_pRegen( nullptr ), m_nPacked( 0 ), m_flNextUpload( 0 ), m_flUploadedFront( 0 ), m_bUploadPending( false ), m_flDistRange( NEO_VOLSMOKE_DIST_RANGE ), m_nAtlasCols( 0 ), m_nAtlasW( 0 ), m_nAtlasH( 0 ), m_nRenderSerial( -1 )
 {
 	for ( int a = 0; a < 3; ++a )
 	{
@@ -620,14 +610,6 @@ C_NeoVolSmoke *C_NeoVolSmoke::Create( const Vector &origin, float spawnTime )
 	pVol->SetNextClientThink( CLIENT_THINK_ALWAYS );
 	s_Volumes.AddToTail( pVol );
 	return pVol;
-}
-
-void C_NeoVolSmoke::CarveAll( const Vector &start, const Vector &end, float radius )
-{
-	for ( int i = 0; i < s_Volumes.Count(); ++i )
-	{
-		s_Volumes[i]->Carve( start, end, radius );
-	}
 }
 
 C_NeoVolSmoke *C_NeoVolSmoke::CreateForGrenade( const Vector &origin, float spawnTime, C_BaseEntity *pGrenade )
@@ -734,12 +716,6 @@ void C_NeoVolSmoke::FitToField()
 	SetCollisionBounds( m_vecGridMin - m_vecSpawn, m_vecGridMax - m_vecSpawn );
 	m_pWorld->SetDrawBox( m_nBoxOffset, m_nBox );
 	m_flDistRange = DistRange();
-
-	m_CarveTime.SetCount( m_Fill.FinalizedCount() );
-	for ( int k = 0; k < m_CarveTime.Count(); ++k )
-	{
-		m_CarveTime[k] = -1.0f;
-	}
 
 	// Nothing draws before the fit, and from here the light samples can be
 	// kept to where the gas went.
@@ -1036,15 +1012,10 @@ void C_NeoVolSmoke::StopAllFills()
 	}
 }
 
-bool C_NeoVolSmoke::IsRegrowing( float now ) const
+// Has the atlas new cells to take, not only new light?
+bool C_NeoVolSmoke::ShapeChanged() const
 {
-	return now < m_flRegrowEnd + 1.0f / NEO_VOLSMOKE_UPLOAD_HZ;
-}
-
-// Has the atlas new cells or carve weights to take, not only new light?
-bool C_NeoVolSmoke::ShapeChanged( float now ) const
-{
-	return m_nPacked < m_Fill.FinalizedCount() || IsRegrowing( now );
+	return m_nPacked < m_Fill.FinalizedCount();
 }
 
 // The volume whose atlas upload has waited longest, a changed shape before a
@@ -1069,12 +1040,12 @@ C_NeoVolSmoke *C_NeoVolSmoke::UploadTurn()
 		}
 
 		const float now = gpGlobals->curtime;
-		if ( s_pTurn && s_pTurn->ShapeChanged( now ) && !pVol->ShapeChanged( now ) )
+		if ( s_pTurn && s_pTurn->ShapeChanged() && !pVol->ShapeChanged() )
 		{
 			continue;
 		}
 
-		if ( !s_pTurn || ( pVol->ShapeChanged( now ) && !s_pTurn->ShapeChanged( now ) ) || pVol->m_flNextUpload < s_pTurn->m_flNextUpload )
+		if ( !s_pTurn || ( pVol->ShapeChanged() && !s_pTurn->ShapeChanged() ) || pVol->m_flNextUpload < s_pTurn->m_flNextUpload )
 		{
 			s_pTurn = pVol;
 		}
@@ -1105,7 +1076,7 @@ float C_NeoVolSmoke::BloomRadius( float age ) const
 
 // Smoke density at a point: trilinear over the eight nearest cell centers,
 // as the shader samples the atlas.
-float C_NeoVolSmoke::DensityAt( const Vector &pos, float front, float now ) const
+float C_NeoVolSmoke::DensityAt( const Vector &pos, float front ) const
 {
 	const Vector g = ( pos - m_vecGridMin ) / CNEOSmokeFill::CELL_SIZE - Vector( 0.5f, 0.5f, 0.5f );
 	const int base[3] = { (int)floorf( g.x ), (int)floorf( g.y ), (int)floorf( g.z ) };
@@ -1135,7 +1106,7 @@ float C_NeoVolSmoke::DensityAt( const Vector &pos, float front, float now ) cons
 		}
 
 		const float edge = clamp( ( front - CNEOSmokeFill::DistToUnits( m_Fill.Dist( i ) ) ) / NEO_VOLSMOKE_EDGE, 0.0f, 1.0f );
-		density += w * edge * edge * ( 3.0f - 2.0f * edge ) * CellWeight( i, now );
+		density += w * edge * edge * ( 3.0f - 2.0f * edge ) * CellWeight( i );
 	}
 
 	if ( density <= 0.0f || !m_pRegen )
@@ -1167,7 +1138,7 @@ void C_NeoVolSmoke::AddInsideOverlay( float front, float now )
 	for ( int i = 0; i < side * side * side; ++i )
 	{
 		const Vector offset( i % side, ( i / side ) % side, i / ( side * side ) );
-		sum += DensityAt( eye - reach + offset * spacing, front, now );
+		sum += DensityAt( eye - reach + offset * spacing, front );
 	}
 
 	if ( sum <= 0.0f )
@@ -1189,21 +1160,12 @@ void C_NeoVolSmoke::AddInsideOverlay( float front, float now )
 	AddSmokeFogOverlayColored( share * VolSmokeBloom( age ) * VolSmokeFade( age ), display );
 }
 
-// Density of a cell inside the front: its variation, times the carve hole
-// while it refills.
-float C_NeoVolSmoke::CellWeight( int idx, float now ) const
+// Density of a cell inside the front: its variation.
+float C_NeoVolSmoke::CellWeight( int idx ) const
 {
-	float hole = 1.0f;
-	const float carveTime = CarveTime( idx );
-	if ( carveTime >= 0.0f )
-	{
-		hole = clamp( ( now - carveTime ) / NEO_VOLSMOKE_REGROW_TIME, 0.0f, 1.0f );
-		hole = hole * hole; // slow start, then refill
-	}
-
 	int c[3];
 	CellCoords( idx, c[0], c[1], c[2] );
-	return VolSmokeCellVariation( c[0] - m_nSeedCorner[0], c[1] - m_nSeedCorner[1], c[2] - m_nSeedCorner[2] ) * hole;
+	return VolSmokeCellVariation( c[0] - m_nSeedCorner[0], c[1] - m_nSeedCorner[1], c[2] - m_nSeedCorner[2] );
 }
 
 static unsigned char VolSmokeByte( float v )
@@ -1400,7 +1362,7 @@ void C_NeoVolSmoke::BuildCellBytes()
 // Writes the finished fill into the atlas, once: the fill is done before the
 // first pack. The bytes come from the fill job, or are built here when it was
 // cancelled or there are no workers.
-bool C_NeoVolSmoke::PackNewCells( float now )
+bool C_NeoVolSmoke::PackNewCells()
 {
 	const int count = m_Fill.FinalizedCount();
 	if ( m_nPacked >= count )
@@ -1435,22 +1397,11 @@ bool C_NeoVolSmoke::PackNewCells( float now )
 	for ( ; m_nPacked < count; ++m_nPacked )
 	{
 		const int i = m_Fill.FinalizedCell( m_nPacked );
-		bits[AtlasOffset( i ) + VOLSMOKE_BYTE_WEIGHT] = VolSmokeByte( CellWeight( i, now ) );
+		bits[AtlasOffset( i ) + VOLSMOKE_BYTE_WEIGHT] = VolSmokeByte( CellWeight( i ) );
 	}
 
 	m_CellBytes.Purge();
 	return true;
-}
-
-// Rewrites every cell's weight while carved cells refill.
-void C_NeoVolSmoke::PackWeights( float now )
-{
-	unsigned char *bits = m_pRegen->Bits();
-	for ( int k = 0; k < m_nPacked; ++k )
-	{
-		const int i = m_Fill.FinalizedCell( k );
-		bits[AtlasOffset( i ) + VOLSMOKE_BYTE_WEIGHT] = VolSmokeByte( CellWeight( i, now ) );
-	}
 }
 
 // Grows the drawn box over the finalized cells inside the front. Cells are
@@ -1503,7 +1454,7 @@ void C_NeoVolSmoke::UpdateBounds( float front )
 // the rest keep full light. The sweep sees every packed cell, not only
 // those inside the bloom front: the light then changes with the shape
 // alone, so a bloom costs an upload per fill stage, not one per frame.
-void C_NeoVolSmoke::SweepLight( float now )
+void C_NeoVolSmoke::SweepLight()
 {
 	const int count = m_Fill.FinalizedCount();
 	if ( count == 0 )
@@ -1550,79 +1501,9 @@ void C_NeoVolSmoke::SweepLight( float now )
 					continue;
 				}
 
-				T *= expf( -kStep * CellWeight( i, now ) );
+				T *= expf( -kStep * CellWeight( i ) );
 			}
 		}
-	}
-}
-
-void C_NeoVolSmoke::Carve( const Vector &start, const Vector &end, float radius )
-{
-	// Before the field is fitted nothing is drawn, so there is nothing to carve.
-	if ( !m_bFitted )
-	{
-		return;
-	}
-
-	// Quick reject against the AABB (expanded by radius).
-	Vector mins = m_vecGridMin - Vector( radius, radius, radius );
-	Vector maxs = m_vecGridMax + Vector( radius, radius, radius );
-	Ray_t ray;
-	ray.Init( start, end );
-	if ( !IsBoxIntersectingRay( mins, maxs, ray ) )
-	{
-		return;
-	}
-
-	const Vector seg = end - start;
-	const float  segLenSq = seg.LengthSqr();
-	const float  r2 = radius * radius;
-	const float  now = gpGlobals->curtime;
-
-	// Only visit the cells inside the capsule's bounding box.
-	Vector cmin = start.Min( end ) - Vector( radius, radius, radius );
-	Vector cmax = start.Max( end ) + Vector( radius, radius, radius );
-	const float cell = CNEOSmokeFill::CELL_SIZE;
-	int x0 = clamp( (int)floorf( ( cmin.x - m_vecGridMin.x ) / cell ), 0, m_nBox[0] - 1 );
-	int y0 = clamp( (int)floorf( ( cmin.y - m_vecGridMin.y ) / cell ), 0, m_nBox[1] - 1 );
-	int z0 = clamp( (int)floorf( ( cmin.z - m_vecGridMin.z ) / cell ), 0, m_nBox[2] - 1 );
-	int x1 = clamp( (int)floorf( ( cmax.x - m_vecGridMin.x ) / cell ), 0, m_nBox[0] - 1 );
-	int y1 = clamp( (int)floorf( ( cmax.y - m_vecGridMin.y ) / cell ), 0, m_nBox[1] - 1 );
-	int z1 = clamp( (int)floorf( ( cmax.z - m_vecGridMin.z ) / cell ), 0, m_nBox[2] - 1 );
-
-	bool touched = false;
-	for ( int z = z0; z <= z1; ++z )
-	{
-		for ( int y = y0; y <= y1; ++y )
-		{
-			for ( int x = x0; x <= x1; ++x )
-			{
-				const int i = CellIndex( x, y, z );
-				if ( !m_Fill.IsFinalized( i ) )
-				{
-					continue;
-				}
-
-				const Vector c = m_vecGridMin + Vector( ( x + 0.5f ) * cell, ( y + 0.5f ) * cell, ( z + 0.5f ) * cell );
-				float t = 0.0f;
-				if ( segLenSq > NEO_VOLSMOKE_POINT_CARVE_LEN_SQR )
-				{
-					t = clamp( DotProduct( c - start, seg ) / segLenSq, 0.0f, 1.0f );
-				}
-
-				const Vector closest = start + seg * t;
-				if ( ( c - closest ).LengthSqr() <= r2 )
-				{
-					m_CarveTime[m_Fill.FinalRank( i )] = now;
-					touched = true;
-				}
-			}
-		}
-	}
-
-	if ( touched )
-	{
-		m_flRegrowEnd = Max( m_flRegrowEnd, now + NEO_VOLSMOKE_REGROW_TIME );
 	}
 }
 
@@ -1660,9 +1541,7 @@ void C_NeoVolSmoke::ClientThink()
 		return;
 	}
 
-	// A grown volume with no carve refilling changes nothing.
-	const bool regrow = IsRegrowing( now );
-	m_bUploadPending = m_bUploadPending || ShapeChanged( now );
+	m_bUploadPending = m_bUploadPending || ShapeChanged();
 
 	// One upload a frame across all volumes: an upload can stall the frame.
 	// A volume packs and sweeps on its turn only, or many volumes would
@@ -1674,13 +1553,9 @@ void C_NeoVolSmoke::ClientThink()
 		return;
 	}
 
-	PackNewCells( now );
-	if ( regrow )
-	{
-		PackWeights( now );
-	}
+	PackNewCells();
 
-	SweepLight( now );
+	SweepLight();
 	m_Atlas->Download();
 	s_nUploadFrame = gpGlobals->framecount;
 	m_bUploadPending = false;
@@ -2626,9 +2501,7 @@ void C_NeoVolSmoke::BuildOpaqueSheet( IMatRenderContext *pRenderContext )
 	float x0 = FLT_MAX, x1 = -FLT_MAX, y0 = FLT_MAX, y1 = -FLT_MAX;
 	for ( const C_NeoVolSmoke *pVol : s_Volumes )
 	{
-		// A carved hole is narrower than a tile: its rays can be opaque while
-		// the hole is not.
-		if ( !pVol->m_pRegen || pVol->m_vecSmokeMax.x <= pVol->m_vecSmokeMin.x || gpGlobals->curtime < pVol->m_flRegrowEnd )
+		if ( !pVol->m_pRegen || pVol->m_vecSmokeMax.x <= pVol->m_vecSmokeMin.x )
 		{
 			continue;
 		}
