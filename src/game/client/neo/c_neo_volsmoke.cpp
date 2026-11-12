@@ -99,10 +99,8 @@ static constexpr float NEO_VOLSMOKE_CULL_STEP = 16.0f;
 // cutoff, so its different step phase cannot let hidden smoke show.
 static constexpr float NEO_VOLSMOKE_CULL_OPAQUE = 6.9f;
 
-// The shader's look noise at full strength moves the front in by up to this;
-// the cull assumes the most. The material does not default its strength, so
-// it is set every draw.
-static constexpr float NEO_VOLSMOKE_NOISE_AMP = 1.0f;
+// The shader's look noise moves the front in by up to this; the cull assumes
+// the most.
 static constexpr float NEO_VOLSMOKE_PUFF_BITE = 28.0f;
 
 // The grid covers the view frustum with this margin, and starts this far in
@@ -154,13 +152,13 @@ static constexpr float NEO_VOLSMOKE_SLAB_MAX_TAN = 4.0f;
 static constexpr float NEO_VOLSMOKE_NOMINAL_RADIUS = CNEOSmokeFill::DOME_RADIUS;
 
 // Look (cosmetic, may differ between clients).
-// The legacy particle color: a 0.5-0.6 grey times the light, desaturated
-// halfway to mid grey. It is a display value; the shader works in linear.
+// The legacy particle color: a 0.5-0.6 gray times the light, desaturated
+// halfway to mid gray. It is a display value; the shader works in linear.
 static constexpr float NEO_VOLSMOKE_GREY = 0.55f;
 static constexpr float NEO_VOLSMOKE_DESATURATE = 0.5f;
 static constexpr float NEO_VOLSMOKE_DISPLAY_GAMMA = 2.2f;
 
-// Below the knee the cloud darkens with its surroundings, as a grey wall
+// Below the knee the cloud darkens with its surroundings, as a gray wall
 // would, instead of keeping the legacy color's floor. The floor keeps a
 // cloud in a black room faintly visible, so a throw stays readable.
 static constexpr float NEO_VOLSMOKE_DARK_KNEE = 0.15f;
@@ -2240,7 +2238,6 @@ void C_NeoVolSmoke::SetDrawParams( IMaterial *pMat ) const
 	SetFloatVar( pMat, "$extinction", DrawExtinction() );
 	SetVec3Var( pMat, "$front", Vector( FrontRadius( age ), m_flDistRange, 1.0f / NEO_VOLSMOKE_EDGE ) );
 	SetFloatVar( pMat, "$age", age );
-	SetFloatVar( pMat, "$noiseamp", NEO_VOLSMOKE_NOISE_AMP );
 	SetIntVar( pMat, "$jitter", neo_volsmoke_jitter.GetInt() );
 	SetIntVar( pMat, "$debugmode", neo_volsmoke_debug.GetInt() );
 }
@@ -2959,7 +2956,7 @@ void C_NeoVolSmoke::BuildOpaqueSheet( IMatRenderContext *pRenderContext )
 	const Vector &up = CurrentViewUp();
 	const float tanX = NEO_VOLSMOKE_CULL_FRUSTUM_MARGIN / proj[0][0];
 	const float tanY = NEO_VOLSMOKE_CULL_FRUSTUM_MARGIN / proj[1][1];
-	const float bite = NEO_VOLSMOKE_PUFF_BITE * NEO_VOLSMOKE_NOISE_AMP;
+	const float bite = NEO_VOLSMOKE_PUFF_BITE;
 
 	// The volumes that can add smoke, and the screen rectangle that holds them.
 	CUtlVectorFixedGrowable< VolSmokeSheetVolume_t, 16 > vols;
