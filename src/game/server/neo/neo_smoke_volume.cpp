@@ -109,7 +109,7 @@ public:
 	// Fills up to `cells` cells; returns what the slice takes from the budget.
 	int Step( int cells );
 
-	bool WantsFill() const { return !m_Fill.IsDone() && !m_pFillJob; }
+	bool WantsFill() const { return !m_pFillJob && !m_Fill.IsDone(); }
 	bool IsFilling() const { return m_pFillJob != NULL; }
 	void StartJob( IThreadPool *pPool );
 
