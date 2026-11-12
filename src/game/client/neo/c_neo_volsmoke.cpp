@@ -1,4 +1,4 @@
-// NEO volumetric smoke - client-side voxel smoke volume (demo).
+// NEO volumetric smoke - the client's cloud of a smoke grenade.
 // See c_neo_volsmoke.h for the overview.
 
 #include "cbase.h"

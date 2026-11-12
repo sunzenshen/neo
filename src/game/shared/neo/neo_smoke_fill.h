@@ -83,10 +83,8 @@ public:
 	// in grid order, 0 to FinalizedCount() - 1.
 	int  FinalRank( int idx ) const;
 
-	// Heap bytes held now, and the most held at once while filling. The work
-	// arrays are freed when the fill is done.
+	// Heap bytes held now. The work arrays are freed when the fill is done.
 	int  MemoryBytes() const;
-	int  PeakMemoryBytes() const { return m_nPeakBytes; }
 
 	// Path length of the last finalized cell in the box (the final radius
 	// once done).
@@ -122,18 +120,6 @@ public:
 	}
 
 	static float DistToUnits( int dist ) { return (float)dist * ( CELL_SIZE / (float)DIST_SCALE ); }
-
-	static int Index( int x, int y, int z ) { return ( z * GRID_XY + y ) * GRID_XY + x; }
-	static void Coords( int idx, int &x, int &y, int &z )
-	{
-		x = idx % GRID_XY;
-		y = ( idx / GRID_XY ) % GRID_XY;
-		z = idx / ( GRID_XY * GRID_XY );
-	}
-	static bool InGrid( int x, int y, int z )
-	{
-		return x >= 0 && y >= 0 && z >= 0 && x < GRID_XY && y < GRID_XY && z < GRID_Z;
-	}
 
 private:
 	enum CellState_t
@@ -202,7 +188,6 @@ private:
 	Brick_t &TouchBrick( int cell );
 	int  CellState( int cell ) const;
 	int  CellDist( int cell ) const;
-	void NoteMemory();
 
 	bool FitsAtlas( int cell );
 	bool CellOpen( int x, int y, int z );
@@ -259,7 +244,6 @@ private:
 	int  m_nWords;             // 64-cell words of m_pFinalBits
 	int  m_nDropped;
 	int  m_nQueries;
-	int  m_nPeakBytes;
 	bool m_bDone;
 	bool m_bBegun;     // work arrays allocated and the seed placed
 };
