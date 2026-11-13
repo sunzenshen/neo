@@ -1124,6 +1124,20 @@ void C_NeoVolSmoke::AddInsideOverlay( float front, float now )
 {
 	const Vector eye = MainViewOrigin();
 	const Vector reach( NEO_VOLSMOKE_OVERLAY_REACH, NEO_VOLSMOKE_OVERLAY_REACH, NEO_VOLSMOKE_OVERLAY_REACH );
+
+	// Without the shader, the opaque box has no face between a camera inside
+	// it and the smoke, and its corners hold no smoke to sample.
+	if ( m_Material && m_SlabMaterial && !ShaderDraws() )
+	{
+		const bool boxDraws = m_vecSmokeMax.x > m_vecSmokeMin.x;
+		if ( boxDraws && IsPointInBox( eye, m_vecGridMin - reach, m_vecGridMax + reach ) )
+		{
+			AddSmokeFogOverlayColored( 1.0f, DisplayColor() );
+		}
+
+		return;
+	}
+
 	if ( !IsPointInBox( eye, m_vecSmokeMin - reach, m_vecSmokeMax + reach ) )
 	{
 		return;
@@ -1146,15 +1160,20 @@ void C_NeoVolSmoke::AddInsideOverlay( float front, float now )
 	const float age = now - m_flSpawnTime;
 	const float density = sum / ( side * side * side );
 	const float share = Clamp( density / NEO_VOLSMOKE_OVERLAY_FULL, 0.0f, 1.0f );
-	// The overlay is a display color: the cloud's own, so the view keeps
-	// its brightness on walking in, dark in a dark room.
+	AddSmokeFogOverlayColored( share * VolSmokeBloom( age ) * VolSmokeFade( age ), DisplayColor() );
+}
+
+// The overlay is a display color: the cloud's own, so the view keeps
+// its brightness on walking in, dark in a dark room.
+Vector C_NeoVolSmoke::DisplayColor() const
+{
 	Vector display;
 	for ( int k = 0; k < 3; ++k )
 	{
 		display[k] = powf( m_vecColor[k], 1.0f / NEO_VOLSMOKE_DISPLAY_GAMMA );
 	}
 
-	AddSmokeFogOverlayColored( share * VolSmokeBloom( age ) * VolSmokeFade( age ), display );
+	return display;
 }
 
 // Density of a cell inside the front: its variation.
@@ -2949,7 +2968,7 @@ static IMaterial *VolSmokeCoverMaterial()
 
 // Without the shader, an opaque box over everywhere the fill reached. It
 // hides more than the cloud would, so a client cannot gain by losing the
-// shader. Two-sided, so a camera inside it sees nothing past it either.
+// shader. From inside, the full inside overlay hides the view instead.
 void C_NeoVolSmoke::DrawCoverBox( IMatRenderContext *pRenderContext )
 {
 	IMaterial *pMat = VolSmokeCoverMaterial();
@@ -2958,10 +2977,11 @@ void C_NeoVolSmoke::DrawCoverBox( IMatRenderContext *pRenderContext )
 		return;
 	}
 
+	const Vector display = DisplayColor();
 	unsigned char rgb[3];
 	for ( int k = 0; k < 3; ++k )
 	{
-		rgb[k] = VolSmokeByte( powf( m_vecColor[k], 1.0f / NEO_VOLSMOKE_DISPLAY_GAMMA ) );
+		rgb[k] = VolSmokeByte( display[k] );
 	}
 
 	const Vector &a = m_vecGridMin;
