@@ -136,6 +136,20 @@
 
 //------------------
 
+// Kyla reload load piece (sv_neo_reload_experimental), played by a reload resumed after the unload.
+// The file starts just before its first transient
+
+"weapon_kyla.reload_load"
+{
+	"channel"		"CHAN_ITEM"
+	"soundlevel"		"SNDLVL_NORM"
+	"volume"		"1.0"
+	"pitch"			"PITCH_NORM"
+	"wave"			")weapons/kyla/kyla_reload_load.wav"
+}
+
+//------------------
+
 "weapon_kyla.npc_reload"
 {
 	"channel"		        "CHAN_AUTO"
@@ -191,6 +205,26 @@
 	"CompatibilityAttenuation"	"1.0"
 	"pitch"				"98,102"
         "wave"				"weapons/aa13/aa13_reload.wav"
+}
+
+// AA13 reload in per-step pieces (sv_neo_reload_experimental).
+
+"weapon_aa13.reload_load"
+{
+	"channel"		"CHAN_ITEM"
+	"soundlevel"		"SNDLVL_NORM"
+	"volume"		"1.0"
+	"pitch"			"PITCH_NORM"
+	"wave"			")weapons/aa13/aa13_reload_load.wav"
+}
+
+"weapon_aa13.reload_cycle"
+{
+	"channel"		"CHAN_ITEM"
+	"soundlevel"		"SNDLVL_NORM"
+	"volume"		"1.0"
+	"pitch"			"PITCH_NORM"
+	"wave"			")weapons/aa13/aa13_reload_cycle.wav"
 }
 
 //------------------
@@ -343,6 +377,26 @@
 	"wave"				"weapons/mpn45/mpn45_reload.wav"
 }
 
+// MPN45 reload in per-step pieces (sv_neo_reload_experimental).
+
+"weapon_mpn45.reload_load"
+{
+	"channel"		"CHAN_ITEM"
+	"soundlevel"		"SNDLVL_NORM"
+	"volume"		"1.0"
+	"pitch"			"PITCH_NORM"
+	"wave"			")weapons/mpn45/mpn45_reload_load.wav"
+}
+
+"weapon_mpn45.reload_cycle"
+{
+	"channel"		"CHAN_ITEM"
+	"soundlevel"		"SNDLVL_NORM"
+	"volume"		"1.0"
+	"pitch"			"PITCH_NORM"
+	"wave"			")weapons/mpn45/mpn45_reload_cycle.wav"
+}
+
 //-------------------
 
 "weapon_mpn45.npc_reload"
@@ -415,6 +469,26 @@
 	"CompatibilityAttenuation"	"1.0"
 	"pitch"				"PITCH_NORM"
 	"wave"				"weapons/srm/srm_reload.wav"
+}
+
+// SRM reload in per-step pieces (sv_neo_reload_experimental).
+
+"weapon_srm.reload_load"
+{
+	"channel"		"CHAN_ITEM"
+	"soundlevel"		"SNDLVL_NORM"
+	"volume"		"1.0"
+	"pitch"			"PITCH_NORM"
+	"wave"			")weapons/srm/srm_reload_load.wav"
+}
+
+"weapon_srm.reload_cycle"
+{
+	"channel"		"CHAN_ITEM"
+	"soundlevel"		"SNDLVL_NORM"
+	"volume"		"1.0"
+	"pitch"			"PITCH_NORM"
+	"wave"			")weapons/srm/srm_reload_cycle.wav"
 }
 
 //-------------------
@@ -502,6 +576,26 @@
 	"wave"				"weapons/jitte/jitte_reload.wav"
 }
 
+// Jitte reload in per-step pieces (sv_neo_reload_experimental).
+
+"weapon_jitte.reload_load"
+{
+	"channel"		"CHAN_ITEM"
+	"soundlevel"		"SNDLVL_NORM"
+	"volume"		"1.0"
+	"pitch"			"PITCH_NORM"
+	"wave"			")weapons/jitte/jitte_reload_load.wav"
+}
+
+"weapon_jitte.reload_cycle"
+{
+	"channel"		"CHAN_ITEM"
+	"soundlevel"		"SNDLVL_NORM"
+	"volume"		"1.0"
+	"pitch"			"PITCH_NORM"
+	"wave"			")weapons/jitte/jitte_reload_cycle.wav"
+}
+
 //-------------------
 
 "weapon_jitte.npc_reload"
@@ -584,6 +678,35 @@
 	"volume"			"1.0"
 	"pitch"				"PITCH_NORM"
 	"wave"				"weapons/m41/m41_reload.wav"
+}
+
+// M41 reload in per-step pieces (sv_neo_reload_experimental).
+
+"weapon_m41.reload_load"
+{
+	"channel"		"CHAN_ITEM"
+	"soundlevel"		"SNDLVL_NORM"
+	"volume"		"1.0"
+	"pitch"			"PITCH_NORM"
+	"wave"			")weapons/m41/m41_reload_load.wav"
+}
+
+"weapon_m41.reload_load_part2"
+{
+	"channel"		"CHAN_ITEM"
+	"soundlevel"		"SNDLVL_NORM"
+	"volume"		"1.0"
+	"pitch"			"PITCH_NORM"
+	"wave"			")weapons/m41/m41_reload_load_part2.wav"
+}
+
+"weapon_m41.reload_cycle"
+{
+	"channel"		"CHAN_ITEM"
+	"soundlevel"		"SNDLVL_NORM"
+	"volume"		"1.0"
+	"pitch"			"PITCH_NORM"
+	"wave"			")weapons/m41/m41_reload_cycle.wav"
 }
 
 //-------------------
@@ -677,6 +800,26 @@
 	"wave"				"weapons/srs/srs_reload.wav"
 }
 
+// SRS reload in per-step pieces (sv_neo_reload_experimental).
+
+"weapon_srs.reload_load"
+{
+	"channel"		"CHAN_ITEM"
+	"soundlevel"		"SNDLVL_NORM"
+	"volume"		"1.0"
+	"pitch"			"PITCH_NORM"
+	"wave"			")weapons/srs/srs_reload_load.wav"
+}
+
+"weapon_srs.reload_cycle"
+{
+	"channel"		"CHAN_ITEM"
+	"soundlevel"		"SNDLVL_NORM"
+	"volume"		"1.0"
+	"pitch"			"PITCH_NORM"
+	"wave"			")weapons/srs/srs_reload_cycle.wav"
+}
+
 //-------------------
 
 "weapon_srs.npc_reload"
@@ -757,6 +900,65 @@
 	"CompatibilityAttenuation"	"1.0"
 	"pitch"				"PITCH_NORM"
 	"wave"			        "weapons/zr68/zr68_reload.wav"
+}
+
+// ZR68 reload in per-step pieces (sv_neo_reload_experimental), named reload_<step>; a step's later sounds add _part2, _part3.
+// Each file starts just before its first transient
+
+"weapon_zr68.reload_load"
+{
+	"channel"		"CHAN_ITEM"
+	"soundlevel"		"SNDLVL_NORM"
+	"volume"		"1.0"
+	"pitch"			"PITCH_NORM"
+	"wave"			")weapons/zr68/zr68_reload_load.wav"
+}
+
+"weapon_zr68.reload_load_part2"
+{
+	"channel"		"CHAN_ITEM"
+	"soundlevel"		"SNDLVL_NORM"
+	"volume"		"1.0"
+	"pitch"			"PITCH_NORM"
+	"wave"			")weapons/zr68/zr68_reload_load_part2.wav"
+}
+
+"weapon_zr68.reload_cycle"
+{
+	"channel"		"CHAN_ITEM"
+	"soundlevel"		"SNDLVL_NORM"
+	"volume"		"1.0"
+	"pitch"			"PITCH_NORM"
+	"wave"			")weapons/zr68/zr68_reload_cycle.wav"
+}
+
+// ZR68L reload in per-step pieces (sv_neo_reload_experimental).
+
+"weapon_zr68l.reload_load"
+{
+	"channel"		"CHAN_ITEM"
+	"soundlevel"		"SNDLVL_NORM"
+	"volume"		"1.0"
+	"pitch"			"PITCH_NORM"
+	"wave"			")weapons/zr68l/zr68l_reload_load.wav"
+}
+
+"weapon_zr68l.reload_load_part2"
+{
+	"channel"		"CHAN_ITEM"
+	"soundlevel"		"SNDLVL_NORM"
+	"volume"		"1.0"
+	"pitch"			"PITCH_NORM"
+	"wave"			")weapons/zr68l/zr68l_reload_load_part2.wav"
+}
+
+"weapon_zr68l.reload_cycle"
+{
+	"channel"		"CHAN_ITEM"
+	"soundlevel"		"SNDLVL_NORM"
+	"volume"		"1.0"
+	"pitch"			"PITCH_NORM"
+	"wave"			")weapons/zr68l/zr68l_reload_cycle.wav"
 }
 
 //-------------------
@@ -892,6 +1094,26 @@
 	"wave"			        "weapons/mx/mx_reload.wav"
 }
 
+// MX reload in per-step pieces (sv_neo_reload_experimental).
+
+"weapon_mx.reload_load"
+{
+	"channel"		"CHAN_ITEM"
+	"soundlevel"		"SNDLVL_NORM"
+	"volume"		"1.0"
+	"pitch"			"PITCH_NORM"
+	"wave"			")weapons/mx/mx_reload_load.wav"
+}
+
+"weapon_mx.reload_cycle"
+{
+	"channel"		"CHAN_ITEM"
+	"soundlevel"		"SNDLVL_NORM"
+	"volume"		"1.0"
+	"pitch"			"PITCH_NORM"
+	"wave"			")weapons/mx/mx_reload_cycle.wav"
+}
+
 //-------------------
 
 "weapon_mx.npc_reload"
@@ -973,6 +1195,44 @@
 	"volume"			"1.0"	
 	"pitch"				"PITCH_NORM"
 	"wave"			        "weapons/pz/pz_reload.wav"
+}
+
+// PZ252 reload in per-step pieces (sv_neo_reload_experimental).
+
+"weapon_pz.reload_load"
+{
+	"channel"		"CHAN_ITEM"
+	"soundlevel"		"SNDLVL_NORM"
+	"volume"		"1.0"
+	"pitch"			"PITCH_NORM"
+	"wave"			")weapons/pz/pz_reload_load.wav"
+}
+
+"weapon_pz.reload_load_part2"
+{
+	"channel"		"CHAN_ITEM"
+	"soundlevel"		"SNDLVL_NORM"
+	"volume"		"1.0"
+	"pitch"			"PITCH_NORM"
+	"wave"			")weapons/pz/pz_reload_load_part2.wav"
+}
+
+"weapon_pz.reload_load_part3"
+{
+	"channel"		"CHAN_ITEM"
+	"soundlevel"		"SNDLVL_NORM"
+	"volume"		"1.0"
+	"pitch"			"PITCH_NORM"
+	"wave"			")weapons/pz/pz_reload_load_part3.wav"
+}
+
+"weapon_pz.reload_cycle"
+{
+	"channel"		"CHAN_ITEM"
+	"soundlevel"		"SNDLVL_NORM"
+	"volume"		"1.0"
+	"pitch"			"PITCH_NORM"
+	"wave"			")weapons/pz/pz_reload_cycle.wav"
 }
 
 //-------------------
