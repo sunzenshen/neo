@@ -856,6 +856,15 @@
 
 // SRS reload in per-step pieces (sv_neo_reload_experimental).
 
+"weapon_srs.reload_unload"
+{
+	"channel"		"CHAN_ITEM"
+	"soundlevel"		"SNDLVL_NORM"
+	"volume"		"1.0"
+	"pitch"			"PITCH_NORM"
+	"wave"			")weapons/srs/srs_reload_unload.wav"
+}
+
 "weapon_srs.reload_load"
 {
 	"channel"		"CHAN_ITEM"
