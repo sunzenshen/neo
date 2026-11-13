@@ -735,6 +735,7 @@ void CNEO_Player::Spawn(void)
 	BaseClass::Spawn();
 	FixupOnGroundFlag();
 	m_flSpawnTime = gpGlobals->curtime;
+	m_vecSpawnOrigin = GetAbsOrigin();
 
 	SetMaxHealth(MAX_HEALTH_FOR_CLASS[m_iNeoClass]);
 	SetHealth(GetMaxHealth());
@@ -3454,13 +3455,23 @@ void CNEO_Player::GiveDefaultItems(void)
 
 ConVar sv_neo_time_alive_until_cant_change_loadout("sv_neo_time_alive_until_cant_change_loadout", "25.0", FCVAR_CHEAT | FCVAR_REPLICATED, "How long after spawning changing loadouts is disabled ",
 	true, 0.0f, false, 1.0f);
+ConVar sv_neo_dist_from_spawn_until_cant_change_loadout("sv_neo_dist_from_spawn_until_cant_change_loadout", "1024.0", FCVAR_CHEAT | FCVAR_REPLICATED,
+	"How far from the spawn point, in horizontal units, changing loadouts is disabled", true, 0.0f, false, 1.0f);
+
+// Horizontal only: spawn areas are flat, and a lane is a horizontal move away from them
+bool CNEO_Player::IsFarFromSpawnForLoadout() const
+{
+	const float flMaxDist = sv_neo_dist_from_spawn_until_cant_change_loadout.GetFloat();
+	return GetAbsOrigin().AsVector2D().DistToSqr(m_vecSpawnOrigin.AsVector2D()) > Square(flMaxDist);
+}
 
 void CNEO_Player::GiveLoadoutWeapon(void)
 {
 	const NeoRoundStatus status = NEORules()->GetRoundStatus();
 	if (!(status == NeoRoundStatus::Idle || status == NeoRoundStatus::Warmup || status == NeoRoundStatus::Countdown) &&
 		(IsObserver() || IsDead() || m_bIneligibleForLoadoutPick
-		 || m_aliveTimer.IsGreaterThen(sv_neo_time_alive_until_cant_change_loadout.GetFloat())))
+		 || m_aliveTimer.IsGreaterThen(sv_neo_time_alive_until_cant_change_loadout.GetFloat())
+		 || IsFarFromSpawnForLoadout()))
 	{
 		return;
 	}
@@ -4246,6 +4257,7 @@ void CNEO_Player::SpectatorTakeoverPlayerPreThink()
 			m_bIneligibleForLoadoutPick = sv_neo_spec_replace_player_loadout_enable.GetBool() ?
 				pPlayerTakeoverTarget->m_bIneligibleForLoadoutPick
 				: true;
+			m_vecSpawnOrigin = pPlayerTakeoverTarget->m_vecSpawnOrigin;
 
 			// Teleport the takeover target's location and velocity.
 			SetAbsOrigin(pPlayerTakeoverTarget->GetAbsOrigin());

@@ -373,6 +373,11 @@ private:
 	int m_iBotDetectableBleedingInjuryEvents = 0;
 	bool m_bSpectatorTakeoverPlayerPending{false};
 
+	bool IsFarFromSpawnForLoadout() const;
+
+	// Where this life started, for the loadout change distance limit
+	Vector m_vecSpawnOrigin = vec3_origin;
+
 	// Cache for GetFogObscuredRatio for each player
 	mutable CNEO_Player_FogCacheEntry m_playerFogCache[MAX_PLAYERS_ARRAY_SAFE];
 
