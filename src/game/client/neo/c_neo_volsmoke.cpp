@@ -618,6 +618,16 @@ C_NeoVolSmoke *C_NeoVolSmoke::CreateForGrenade( const Vector &origin, float spaw
 		return nullptr;
 	}
 
+	// A full update announces the same networked smoke again; a second
+	// volume would draw the cloud twice and redo its fill.
+	for ( C_NeoVolSmoke *pVol : s_Volumes )
+	{
+		if ( pGrenade && pVol->m_hGrenade.Get() == pGrenade )
+		{
+			return pVol;
+		}
+	}
+
 	C_NeoVolSmoke *pVol = Create( origin, spawnTime );
 	if ( pVol )
 	{
