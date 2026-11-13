@@ -134,6 +134,7 @@ private:
 	static bool UsesCoverBoxes();
 	void BuildCoverReach();
 	void UpdateCoverBoxes( float now );
+	void UpdateInterimCover( float now );
 	void AddCoverOverlay();
 	bool InCoverBox( const Vector &point, float margin ) const;
 	void DrawCoverBoxes( IMatRenderContext *pRenderContext );

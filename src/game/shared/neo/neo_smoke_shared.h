@@ -23,6 +23,17 @@ static constexpr float NEO_VOLSMOKE_BLOOM_TIME = 5.5f;
 static constexpr float NEO_VOLSMOKE_FADE_START = 17.0f;
 static constexpr float NEO_VOLSMOKE_FADE_END = 25.0f;
 
+// Game time after detonation at which the server's queries switch from the
+// nominal dome to the field. A fill done by then waits for this tick, so
+// sight does not depend on when a worker finished: a fill normally ends
+// long before it, so in normal play every field switches at this tick and a
+// match replays the same way. A tick never waits for a fill, so a fill
+// still running then (many grenades at once, a loaded machine, a high
+// host_timescale) switches on the first tick after it ends, and the switch
+// then depends on the machine. The delay leaves a fill time to end even at
+// a high host_timescale, and the dome front is still small at this age.
+static constexpr float NEO_SMOKE_FIELD_LIVE_DELAY = 1.0f;
+
 // Step of the CPU smoke path. The server's sight and the client's path
 // sample alike, so the two sums are equal.
 static constexpr float NEO_VOLSMOKE_PATH_STEP = 16.0f;
