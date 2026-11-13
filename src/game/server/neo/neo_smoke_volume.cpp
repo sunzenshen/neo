@@ -53,17 +53,6 @@ void CNEOSmokeVolumeEnt::Spawn()
 // finished fields. The workers run at low priority, so the main thread
 // keeps its core.
 
-// Game time after detonation at which the queries switch from the nominal
-// dome to the field. A fill done by then waits for this tick, so sight
-// does not depend on when a worker finished: a fill normally ends long
-// before it, so in normal play every field switches at this tick and a
-// match replays the same way. A tick never waits for a fill, so a fill
-// still running then (many grenades at once, a loaded machine, a high
-// host_timescale) switches on the first tick after it ends, and the switch
-// then depends on the machine. The delay leaves a fill time to end even at
-// a high host_timescale, and the dome front is still small at this age.
-static constexpr float NEO_SMOKE_FIELD_LIVE_DELAY = 1.0f;
-
 // Without workers, fill work a tick, in finalized cells: each pending fill
 // may take up to PER_FILL, oldest first, until the tick's total reaches the
 // cap. A slice also stops after this many world queries per cell, which

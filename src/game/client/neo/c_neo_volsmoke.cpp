@@ -887,8 +887,9 @@ Vector C_NeoVolSmoke::SampleColor() const
 		}
 
 		// Only where the gas went: a point past a thin wall sees the light
-		// of a room the smoke never reaches.
-		if ( i > 0 && ( CNeoVolSmokeWorld::PointSolid( pos ) || !GasReached( pos ) ) )
+		// of a room the smoke never reaches. Before the fill is done that
+		// is not known yet, so only the grenade's own point counts.
+		if ( i > 0 && ( !m_bBoxFitted || CNeoVolSmokeWorld::PointSolid( pos ) || !GasReached( pos ) ) )
 		{
 			continue;
 		}
@@ -1567,6 +1568,7 @@ void C_NeoVolSmoke::ClientThink()
 	StepFills();
 	if ( !FillDone() )
 	{
+		UpdateInterimCover( now );
 		return;
 	}
 
@@ -1576,7 +1578,7 @@ void C_NeoVolSmoke::ClientThink()
 	}
 
 	// The cover boxes need only the finished fill, so a box client has no
-	// atlas.
+	// atlas. The field's own boxes replace the interim box in this think.
 	if ( UsesCoverBoxes() )
 	{
 		UpdateCoverBoxes( now );
@@ -1916,7 +1918,7 @@ int C_NeoVolSmoke::DrawModel( int flags )
 	}
 
 	// The cover boxes lead the front, so they can draw before the first
-	// cell fills.
+	// cell fills, and before the fill is done.
 	if ( UsesCoverBoxes() )
 	{
 		if ( m_nCoverBoxes == 0 )
@@ -3043,6 +3045,54 @@ bool C_NeoVolSmoke::UsesCoverBoxes()
 	}
 
 	return !s_pProbe || V_strcmp( s_pProbe->GetShaderName(), "Neo_VolSmoke" ) != 0;
+}
+
+// Until the fill is done, the client has no field to build boxes from, but
+// the server can block sight from the throw. One box then holds every place the
+// server's smoke can be: the nominal dome, by the front a little ahead,
+// until the server's field goes live; after that the whole lattice the fill
+// may use.
+void C_NeoVolSmoke::UpdateInterimCover( float now )
+{
+	m_nCoverBoxes = 0;
+	if ( !UsesCoverBoxes() )
+	{
+		return;
+	}
+
+	const float ahead = now - m_flSpawnTime + NEO_VOLSMOKE_COVER_LEAD;
+	if ( ahead < NEO_SMOKE_FIELD_LIVE_DELAY )
+	{
+		const float radius = CNEOSmokeFill::DOME_RADIUS * VolSmokeBloom( ahead );
+		const Vector reach( radius, radius, radius );
+		m_vecCoverMin[0] = m_vecSpawn - reach;
+		m_vecCoverMax[0] = m_vecSpawn + reach;
+	}
+	else
+	{
+		int latticeLo[3];
+		int latticeHi[3];
+		m_Fill.LatticeBounds( latticeLo, latticeHi );
+		const float cell = CNEOSmokeFill::CELL_SIZE;
+		for ( int a = 0; a < 3; ++a )
+		{
+			m_vecCoverMin[0][a] = m_vecQueryMin[a] + latticeLo[a] * cell;
+			m_vecCoverMax[0][a] = m_vecQueryMin[a] + latticeHi[a] * cell;
+		}
+	}
+
+	m_nCoverBoxes = 1;
+	if ( m_vecColor.IsZero() )
+	{
+		m_vecColor = SampleColor();
+	}
+
+	if ( GetRenderHandle() != INVALID_CLIENT_RENDER_HANDLE )
+	{
+		ClientLeafSystem()->RenderableChanged( GetRenderHandle() );
+	}
+
+	AddCoverOverlay();
 }
 
 // An opaque box has no face between a camera inside it and the smoke, so the
