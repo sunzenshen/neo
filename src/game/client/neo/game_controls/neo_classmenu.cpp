@@ -225,8 +225,10 @@ void CNeoClassMenu::OnCommand(const char *command)
 	if (Q_stristr(commandBuffer, "setclass") != 0)
 	{ // Picking class, stay on this screen
 		int classNumber = commandBuffer[9] - '1'; // Needed for skin images, 0 indexed, recon class is 1
-		if (team->IsClassFull(classNumber))
+		if (!IsClassSelectable(player, team, classNumber))
+		{
 			return;
+		}
 
 		UpdateSkinImages(classNumber);
 		engine->ClientCmd(commandBuffer);
@@ -246,6 +248,16 @@ void CNeoClassMenu::OnCommand(const char *command)
 		ChangeMenu("teammenu");
 		return;
 	}
+}
+
+bool CNeoClassMenu::IsClassSelectable(const C_NEO_Player *pPlayer, const C_Team *pTeam, int neoClass) const
+{
+	if (pTeam->IsClassFull(neoClass))
+	{
+		return false;
+	}
+
+	return pPlayer->CanChangeClassNow() || pPlayer->GetClass() == neoClass;
 }
 
 void CNeoClassMenu::ChangeMenu(const char* menuName = NULL)
@@ -289,21 +301,21 @@ void CNeoClassMenu::OnKeyCodeReleased(vgui::KeyCode code)
 
 	switch (code) {
 	case KEY_1:
-		if (!team->IsClassFull(NEO_CLASS_RECON))
+		if (IsClassSelectable(player, team, NEO_CLASS_RECON))
 		{
 			UpdateSkinImages(0);
 			engine->ClientCmd("setclass 1");
 		}
 		break;
 	case KEY_2:
-		if (!team->IsClassFull(NEO_CLASS_ASSAULT))
+		if (IsClassSelectable(player, team, NEO_CLASS_ASSAULT))
 		{
 			UpdateSkinImages(1);
 			engine->ClientCmd("setclass 2");
 		}
 		break;
 	case KEY_3:
-		if (!team->IsClassFull(NEO_CLASS_SUPPORT))
+		if (IsClassSelectable(player, team, NEO_CLASS_SUPPORT))
 		{
 			UpdateSkinImages(2);
 			engine->ClientCmd("setclass 3");
@@ -475,7 +487,9 @@ void CNeoClassMenu::OnThink()
 		return;
 	}
 
-	auto updateClassButtonAndLabel = [&pLocalPlayer, &localPlayerTeam](vgui::Label *pClassLabel, vgui::Button *pClassButton, int neoClass, ConVar *classLimit)
+	const bool bClassLocked = !pLocalPlayer->CanChangeClassNow();
+
+	auto updateClassButtonAndLabel = [&pLocalPlayer, &localPlayerTeam, bClassLocked](vgui::Label *pClassLabel, vgui::Button *pClassButton, int neoClass, ConVar *classLimit)
 		{
 			if (!pClassLabel || !pClassButton)
 			{
@@ -502,7 +516,15 @@ void CNeoClassMenu::OnThink()
 				pClassButton->SetEnabled(true);
 			}
 
-			if (NEORules()->IsTeamplay())
+			// The server would only queue this class for the next life, so offer the current class alone
+			const bool bLockedOut = bClassLocked && pLocalPlayer->GetClass() != neoClass;
+			if (bLockedOut)
+			{
+				V_sprintf_safe(textBuff, "LOCKED");
+				pClassButton->SetEnabled(false);
+			}
+
+			if (NEORules()->IsTeamplay() || bLockedOut)
 			{
 				pClassLabel->SetVisible(true);
 				pClassLabel->SetText(textBuff);

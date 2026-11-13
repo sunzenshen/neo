@@ -93,6 +93,7 @@ IMPLEMENT_CLIENTCLASS_DT(C_NEO_Player, DT_NEO_Player, CNEO_Player)
 	RecvPropBool(RECVINFO(m_bCarryingGhost)),
 
 	RecvPropTime(RECVINFO(m_flCamoAuxLastTime)),
+	RecvPropTime(RECVINFO(m_flSpawnTime)),
 	RecvPropTime(RECVINFO(m_flVisionLastTime)),
 	RecvPropTime(RECVINFO(m_flJumpLastTime)),
 	RecvPropTime(RECVINFO(m_flNextPingTime)),
@@ -469,6 +470,7 @@ C_NEO_Player::C_NEO_Player()
 	m_bInAim = false;
 	m_bCarryingGhost = false;
 	m_bIneligibleForLoadoutPick = false;
+	m_flSpawnTime = 0;
 	m_bInLean = NEO_LEAN_NONE;
 
 	m_flCamoAuxLastTime = 0;

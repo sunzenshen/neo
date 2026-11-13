@@ -149,6 +149,7 @@ public:
 	bool ShouldDrawHL2StyleQuickHud( void );
 
 	int GetClass() const { return m_iNeoClass; }
+	bool CanChangeClassNow() const;
 	int GetStar() const { return m_iNeoStar; }
 	int GetDisplayedHealth(int mode) const;
 
@@ -251,6 +252,7 @@ public:
 	CNetworkVar(int, m_bInLean);
 	CNetworkVar(bool, m_bCarryingGhost);
 	CNetworkVar(bool, m_bIneligibleForLoadoutPick);
+	CNetworkVar(float, m_flSpawnTime);
 	CNetworkHandle(CBaseEntity, m_hServerRagdoll);
 	CNetworkHandle(CBasePlayer, m_hCommandingPlayer);
 
