@@ -166,6 +166,26 @@ static constexpr int NEO_VOLSMOKE_OVERLAY_SIDE = 3; // samples per axis
 // smallest cell variation, so the core hides the viewmodel as legacy does.
 static constexpr float NEO_VOLSMOKE_OVERLAY_FULL = 0.5f;
 
+// Without the shader, opaque boxes stand in for the cloud. While the cloud
+// blooms they are rebuilt this often, each time for the front this far
+// ahead, so the boxes stay ahead of the server's front between rebuilds and
+// across the offset between the two clocks.
+static constexpr float NEO_VOLSMOKE_COVER_PERIOD = 0.25f;
+static constexpr float NEO_VOLSMOKE_COVER_LEAD = 0.35f;
+
+// Clouds whose fills end in one frame would rebuild in the same frames. A
+// volume's first period is cut to one of this many shares, in turn by the
+// order of first builds, so their rebuilds spread over the period. A
+// shorter period only rebuilds sooner.
+static constexpr int NEO_VOLSMOKE_COVER_PHASES = 8;
+
+// The lookup spreads a cell's smoke half a cell past it.
+static constexpr float NEO_VOLSMOKE_COVER_SKIN = 0.5f * CNEOSmokeFill::CELL_SIZE;
+
+// The near plane clips a box face this close to the eye, so the full inside
+// overlay covers the view there.
+static constexpr float NEO_VOLSMOKE_COVER_NEAR_MARGIN = 16.0f;
+
 // Dynamic lights (muzzle flashes, explosions) light the smoke as they light
 // the legacy particles, fading to nothing a particle radius past the light's
 // own radius. The shader adds the light in linear, after the darkness factor,
@@ -575,10 +595,10 @@ int C_NeoVolSmoke::s_nNextId = 0;
 
 // ---------------------------------------------------------------------------
 C_NeoVolSmoke::C_NeoVolSmoke()
-	: m_nId( s_nNextId++ ), m_bFitted( false ), m_flSpawnTime( 0 ), m_pWorld( nullptr ), m_pFillJob( nullptr ), m_bFillDone( false ),
+	: m_nId( s_nNextId++ ), m_bBoxFitted( false ), m_bFitted( false ), m_flSpawnTime( 0 ), m_pWorld( nullptr ), m_pFillJob( nullptr ), m_bFillDone( false ),
 	  m_bCellBytes( false ), m_nBounded( 0 ), m_pRegen( nullptr ), m_flDistRange( NEO_VOLSMOKE_DIST_RANGE ), m_nAtlasCols( 0 ),
 	  m_nAtlasW( 0 ), m_nAtlasH( 0 ), m_nPacked( 0 ), m_flNextUpload( 0 ), m_flUploadedFront( 0 ), m_bUploadPending( false ),
-	  m_nRenderSerial( -1 )
+	  m_nRenderSerial( -1 ), m_nCoverBoxes( 0 ), m_flNextCover( 0 ), m_bCoverFinal( false ), m_bCoverReachOnJob( false )
 {
 	for ( int a = 0; a < 3; ++a )
 	{
@@ -620,9 +640,10 @@ C_NeoVolSmoke *C_NeoVolSmoke::CreateForGrenade( const Vector &origin, float spaw
 
 	// A full update announces the same networked smoke again; a second
 	// volume would draw the cloud twice and redo its fill.
+	Assert( pGrenade );
 	for ( C_NeoVolSmoke *pVol : s_Volumes )
 	{
-		if ( pGrenade && pVol->m_hGrenade.Get() == pGrenade )
+		if ( pVol->m_hGrenade.Get() == pGrenade )
 		{
 			return pVol;
 		}
@@ -682,6 +703,10 @@ void C_NeoVolSmoke::Init( const Vector &origin, float spawnTime )
 	int latticeLo[3];
 	int latticeHi[3];
 	m_Fill.LatticeBounds( latticeLo, latticeHi );
+
+	// The fill job cannot ask the material system.
+	m_bCoverReachOnJob = UsesCoverBoxes();
+
 	m_pWorld = new CNeoVolSmokeWorld( m_vecGridMin, m_nBox, seedCorner, latticeLo, latticeHi );
 	m_Fill.Start( m_pWorld );
 
@@ -704,11 +729,10 @@ float C_NeoVolSmoke::DistRange() const
 	return Max( NEO_VOLSMOKE_DIST_RANGE, CNEOSmokeFill::DistToUnits( m_Fill.FrontDist() ) );
 }
 
-// Once the fill is done: the box, the bounds and the atlas fitted to the field.
-// Nothing is drawn before, because the atlas layout depends on the box.
-void C_NeoVolSmoke::FitToField()
+// Once the fill is done: the box and the bounds fitted to the field.
+void C_NeoVolSmoke::FitBoxToField()
 {
-	m_bFitted = true;
+	m_bBoxFitted = true;
 	m_Fill.BoxSize( m_nBox );
 	m_Fill.BoxSeedCorner( m_nSeedCorner );
 	m_Fill.BoxOffset( m_nBoxOffset );
@@ -725,9 +749,15 @@ void C_NeoVolSmoke::FitToField()
 	m_pWorld->SetDrawBox( m_nBoxOffset, m_nBox );
 	m_flDistRange = DistRange();
 
-	// Nothing draws before the fit, and from here the light samples can be
-	// kept to where the gas went.
+	// From here the light samples can be kept to where the gas went.
 	m_vecColor = SampleColor();
+}
+
+// The atlas and materials, whose layout depends on the fitted box. The
+// smoke shader draws nothing before them.
+void C_NeoVolSmoke::FitToField()
+{
+	m_bFitted = true;
 	CreateAtlas();
 }
 
@@ -988,14 +1018,18 @@ void C_NeoVolSmoke::StepFill( double budget )
 	}
 }
 
-// The fill job, on a worker. It touches only the fill and its world; the
-// chunks let StopFill cancel it quickly.
+// The fill job, on a worker. It touches only the fill, its world and the
+// cover reach; the chunks let StopFill cancel it quickly.
 void C_NeoVolSmoke::RunFill()
 {
 	NEOSmokeFillRun( m_Fill, m_nFillCancel );
 	if ( m_Fill.IsDone() )
 	{
 		BuildCellBytes();
+		if ( m_bCoverReachOnJob && m_Fill.FinalizedCount() > 0 )
+		{
+			BuildCoverReach();
+		}
 	}
 }
 
@@ -1134,19 +1168,6 @@ void C_NeoVolSmoke::AddInsideOverlay( float front, float now )
 {
 	const Vector eye = MainViewOrigin();
 	const Vector reach( NEO_VOLSMOKE_OVERLAY_REACH, NEO_VOLSMOKE_OVERLAY_REACH, NEO_VOLSMOKE_OVERLAY_REACH );
-
-	// Without the shader, the opaque box has no face between a camera inside
-	// it and the smoke, and its corners hold no smoke to sample.
-	if ( m_Material && m_SlabMaterial && !ShaderDraws() )
-	{
-		const bool boxDraws = m_vecSmokeMax.x > m_vecSmokeMin.x;
-		if ( boxDraws && IsPointInBox( eye, m_vecGridMin - reach, m_vecGridMax + reach ) )
-		{
-			AddSmokeFogOverlayColored( 1.0f, DisplayColor() );
-		}
-
-		return;
-	}
 
 	if ( !IsPointInBox( eye, m_vecSmokeMin - reach, m_vecSmokeMax + reach ) )
 	{
@@ -1544,12 +1565,31 @@ void C_NeoVolSmoke::ClientThink()
 	}
 
 	StepFills();
+	if ( !FillDone() )
+	{
+		return;
+	}
+
+	if ( !m_bBoxFitted )
+	{
+		FitBoxToField();
+	}
+
+	// The cover boxes need only the finished fill, so a box client has no
+	// atlas.
+	if ( UsesCoverBoxes() )
+	{
+		UpdateCoverBoxes( now );
+		AddCoverOverlay();
+		return;
+	}
+
 	if ( !m_bFitted )
 	{
 		// Creating a volume's atlas and materials takes a millisecond or
 		// two; clouds that appear together fit one a frame, as they pack.
 		static int s_nFitFrame = -1;
-		if ( !FillDone() || s_nFitFrame == gpGlobals->framecount )
+		if ( s_nFitFrame == gpGlobals->framecount )
 		{
 			return;
 		}
@@ -1596,20 +1636,34 @@ void C_NeoVolSmoke::ClientThink()
 // ---------------------------------------------------------------------------
 void C_NeoVolSmoke::GetRenderBounds( Vector &mins, Vector &maxs )
 {
-	// Before the first cell fills there is nothing to place.
-	if ( m_vecSmokeMax.x <= m_vecSmokeMin.x )
-	{
-		mins = maxs = m_vecSpawn - GetRenderOrigin();
-		return;
-	}
-
 	// The box that holds smoke, not the whole grid. The engine draws a
 	// translucent renderable in the nearest leaf its bounds touch, after the
 	// translucent world surfaces of that leaf and of every leaf behind it.
 	// Tight bounds keep glass that stands in front of the smoke out of those
 	// leaves, so it is drawn over the smoke and not under it.
-	mins = m_vecSmokeMin - GetRenderOrigin();
-	maxs = m_vecSmokeMax - GetRenderOrigin();
+	Vector lo = m_vecSmokeMin;
+	Vector hi = m_vecSmokeMax;
+
+	// Before the first cell fills there is no smoke box. The cover boxes
+	// reach past the smoke the shader would draw, and can stand before it.
+	const bool smokeBox = m_vecSmokeMax.x > m_vecSmokeMin.x;
+	if ( !smokeBox )
+	{
+		lo = hi = m_vecSpawn;
+		if ( m_nCoverBoxes > 0 )
+		{
+			lo = m_vecCoverMin[0];
+			hi = m_vecCoverMax[0];
+		}
+	}
+
+	mins = lo - GetRenderOrigin();
+	maxs = hi - GetRenderOrigin();
+	for ( int i = 0; i < m_nCoverBoxes; ++i )
+	{
+		VectorMin( mins, m_vecCoverMin[i] - GetRenderOrigin(), mins );
+		VectorMax( maxs, m_vecCoverMax[i] - GetRenderOrigin(), maxs );
+	}
 }
 
 // A volume is one renderable that a player can stand inside. Sorted by its
@@ -1642,7 +1696,8 @@ bool C_NeoVolSmoke::SortDepth( IClientRenderable *pRenderable, const Vector &vie
 		}
 	}
 
-	if ( !pVolume || !pVolume->m_bFitted || pVolume->m_vecSmokeMax.x <= pVolume->m_vecSmokeMin.x )
+	const bool drawn = pVolume && ( pVolume->m_vecSmokeMax.x > pVolume->m_vecSmokeMin.x || pVolume->m_nCoverBoxes > 0 );
+	if ( !drawn || !pVolume->m_bBoxFitted )
 	{
 		return false;
 	}
@@ -1839,16 +1894,6 @@ void C_NeoVolSmoke::SetDrawParams( IMaterial *pMat ) const
 
 int C_NeoVolSmoke::DrawModel( int flags )
 {
-	if ( !m_Atlas.IsValid() )
-	{
-		return 0;
-	}
-
-	if ( !m_Material || m_Material->IsErrorMaterial() || !m_SlabMaterial || m_SlabMaterial->IsErrorMaterial() )
-	{
-		return 0;
-	}
-
 	// The scene depth the shader clips against is only current in the main view.
 	if ( CurrentViewID() != VIEW_MAIN )
 	{
@@ -1870,6 +1915,30 @@ int C_NeoVolSmoke::DrawModel( int flags )
 		return 0;
 	}
 
+	// The cover boxes lead the front, so they can draw before the first
+	// cell fills.
+	if ( UsesCoverBoxes() )
+	{
+		if ( m_nCoverBoxes == 0 )
+		{
+			return 0;
+		}
+
+		CMatRenderContextPtr pRenderContext( materials );
+		DrawCoverBoxes( pRenderContext );
+		return 1;
+	}
+
+	if ( !m_Atlas.IsValid() )
+	{
+		return 0;
+	}
+
+	if ( !m_Material || m_Material->IsErrorMaterial() || !m_SlabMaterial || m_SlabMaterial->IsErrorMaterial() )
+	{
+		return 0;
+	}
+
 	// Nothing to draw before the first cell fills.
 	if ( m_vecSmokeMax.x <= m_vecSmokeMin.x )
 	{
@@ -1877,12 +1946,6 @@ int C_NeoVolSmoke::DrawModel( int flags )
 	}
 
 	CMatRenderContextPtr pRenderContext( materials );
-
-	if ( !ShaderDraws() )
-	{
-		DrawCoverBox( pRenderContext );
-		return 1;
-	}
 
 	SetDrawParams( m_Material );
 	SetDrawParams( m_SlabMaterial );
@@ -2954,14 +3017,6 @@ void C_NeoVolSmoke::DrawNearPass( IMatRenderContext *pRenderContext )
 	pMesh->Draw();
 }
 
-// The shader falls back on hardware without ps_3_0; the material then
-// carries the fallback shader's name.
-bool C_NeoVolSmoke::ShaderDraws()
-{
-	return V_strcmp( m_Material->GetShaderName(), "Neo_VolSmoke" ) == 0
-		&& V_strcmp( m_SlabMaterial->GetShaderName(), "Neo_VolSmoke" ) == 0;
-}
-
 static IMaterial *VolSmokeCoverMaterial()
 {
 	static IMaterial *s_pMat = nullptr;
@@ -2976,10 +3031,131 @@ static IMaterial *VolSmokeCoverMaterial()
 	return s_pMat;
 }
 
-// Without the shader, an opaque box over everywhere the fill reached. It
-// hides more than the cloud would, so a client cannot gain by losing the
+// Without the shader, the cloud's own boxes say where it can block sight.
+// The shader picks its fallback by the hardware alone, so a material that is
+// never drawn answers for every volume.
+bool C_NeoVolSmoke::UsesCoverBoxes()
+{
+	static IMaterial *s_pProbe = nullptr;
+	if ( !s_pProbe )
+	{
+		s_pProbe = materials->CreateMaterial( "__neo_volsmoke_probe", new KeyValues( "Neo_VolSmoke" ) );
+	}
+
+	return !s_pProbe || V_strcmp( s_pProbe->GetShaderName(), "Neo_VolSmoke" ) != 0;
+}
+
+// An opaque box has no face between a camera inside it and the smoke, so the
+// full inside overlay hides the view there.
+void C_NeoVolSmoke::AddCoverOverlay()
+{
+	if ( InCoverBox( MainViewOrigin(), NEO_VOLSMOKE_COVER_NEAR_MARGIN ) )
+	{
+		AddSmokeFogOverlayColored( 1.0f, DisplayColor() );
+	}
+}
+
+// How far each gas cell's smoke can reach, for the cover boxes. Only the
+// fill: the fill job runs it, so clouds whose fills end in one frame do not
+// stall that frame.
+void C_NeoVolSmoke::BuildCoverReach()
+{
+	int box[3];
+	m_Fill.BoxSize( box );
+	CUtlVector< float > cornerDist;
+	cornerDist.SetCount( box[0] * box[1] * box[2] );
+	m_CoverReach.SetCount( m_Fill.FinalizedCount() );
+	VolSmokeCoverReach( m_Fill, DistRange(), m_CoverReach.Base(), cornerDist.Base() );
+}
+
+// Rebuilds the cover boxes while the cloud blooms. They hold every gas cell
+// that can have smoke near it by the front a little ahead, so they cover
+// all the smoke the server's sight test reads. Once the cloud is full grown
+// they hold all its cells and stay until the volume is released.
+void C_NeoVolSmoke::UpdateCoverBoxes( float now )
+{
+	if ( m_bCoverFinal || now < m_flNextCover )
+	{
+		return;
+	}
+
+	// A fill without gas leaves the server's field without smoke to block
+	// sight, so there is nothing to cover.
+	if ( m_Fill.FinalizedCount() == 0 )
+	{
+		m_nCoverBoxes = 0;
+		m_bCoverFinal = true;
+		return;
+	}
+
+	const int nCells = m_nBox[0] * m_nBox[1] * m_nBox[2];
+	if ( m_CoverReach.Count() == 0 )
+	{
+		BuildCoverReach();
+	}
+
+	// The server's front, not FrontRadius: the shader's upload limit does
+	// not hold the server back.
+	const float age = now - m_flSpawnTime;
+	const float front = CNEOSmokeFill::DistToUnits( m_Fill.FrontDist() ) * VolSmokeBloom( age + NEO_VOLSMOKE_COVER_LEAD );
+
+	// The volumes rebuild on the main thread only, so they share the mask.
+	static CUtlVector< unsigned char > s_Mask;
+	s_Mask.SetCount( nCells );
+	VolSmokeCoverMask( m_Fill, m_CoverReach.Base(), front, s_Mask.Base() );
+
+	VolSmokeCoverBox_t boxes[NEO_VOLSMOKE_COVER_BOXES];
+	m_nCoverBoxes = VolSmokeCoverSplit( s_Mask.Base(), m_nBox, boxes, NEO_VOLSMOKE_COVER_BOXES );
+
+	const float cell = CNEOSmokeFill::CELL_SIZE;
+	const Vector skin( NEO_VOLSMOKE_COVER_SKIN, NEO_VOLSMOKE_COVER_SKIN, NEO_VOLSMOKE_COVER_SKIN );
+	for ( int i = 0; i < m_nCoverBoxes; ++i )
+	{
+		const VolSmokeCoverBox_t &box = boxes[i];
+		m_vecCoverMin[i] = m_vecGridMin + Vector( box.lo[0], box.lo[1], box.lo[2] ) * cell - skin;
+		m_vecCoverMax[i] = m_vecGridMin + Vector( box.hi[0] + 1, box.hi[1] + 1, box.hi[2] + 1 ) * cell + skin;
+	}
+
+	// The first build is the one with no next time set yet.
+	float period = NEO_VOLSMOKE_COVER_PERIOD;
+	if ( m_flNextCover == 0.0f )
+	{
+		static int s_nPhase = 0;
+		s_nPhase = s_nPhase % NEO_VOLSMOKE_COVER_PHASES + 1;
+		period *= static_cast< float >( s_nPhase ) / NEO_VOLSMOKE_COVER_PHASES;
+	}
+
+	m_flNextCover = now + period;
+	m_bCoverFinal = age >= NEO_VOLSMOKE_BLOOM_TIME;
+	if ( m_bCoverFinal )
+	{
+		m_CoverReach.Purge();
+	}
+
+	if ( GetRenderHandle() != INVALID_CLIENT_RENDER_HANDLE )
+	{
+		ClientLeafSystem()->RenderableChanged( GetRenderHandle() );
+	}
+}
+
+bool C_NeoVolSmoke::InCoverBox( const Vector &point, float margin ) const
+{
+	const Vector grow( margin, margin, margin );
+	for ( int i = 0; i < m_nCoverBoxes; ++i )
+	{
+		if ( IsPointInBox( point, m_vecCoverMin[i] - grow, m_vecCoverMax[i] + grow ) )
+		{
+			return true;
+		}
+	}
+
+	return false;
+}
+
+// Without the shader, opaque boxes over every place the smoke can be. They
+// hide more than the cloud would, so a client cannot gain by losing the
 // shader. From inside, the full inside overlay hides the view instead.
-void C_NeoVolSmoke::DrawCoverBox( IMatRenderContext *pRenderContext )
+void C_NeoVolSmoke::DrawCoverBoxes( IMatRenderContext *pRenderContext )
 {
 	IMaterial *pMat = VolSmokeCoverMaterial();
 	if ( !pMat || pMat->IsErrorMaterial() )
@@ -2994,13 +3170,6 @@ void C_NeoVolSmoke::DrawCoverBox( IMatRenderContext *pRenderContext )
 		rgb[k] = VolSmokeByte( display[k] );
 	}
 
-	const Vector &a = m_vecGridMin;
-	const Vector &b = m_vecGridMax;
-	const Vector corners[8] =
-	{
-		Vector( a.x, a.y, a.z ), Vector( b.x, a.y, a.z ), Vector( b.x, b.y, a.z ), Vector( a.x, b.y, a.z ),
-		Vector( a.x, a.y, b.z ), Vector( b.x, a.y, b.z ), Vector( b.x, b.y, b.z ), Vector( a.x, b.y, b.z ),
-	};
 	static const unsigned short indices[36] =
 	{
 		0, 2, 1,  0, 3, 2,
@@ -3018,18 +3187,33 @@ void C_NeoVolSmoke::DrawCoverBox( IMatRenderContext *pRenderContext )
 	IMesh *pMesh = pRenderContext->GetDynamicMesh( true, nullptr, nullptr, pMat );
 
 	CMeshBuilder meshBuilder;
-	meshBuilder.Begin( pMesh, MATERIAL_TRIANGLES, 8, 36 );
-	for ( int i = 0; i < 8; ++i )
+	meshBuilder.Begin( pMesh, MATERIAL_TRIANGLES, 8 * m_nCoverBoxes, 36 * m_nCoverBoxes );
+	for ( int box = 0; box < m_nCoverBoxes; ++box )
 	{
-		meshBuilder.Position3fv( corners[i].Base() );
-		meshBuilder.Color4ub( rgb[0], rgb[1], rgb[2], 255 );
-		meshBuilder.AdvanceVertex();
+		const Vector &a = m_vecCoverMin[box];
+		const Vector &b = m_vecCoverMax[box];
+		const Vector corners[8] =
+		{
+			Vector( a.x, a.y, a.z ), Vector( b.x, a.y, a.z ), Vector( b.x, b.y, a.z ), Vector( a.x, b.y, a.z ),
+			Vector( a.x, a.y, b.z ), Vector( b.x, a.y, b.z ), Vector( b.x, b.y, b.z ), Vector( a.x, b.y, b.z ),
+		};
+		for ( int i = 0; i < 8; ++i )
+		{
+			meshBuilder.Position3fv( corners[i].Base() );
+			meshBuilder.Color4ub( rgb[0], rgb[1], rgb[2], 255 );
+			meshBuilder.AdvanceVertex();
+		}
 	}
-	for ( int i = 0; i < 36; ++i )
+
+	for ( int box = 0; box < m_nCoverBoxes; ++box )
 	{
-		meshBuilder.Index( indices[i] );
-		meshBuilder.AdvanceIndex();
+		for ( int i = 0; i < 36; ++i )
+		{
+			meshBuilder.Index( indices[i] + 8 * box );
+			meshBuilder.AdvanceIndex();
+		}
 	}
+
 	meshBuilder.End();
 	pMesh->Draw();
 
