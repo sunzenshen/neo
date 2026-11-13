@@ -396,7 +396,7 @@ float CNEOSmokeVolume::Density( const Vector &pos, float front ) const
 	return weight * edge * edge * ( 3.0f - 2.0f * edge );
 }
 
-// Before the field is filled: the dome the client draws then.
+// Before the field is live: the nominal dome.
 float CNEOSmokeVolume::DomeDensity( const Vector &pos, float front ) const
 {
 	const float depth = front - pos.DistTo( m_vecOrigin );
