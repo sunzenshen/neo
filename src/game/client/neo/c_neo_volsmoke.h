@@ -104,6 +104,7 @@ private:
 	float CellWeight( int idx ) const;
 	float DensityAt( const Vector &pos, float front ) const;
 	void AddInsideOverlay( float front, float now );
+	Vector DisplayColor() const;
 	void UpdateBounds( float front );
 
 	// Atlas
