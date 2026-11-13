@@ -340,6 +340,7 @@ void CNEO_Player::RequestSetStar(int newStar)
 bool CNEO_Player::RequestSetLoadout(int loadoutNumber)
 {
 	int classChosen = m_iNextSpawnClassChoice.Get() != NEO_CLASS_RANDOM ? m_iNextSpawnClassChoice.Get() : m_iNeoClass.Get();
+	const bool bClassChangePending = (classChosen != m_iNeoClass.Get());
 	const int iLoadoutClass = sv_neo_dev_loadout.GetBool() ? NEO_LOADOUT_DEV : classChosen;
 
 	const char *pszWepName = (IN_BETWEEN_AR(0, iLoadoutClass, NEO_LOADOUT__COUNT) && IN_BETWEEN_AR(0, loadoutNumber, MAX_WEAPON_LOADOUTS)) ?
@@ -410,7 +411,13 @@ bool CNEO_Player::RequestSetLoadout(int loadoutNumber)
 	if (result)
 	{
 		m_iLoadoutWepChoice = loadoutNumber;
-		GiveLoadoutWeapon();
+
+		// The slot indexes the pending class's list, but the player keeps the
+		// current class until respawn: Spawn() grants the pick with that class
+		if (!bClassChangePending)
+		{
+			GiveLoadoutWeapon();
+		}
 	}
 	
 	if (pEnt != NULL && !(pEnt->IsMarkedForDeletion()))
@@ -724,6 +731,10 @@ void CNEO_Player::Spawn(void)
 		}
 
 		SetClass(desiredClass);
+
+		// A class limit may have kept another class; a stale choice would make the
+		// loadout pick below and the client menus read the wrong class list
+		m_iNextSpawnClassChoice = m_iNeoClass.Get();
 	}
 
 	BaseClass::Spawn();
