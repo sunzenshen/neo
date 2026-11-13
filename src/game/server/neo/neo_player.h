@@ -168,6 +168,8 @@ public:
 
 	void RequestSetClass(int newClass);
 	bool CanChangeClassNow() const;
+	// Seconds until class changes close; NEO_CLASS_CHANGE_NO_DEADLINE if they stay open, 0 once closed
+	float GetClassChangeTimeLeft() const;
 	void RequestSetSkin(int newSkin);
 	bool RequestSetLoadout(int loadoutNumber);
 	void RequestSetStar(int newStar);

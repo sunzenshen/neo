@@ -108,6 +108,7 @@ protected:
     vgui::Label *m_pRecon_Label = nullptr;
     vgui::Label *m_pAssault_Label = nullptr;
     vgui::Label *m_pSupport_Label = nullptr;
+	vgui::Label *m_pClassLock_Label = nullptr;
 
     bool m_bClassMenu;
 

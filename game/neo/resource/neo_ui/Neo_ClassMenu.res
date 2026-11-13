@@ -317,4 +317,24 @@
 		"Command"		"playerstate_reverse"
 		"Default"		"0"
 	}	
+	"ClassLock_Label"
+	{
+		"ControlName"	"Label"
+		"fieldName"		"ClassLock_Label"
+		"xpos"			"223"
+		"ypos"			"410"
+		"wide"			"199"
+		"tall"			"30"
+		"autoResize"	"0"
+		"pinCorner"		"0"
+		"visible"		"0"
+		"enabled"		"1"
+		"tabPosition"	"0"
+		"labelText"		"CLASS CHANGES CLOSED UNTIL RESPAWN"
+		"textAlignment"	"center"
+		"dulltext"		"0"
+		"brighttext"	"1"
+		"font"			"CLTDefault"
+		"wrap"			"1"
+	}
 }

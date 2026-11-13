@@ -150,6 +150,8 @@ public:
 
 	int GetClass() const { return m_iNeoClass; }
 	bool CanChangeClassNow() const;
+	// Seconds until class changes close; NEO_CLASS_CHANGE_NO_DEADLINE if they stay open, 0 once closed
+	float GetClassChangeTimeLeft() const;
 	int GetStar() const { return m_iNeoStar; }
 	int GetDisplayedHealth(int mode) const;
 

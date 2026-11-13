@@ -287,6 +287,8 @@ static_assert(NEO_ZOOM_SPEED != 0.0f, "Divide by zero");
 #define COLOR_NEO_ORANGE Color(243, 190, 52, 255)
 #define COLOR_NEO_WHITE Color(218, 217, 213, 255)
 
+constexpr float NEO_CLASS_CHANGE_NO_DEADLINE = -1.0f;
+
 class CNEO_Player;
 class CNEOBaseCombatWeapon;
 class C_BaseCombatWeapon;

@@ -447,29 +447,41 @@ bool CNEO_Player::IsMakingFootstepSounds(float* pVelRun, float* pSpeed, int* pLa
 // Shared so the class menu offers only the class changes the server applies at once
 bool CNEO_Player::CanChangeClassNow() const
 {
+	const float flTimeLeft = GetClassChangeTimeLeft();
+	return flTimeLeft == NEO_CLASS_CHANGE_NO_DEADLINE || flTimeLeft > 0.0f;
+}
+
+float CNEO_Player::GetClassChangeTimeLeft() const
+{
 	if (m_lifeState == LIFE_DEAD || sv_neo_can_change_classes_anytime.GetBool())
 	{
-		return true;
+		return NEO_CLASS_CHANGE_NO_DEADLINE;
 	}
 
 	const NeoRoundStatus status = NEORules()->GetRoundStatus();
 	if (status == NeoRoundStatus::Idle || status == NeoRoundStatus::Warmup || status == NeoRoundStatus::Countdown)
 	{
-		return true;
+		return NEO_CLASS_CHANGE_NO_DEADLINE;
 	}
 
 	if (m_bIneligibleForLoadoutPick)
 	{
-		return false;
+		return 0.0f;
 	}
 
-	if (NEORules()->GetRemainingPreRoundFreezeTime(false) > 0)
+	const float flFreezeTimeLeft = NEORules()->GetRemainingPreRoundFreezeTime(false);
+	if (flFreezeTimeLeft > 0.0f)
 	{
-		return true;
+		return flFreezeTimeLeft;
 	}
 
 	const bool bIsTypeDM = (NEORules()->GetGameType() == NEO_GAME_TYPE_TDM || NEORules()->GetGameType() == NEO_GAME_TYPE_DM);
-	return bIsTypeDM && (gpGlobals->curtime - m_flSpawnTime) < sv_neo_dm_max_class_dur.GetFloat();
+	if (!bIsTypeDM)
+	{
+		return 0.0f;
+	}
+
+	return Max(0.0f, sv_neo_dm_max_class_dur.GetFloat() - (gpGlobals->curtime - m_flSpawnTime));
 }
 
 // Crouching speed and walking speed are the same, so crouching, walking and aiming share one silent limit.

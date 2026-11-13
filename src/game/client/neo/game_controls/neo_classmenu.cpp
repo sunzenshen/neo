@@ -116,6 +116,10 @@ CNeoClassMenu::~CNeoClassMenu()
 	m_pRecon_Label->SetAutoDelete(true);
 	m_pAssault_Label->SetAutoDelete(true);
 	m_pSupport_Label->SetAutoDelete(true);
+	if (m_pClassLock_Label)
+	{
+		m_pClassLock_Label->SetAutoDelete(true);
+	}
 	m_pRecon_Button->SetAutoDelete(true);
 	m_pAssault_Button->SetAutoDelete(true);
 	m_pSupport_Button->SetAutoDelete(true);
@@ -163,6 +167,7 @@ void CNeoClassMenu::FindControls()
 	m_pRecon_Label = FindControl<Label>("Recon_Label");
 	m_pAssault_Label = FindControl<Label>("Assault_Label");
 	m_pSupport_Label = FindControl<Label>("Support_Label");
+	m_pClassLock_Label = FindControl<Label>("ClassLock_Label");
 
 	m_pRecon_Button = FindControl<CNeoButton>("Scout_Button");
 	m_pAssault_Button = FindControl<CNeoButton>("Assault_Button");
@@ -489,7 +494,11 @@ void CNeoClassMenu::OnThink()
 
 	const bool bClassLocked = !pLocalPlayer->CanChangeClassNow();
 
-	auto updateClassButtonAndLabel = [&pLocalPlayer, &localPlayerTeam, bClassLocked](vgui::Label *pClassLabel, vgui::Button *pClassButton, int neoClass, ConVar *classLimit)
+	// Rounded up, so the countdown never shows zero while class changes are still open
+	const float flTimeLeft = pLocalPlayer->GetClassChangeTimeLeft();
+	const int iSecondsLeft = (flTimeLeft > 0.0f) ? static_cast<int>(ceilf(flTimeLeft)) : 0;
+
+	auto updateClassButtonAndLabel = [&pLocalPlayer, &localPlayerTeam, bClassLocked, iSecondsLeft](vgui::Label *pClassLabel, vgui::Button *pClassButton, int neoClass, ConVar *classLimit)
 		{
 			if (!pClassLabel || !pClassButton)
 			{
@@ -498,7 +507,7 @@ void CNeoClassMenu::OnThink()
 			}
 
 			const int numClassPlayers = localPlayerTeam->GetClassCount(neoClass);
-			char textBuff[9 + 1];
+			char textBuff[24];
 
 			if (classLimit->GetInt() == 0)
 			{
@@ -516,6 +525,12 @@ void CNeoClassMenu::OnThink()
 				pClassButton->SetEnabled(true);
 			}
 
+			if (iSecondsLeft > 0 && classLimit->GetInt() != 0)
+			{
+				const int iLen = V_strlen(textBuff);
+				V_snprintf(textBuff + iLen, sizeof(textBuff) - iLen, " (%ds)", iSecondsLeft);
+			}
+
 			// The server would only queue this class for the next life, so offer the current class alone
 			const bool bLockedOut = bClassLocked && pLocalPlayer->GetClass() != neoClass;
 			if (bLockedOut)
@@ -524,7 +539,7 @@ void CNeoClassMenu::OnThink()
 				pClassButton->SetEnabled(false);
 			}
 
-			if (NEORules()->IsTeamplay() || bLockedOut)
+			if (NEORules()->IsTeamplay() || bLockedOut || iSecondsLeft > 0)
 			{
 				pClassLabel->SetVisible(true);
 				pClassLabel->SetText(textBuff);
@@ -545,4 +560,9 @@ void CNeoClassMenu::OnThink()
 	updateClassButtonAndLabel(m_pRecon_Label, m_pRecon_Button, NEO_CLASS_RECON, &sv_neo_class_limit_recon);
 	updateClassButtonAndLabel(m_pAssault_Label, m_pAssault_Button, NEO_CLASS_ASSAULT, &sv_neo_class_limit_assault);
 	updateClassButtonAndLabel(m_pSupport_Label, m_pSupport_Button, NEO_CLASS_SUPPORT, &sv_neo_class_limit_support);
+
+	if (m_pClassLock_Label)
+	{
+		m_pClassLock_Label->SetVisible(bClassLocked);
+	}
 }
