@@ -167,6 +167,7 @@ public:
 	void Weapon_SetZoom(const bool bZoomIn);
 
 	void RequestSetClass(int newClass);
+	bool CanChangeClassNow() const;
 	void RequestSetSkin(int newSkin);
 	bool RequestSetLoadout(int loadoutNumber);
 	void RequestSetStar(int newStar);
@@ -311,6 +312,7 @@ public:
 	CNetworkVar(int, m_bInLean);
 	CNetworkVar(bool, m_bCarryingGhost);
 	CNetworkVar(bool, m_bIneligibleForLoadoutPick);
+	CNetworkVar(float, m_flSpawnTime);
 	CNetworkHandle(CBaseEntity, m_hServerRagdoll);
 
 	CNetworkVar(float, m_flCamoAuxLastTime);

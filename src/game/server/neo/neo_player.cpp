@@ -56,6 +56,7 @@ SendPropInt(SENDINFO(m_iClassBeforeTakeover)),
 SendPropInt(SENDINFO(m_iXP)),
 SendPropInt(SENDINFO(m_iLoadoutWepChoice), NumBitsForCount(MAX_WEAPON_LOADOUTS), SPROP_UNSIGNED),
 SendPropInt(SENDINFO(m_iNextSpawnClassChoice)),
+SendPropTime(SENDINFO(m_flSpawnTime)),
 SendPropInt(SENDINFO(m_bInLean), NumBitsForCount(NEO_LEAN_ENUM_COUNT), SPROP_UNSIGNED),
 SendPropEHandle(SENDINFO(m_hServerRagdoll)),
 SendPropEHandle(SENDINFO(m_hCommandingPlayer)),
@@ -107,6 +108,7 @@ DEFINE_FIELD(m_bShowTestMessage, FIELD_BOOLEAN),
 DEFINE_FIELD(m_bInAim, FIELD_BOOLEAN),
 
 DEFINE_FIELD(m_flCamoAuxLastTime, FIELD_TIME),
+DEFINE_FIELD(m_flSpawnTime, FIELD_TIME),
 DEFINE_FIELD(m_flVisionLastTime, FIELD_TIME),
 DEFINE_FIELD(m_flJumpLastTime, FIELD_TIME),
 DEFINE_FIELD(m_flNextPingTime, FIELD_TIME),
@@ -147,11 +149,8 @@ extern ConVar sv_neo_dev_loadout;
 extern ConVar neo_bot_difficulty;
 extern ConVar sv_neo_ctg_ghost_beacons_when_inactive;
 
-ConVar sv_neo_can_change_classes_anytime("sv_neo_can_change_classes_anytime", "0", FCVAR_CHEAT | FCVAR_REPLICATED, "Can players change classes at any moment, even mid-round?",
-	true, 0.0f, true, 1.0f);
 ConVar sv_neo_change_suicide_player("sv_neo_change_suicide_player", "0", FCVAR_REPLICATED, "Kill the player if they change the team and they're alive.", true, 0.0f, true, 1.0f);
 ConVar sv_neo_change_threshold_interval("sv_neo_change_threshold_interval", "0.25", FCVAR_REPLICATED, "The interval threshold limit in seconds before the player is allowed to change team.", true, 0.0f, true, 1000.0f);
-ConVar sv_neo_dm_max_class_dur("sv_neo_dm_max_class_dur", "10", FCVAR_REPLICATED, "The time in seconds when the player can change class on respawn during deathmatch.", true, 0.0f, true, 60.0f);
 ConVar sv_neo_warmup_godmode("sv_neo_warmup_godmode", "0", FCVAR_REPLICATED, "If enabled, everyone is invincible on idle and warmup.", true, 0.0f, true, 1.0f);
 
 ConVar bot_class("bot_class", "-1", 0, "Force all bots to spawn with the specified class number, or -1 to disable.", true, NEO_CLASS_RANDOM, true, NEO_CLASS_LOADOUTABLE_COUNT-1);
@@ -248,12 +247,7 @@ void CNEO_Player::RequestSetClass(int newClass)
 			return;
 	}
 
-	const bool bIsTypeDM = (NEORules()->GetGameType() == NEO_GAME_TYPE_TDM || NEORules()->GetGameType() == NEO_GAME_TYPE_DM);
-	const NeoRoundStatus status = NEORules()->GetRoundStatus();
-	if (IsDead() || sv_neo_can_change_classes_anytime.GetBool() ||
-		(!m_bIneligibleForLoadoutPick && NEORules()->GetRemainingPreRoundFreezeTime(false) > 0) ||
-		(bIsTypeDM && !m_bIneligibleForLoadoutPick && GetAliveDuration() < sv_neo_dm_max_class_dur.GetFloat()) ||
-		(status == NeoRoundStatus::Idle || status == NeoRoundStatus::Warmup || status == NeoRoundStatus::Countdown))
+	if (CanChangeClassNow())
 	{
 		SetClass(newClass);
 		m_iNextSpawnClassChoice = NEO_CLASS_RANDOM;
@@ -610,6 +604,7 @@ CNEO_Player::CNEO_Player()
 	m_bShowTestMessage = false;
 	V_memset(m_pszTestMessage.GetForModify(), 0, sizeof(m_pszTestMessage));
 
+	m_flSpawnTime = 0;
 	m_flCamoAuxLastTime = 0;
 	m_flVisionLastTime = 0;
 	m_botThermOpticCamoDisruptedTimer.Invalidate();
@@ -739,6 +734,7 @@ void CNEO_Player::Spawn(void)
 
 	BaseClass::Spawn();
 	FixupOnGroundFlag();
+	m_flSpawnTime = gpGlobals->curtime;
 
 	SetMaxHealth(MAX_HEALTH_FOR_CLASS[m_iNeoClass]);
 	SetHealth(GetMaxHealth());

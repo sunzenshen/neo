@@ -81,6 +81,9 @@ ConVar sv_neo_spec_replace_player_afk_time_sec( "sv_neo_spec_replace_player_afk_
 	true, -1, true, 999);
 #endif // GAME_DLL
 
+ConVar sv_neo_can_change_classes_anytime("sv_neo_can_change_classes_anytime", "0", FCVAR_CHEAT | FCVAR_REPLICATED, "Can players change classes at any moment, even mid-round?",
+	true, 0.0f, true, 1.0f);
+ConVar sv_neo_dm_max_class_dur("sv_neo_dm_max_class_dur", "10", FCVAR_REPLICATED, "The time in seconds when the player can change class on respawn during deathmatch.", true, 0.0f, true, 60.0f);
 ConVar sv_neo_aimpunch_damping("sv_neo_aimpunch_damping", "12", FCVAR_NOTIFY | FCVAR_REPLICATED, "Aim punch damping");
 ConVar sv_neo_aimpunch_spring_constant("sv_neo_aimpunch_spring_constant", "65", FCVAR_NOTIFY | FCVAR_REPLICATED, "Aim punch spring constant");
 ConVar sv_neo_aimpunch_force("sv_neo_aimpunch_force", "40", FCVAR_NOTIFY | FCVAR_REPLICATED, "Aim punch force");
@@ -439,6 +442,34 @@ bool CNEO_Player::IsMakingFootstepSounds(float* pVelRun, float* pSpeed, int* pLa
 	}
 
 	return true;
+}
+
+// Shared so the class menu offers only the class changes the server applies at once
+bool CNEO_Player::CanChangeClassNow() const
+{
+	if (m_lifeState == LIFE_DEAD || sv_neo_can_change_classes_anytime.GetBool())
+	{
+		return true;
+	}
+
+	const NeoRoundStatus status = NEORules()->GetRoundStatus();
+	if (status == NeoRoundStatus::Idle || status == NeoRoundStatus::Warmup || status == NeoRoundStatus::Countdown)
+	{
+		return true;
+	}
+
+	if (m_bIneligibleForLoadoutPick)
+	{
+		return false;
+	}
+
+	if (NEORules()->GetRemainingPreRoundFreezeTime(false) > 0)
+	{
+		return true;
+	}
+
+	const bool bIsTypeDM = (NEORules()->GetGameType() == NEO_GAME_TYPE_TDM || NEORules()->GetGameType() == NEO_GAME_TYPE_DM);
+	return bIsTypeDM && (gpGlobals->curtime - m_flSpawnTime) < sv_neo_dm_max_class_dur.GetFloat();
 }
 
 // Crouching speed and walking speed are the same, so crouching, walking and aiming share one silent limit.
