@@ -24,6 +24,7 @@
 #include "utlvector.h"
 #include "tier0/threadtools.h"
 #include "neo_smoke_fill.h"
+#include "neo_volsmoke_cover.h"
 
 class CNeoVolSmokeRegenerator;
 class IMatRenderContext;
@@ -83,6 +84,7 @@ private:
 	void StopFill();
 	bool FillDone() const { return m_bFillDone; }
 	bool WantsFill() const { return !m_bFillDone && !m_pFillJob && m_nFillCancel == 0; }
+	void FitBoxToField();
 	void FitToField();
 	void CreateAtlas();
 	Vector CellCenter( const int c[3] ) const;
@@ -129,8 +131,12 @@ private:
 	static void BuildOpaqueSheet( IMatRenderContext *pRenderContext );
 	void DrawFarSlabs( IMatRenderContext *pRenderContext );
 	void DrawNearPass( IMatRenderContext *pRenderContext );
-	bool ShaderDraws();
-	void DrawCoverBox( IMatRenderContext *pRenderContext );
+	static bool UsesCoverBoxes();
+	void BuildCoverReach();
+	void UpdateCoverBoxes( float now );
+	void AddCoverOverlay();
+	bool InCoverBox( const Vector &point, float margin ) const;
+	void DrawCoverBoxes( IMatRenderContext *pRenderContext );
 
 	// What shows through the smoke after the volume draws
 	static float OpticalDepth( const Vector &eye, const Vector &point );
@@ -147,7 +153,8 @@ private:
 	int    m_nBox[3];          // the volume's box of cells, from the fill
 	int    m_nSeedCorner[3];   // the cell corner the grenade sits on, in the box
 	int    m_nBoxOffset[3];    // the box's low corner in the fill's query coordinates
-	bool   m_bFitted;          // the fill is done and the box fits its field
+	bool   m_bBoxFitted;       // the fill is done and the box fits its field
+	bool   m_bFitted;          // the box has its atlas and materials
 	Vector m_vecQueryMin;      // corner of the box the fill's world queries are in
 	Vector m_vecGridMin;
 	Vector m_vecGridMax;
@@ -191,6 +198,16 @@ private:
 	float m_flUploadedFront;   // path length of the last cell the uploaded atlas holds
 	bool  m_bUploadPending;    // atlas changed, upload waits for a free frame
 	int   m_nRenderSerial;     // the render this volume last drew in
+
+	// Without the shader: opaque boxes over the cells where the server's
+	// smoke density can be above zero, rebuilt while the cloud blooms.
+	CUtlVector< float > m_CoverReach; // per finalized cell, from VolSmokeCoverReach
+	Vector m_vecCoverMin[NEO_VOLSMOKE_COVER_BOXES];
+	Vector m_vecCoverMax[NEO_VOLSMOKE_COVER_BOXES];
+	int    m_nCoverBoxes;
+	float  m_flNextCover;
+	bool   m_bCoverFinal;      // the cloud is full grown and the boxes hold all its cells
+	bool   m_bCoverReachOnJob; // the fill job builds m_CoverReach
 };
 
 #endif // C_NEO_VOLSMOKE_H
