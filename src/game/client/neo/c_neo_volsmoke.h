@@ -208,7 +208,7 @@ private:
 	int    m_nCoverBoxes;
 	float  m_flNextCover;
 	bool   m_bCoverFinal;      // the cloud is full grown and the boxes hold all its cells
-	bool   m_bCoverReachOnJob; // the fill job builds m_CoverReach
+	bool   m_bCoverBoxes;      // draws the cover boxes, not the shader cloud
 };
 
 #endif // C_NEO_VOLSMOKE_H

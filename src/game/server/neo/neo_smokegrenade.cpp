@@ -85,7 +85,7 @@ int CNEOGrenadeSmoke::OnTakeDamage(const CTakeDamageInfo& inputInfo)
 
 void CNEOGrenadeSmoke::Splash()
 {
-	if (!sv_neo_smoke_volumetric.GetBool())
+	if (!NEOSmokeIsVolumetric())
 	{
 		return;
 	}
@@ -157,7 +157,7 @@ void CNEOGrenadeSmoke::Detonate(void)
 		m_hasBeenMadeNonSolid = true;
 
 		m_flSmokeBloomTime = gpGlobals->curtime;
-		if (sv_neo_smoke_volumetric.GetBool())
+		if (NEOSmokeIsVolumetric())
 		{
 			NEOSmokeVolume_Create(GetAbsOrigin(), this);
 			CNEOSmokeLineOfSightBlocker::CreateForSmokeField(GetAbsOrigin(), this);
@@ -180,7 +180,7 @@ void CNEOGrenadeSmoke::Detonate(void)
 	}
 	else if (gpGlobals->curtime - m_flSmokeBloomTime >= sv_neo_smoke_bloom_duration.GetFloat())
 	{
-		if (sv_neo_smoke_volumetric.GetBool())
+		if (NEOSmokeIsVolumetric())
 		{
 			BecomeDebris();
 		}

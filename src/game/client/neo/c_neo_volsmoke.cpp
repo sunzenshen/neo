@@ -598,7 +598,7 @@ C_NeoVolSmoke::C_NeoVolSmoke()
 	: m_nId( s_nNextId++ ), m_bBoxFitted( false ), m_bFitted( false ), m_flSpawnTime( 0 ), m_pWorld( nullptr ), m_pFillJob( nullptr ), m_bFillDone( false ),
 	  m_bCellBytes( false ), m_nBounded( 0 ), m_pRegen( nullptr ), m_flDistRange( NEO_VOLSMOKE_DIST_RANGE ), m_nAtlasCols( 0 ),
 	  m_nAtlasW( 0 ), m_nAtlasH( 0 ), m_nPacked( 0 ), m_flNextUpload( 0 ), m_flUploadedFront( 0 ), m_bUploadPending( false ),
-	  m_nRenderSerial( -1 ), m_nCoverBoxes( 0 ), m_flNextCover( 0 ), m_bCoverFinal( false ), m_bCoverReachOnJob( false )
+	  m_nRenderSerial( -1 ), m_nCoverBoxes( 0 ), m_flNextCover( 0 ), m_bCoverFinal( false ), m_bCoverBoxes( false )
 {
 	for ( int a = 0; a < 3; ++a )
 	{
@@ -704,8 +704,9 @@ void C_NeoVolSmoke::Init( const Vector &origin, float spawnTime )
 	int latticeHi[3];
 	m_Fill.LatticeBounds( latticeLo, latticeHi );
 
-	// The fill job cannot ask the material system.
-	m_bCoverReachOnJob = UsesCoverBoxes();
+	// Set once, so a mode change mid-match applies from the next smoke, and the
+	// fill job, which cannot ask the material system, can read it.
+	m_bCoverBoxes = UsesCoverBoxes();
 
 	m_pWorld = new CNeoVolSmokeWorld( m_vecGridMin, m_nBox, seedCorner, latticeLo, latticeHi );
 	m_Fill.Start( m_pWorld );
@@ -1027,7 +1028,7 @@ void C_NeoVolSmoke::RunFill()
 	if ( m_Fill.IsDone() )
 	{
 		BuildCellBytes();
-		if ( m_bCoverReachOnJob && m_Fill.FinalizedCount() > 0 )
+		if ( m_bCoverBoxes && m_Fill.FinalizedCount() > 0 )
 		{
 			BuildCoverReach();
 		}
@@ -1579,7 +1580,7 @@ void C_NeoVolSmoke::ClientThink()
 
 	// The cover boxes need only the finished fill, so a box client has no
 	// atlas. The field's own boxes replace the interim box in this think.
-	if ( UsesCoverBoxes() )
+	if ( m_bCoverBoxes )
 	{
 		UpdateCoverBoxes( now );
 		AddCoverOverlay();
@@ -1919,7 +1920,7 @@ int C_NeoVolSmoke::DrawModel( int flags )
 
 	// The cover boxes lead the front, so they can draw before the first
 	// cell fills, and before the fill is done.
-	if ( UsesCoverBoxes() )
+	if ( m_bCoverBoxes )
 	{
 		if ( m_nCoverBoxes == 0 )
 		{
@@ -3038,6 +3039,11 @@ static IMaterial *VolSmokeCoverMaterial()
 // never drawn answers for every volume.
 bool C_NeoVolSmoke::UsesCoverBoxes()
 {
+	if ( NEOSmokeMode() == NEO_SMOKE_MODE_COVER_BOXES )
+	{
+		return true;
+	}
+
 	static IMaterial *s_pProbe = nullptr;
 	if ( !s_pProbe )
 	{
@@ -3055,7 +3061,7 @@ bool C_NeoVolSmoke::UsesCoverBoxes()
 void C_NeoVolSmoke::UpdateInterimCover( float now )
 {
 	m_nCoverBoxes = 0;
-	if ( !UsesCoverBoxes() )
+	if ( !m_bCoverBoxes )
 	{
 		return;
 	}

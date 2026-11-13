@@ -12,11 +12,30 @@
 #include "mathlib/mathlib.h"
 #include "neo_smoke_fill.h"
 
-class ConVar;
+#include "tier1/convar.h"
 
 // The smoke every player faces: legacy particles and cube blocker, or the
 // volumetric field. Read when a grenade detonates.
 extern ConVar sv_neo_smoke_volumetric;
+
+enum NeoSmokeMode_t
+{
+	NEO_SMOKE_MODE_COVER_BOXES = -1,
+	NEO_SMOKE_MODE_LEGACY = 0,
+	NEO_SMOKE_MODE_VOLUMETRIC = 1,
+};
+
+inline NeoSmokeMode_t NEOSmokeMode()
+{
+	return static_cast< NeoSmokeMode_t >( sv_neo_smoke_volumetric.GetInt() );
+}
+
+// The cover box mode changes only what a client draws, so the server's
+// field and sight are the same as in the volumetric mode.
+inline bool NEOSmokeIsVolumetric()
+{
+	return NEOSmokeMode() != NEO_SMOKE_MODE_LEGACY;
+}
 
 // The legacy smoke's time curves: sine ease-out bloom, cosine fade.
 static constexpr float NEO_VOLSMOKE_BLOOM_TIME = 5.5f;
