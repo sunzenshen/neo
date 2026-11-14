@@ -44,6 +44,8 @@ protected:
 
 private:
 	const char *GetAimSuffix() const;
+	int LookupAimSequence( const char *pBaseName, const char *pSuffix );
+	void ClearAimSequenceCache();
 	int CalcFireSequence();
 	int CalcReloadSequence();
 	void StartGesture( int iSequence );
@@ -63,6 +65,19 @@ private:
 	int m_iGestureSequence;
 	float m_flGestureCycle;
 	EHANDLE m_hGestureWeapon;
+
+	// aim sequence names are formatted and searched every update, so their indices are kept per model
+	struct AimSequenceCacheEntry_t
+	{
+		const char *pBaseName;
+		const char *pSuffix;
+		int iSequence;
+	};
+	static constexpr int AIM_SEQUENCE_CACHE_SIZE = 8;
+	AimSequenceCacheEntry_t m_aimSequenceCache[AIM_SEQUENCE_CACHE_SIZE];
+	int m_iAimSequenceCacheNext;
+	int m_iAimSequenceCacheModel;
+	const CStudioHdr *m_pAimSequenceCacheHdr;
 };
 
 CNEOPlayerAnimState *CreateNEOPlayerAnimState( CHL2MP_Player *pPlayer );
