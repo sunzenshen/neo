@@ -878,6 +878,14 @@ void CLagCompensationManager::FinishLagCompensation( CBasePlayer *player )
 		{
 			pPlayer->SetSimulationTime( restore->m_flSimulationTime );
 		}
+
+#ifdef NEO
+		// The bone cache still holds the rewound pose, and a query later this tick would reuse it.
+		if ( restoreSimulationTime && sv_lagflushbonecache.GetBool() )
+		{
+			pPlayer->InvalidateBoneCache();
+		}
+#endif
 	}
 
 	m_isCurrentlyDoingCompensation = false;
