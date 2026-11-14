@@ -42,6 +42,10 @@ static constexpr float SPRINT_LEGS_MIN_SPEED = 100.0f;
 // The feet face the eyes when they are this close (degrees)
 static constexpr float FEET_FACE_EYES_TOLERANCE = 1.0f;
 
+// The 9-way leg blend's pose parameters: forward and sideways stride
+static constexpr const char *POSE_MOVE_X = "move_x";
+static constexpr const char *POSE_MOVE_Y = "move_y";
+
 // Don't check if a jumping player is on the ground for this long:
 // sometimes the client still has the on-ground flag set right when the jump event comes in
 static constexpr float JUMP_MIN_TIME = 0.2f;
@@ -188,6 +192,12 @@ Activity CNEOPlayerAnimState::CalcMainActivity()
 		return ACT_HOP;
 	}
 
+	// the models have no climb sequence, so a climber walks in place
+	if ( IsOnLadder() )
+	{
+		return ( fabsf( GetClimbSpeed() ) > MOVING_MINIMUM_SPEED ) ? ACT_WALK : ACT_IDLE;
+	}
+
 	if ( m_pPlayer->GetWaterLevel() >= WL_Waist )
 	{
 		return ACT_SWIM;
@@ -250,7 +260,8 @@ bool CNEOPlayerAnimState::HandleJumping()
 	}
 
 	const bool bInWater = m_pPlayer->GetWaterLevel() >= WL_Waist;
-	if ( bInWater || ( gpGlobals->curtime - m_flJumpStartTime > JUMP_MIN_TIME && (m_pPlayer->GetFlags() & FL_ONGROUND) ) )
+	const bool bLanded = ( m_pPlayer->GetFlags() & FL_ONGROUND ) || IsOnLadder();
+	if ( bInWater || ( gpGlobals->curtime - m_flJumpStartTime > JUMP_MIN_TIME && bLanded ) )
 	{
 #ifdef CLIENT_DLL
 		constexpr float JUMP_LANDING_Z_TOLERANCE = 1.0f;
@@ -282,6 +293,61 @@ float CNEOPlayerAnimState::GetCurrentMaxGroundSpeed()
 	default:
 		return 0.0f;
 	}
+}
+
+bool CNEOPlayerAnimState::IsOnLadder() const
+{
+	return m_pPlayer->GetMoveType() == MOVETYPE_LADDER;
+}
+
+float CNEOPlayerAnimState::GetClimbSpeed() const
+{
+	Vector vecVelocity;
+	GetOuterAbsVelocity( vecVelocity );
+	return vecVelocity.z;
+}
+
+float CNEOPlayerAnimState::CalcMovementPlaybackRate( bool *bIsMoving )
+{
+	if ( !IsOnLadder() )
+	{
+		return BaseClass::CalcMovementPlaybackRate( bIsMoving );
+	}
+
+	// a climb has almost no horizontal speed, so the climb speed drives the legs and the walking torso
+	const float flClimbSpeed = fabsf( GetClimbSpeed() );
+	*bIsMoving = flClimbSpeed > MOVING_MINIMUM_SPEED;
+	return ( *bIsMoving ) ? flClimbSpeed / ANIM_TOPSPEED_WALK : 1.0f;
+}
+
+void CNEOPlayerAnimState::ComputePoseParam_MoveYaw( CStudioHdr *pStudioHdr )
+{
+	BaseClass::ComputePoseParam_MoveYaw( pStudioHdr );
+
+	if ( !IsOnLadder() )
+	{
+		return;
+	}
+
+	const int iMoveX = m_pOuter->LookupPoseParameter( pStudioHdr, POSE_MOVE_X );
+	const int iMoveY = m_pOuter->LookupPoseParameter( pStudioHdr, POSE_MOVE_Y );
+	if ( iMoveX < 0 || iMoveY < 0 )
+	{
+		return;
+	}
+
+	// the base aims the stride along a horizontal direction a climb does not have:
+	// the legs step forward going up and backward going down
+	bool bClimbing;
+	const float flRate = CalcMovementPlaybackRate( &bClimbing );
+	float flMoveX = 0.0f;
+	if ( bClimbing )
+	{
+		flMoveX = ( GetClimbSpeed() < 0.0f ) ? -flRate : flRate;
+	}
+
+	m_pOuter->SetPoseParameter( pStudioHdr, iMoveX, flMoveX );
+	m_pOuter->SetPoseParameter( pStudioHdr, iMoveY, 0.0f );
 }
 
 void CNEOPlayerAnimState::ComputePoseParam_BodyYaw()
