@@ -648,6 +648,13 @@ void CLagCompensationManager::BacktrackPlayer( CBasePlayer *pPlayer, float flTar
 	flags |= LC_ANIMATION_CHANGED;
 	restore->m_masterSequence = pPlayer->GetSequence();
 	restore->m_masterCycle = pPlayer->GetCycle();
+#ifdef NEO
+	// FinishLagCompensation writes these back; without the live values it would zero every pose.
+	for ( int i = 0; i < MAXSTUDIOPOSEPARAM; i++ )
+	{
+		restore->m_flPoseParameters[i] = pPlayer->GetPoseParameter( i );
+	}
+#endif
 
 	bool interpolationAllowed = false;
 	if( prevRecord && (record->m_masterSequence == prevRecord->m_masterSequence) )
