@@ -317,4 +317,24 @@
 		"Command"		"playerstate_reverse"
 		"Default"		"0"
 	}	
+	"PickStatus_Label"
+	{
+		"ControlName"	"Label"
+		"fieldName"		"PickStatus_Label"
+		"xpos"			"223"
+		"ypos"			"410"
+		"wide"			"199"
+		"tall"			"30"
+		"autoResize"	"0"
+		"pinCorner"		"0"
+		"visible"		"1"
+		"enabled"		"1"
+		"tabPosition"	"0"
+		"labelText"		""
+		"textAlignment"	"west"
+		"dulltext"		"0"
+		"brighttext"	"1"
+		"font"			"CLTDefault"
+		"wrap"			"1"
+	}
 }

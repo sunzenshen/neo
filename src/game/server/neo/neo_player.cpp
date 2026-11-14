@@ -56,6 +56,9 @@ SendPropInt(SENDINFO(m_iClassBeforeTakeover)),
 SendPropInt(SENDINFO(m_iXP)),
 SendPropInt(SENDINFO(m_iLoadoutWepChoice), NumBitsForCount(MAX_WEAPON_LOADOUTS), SPROP_UNSIGNED),
 SendPropInt(SENDINFO(m_iNextSpawnClassChoice)),
+SendPropTime(SENDINFO(m_flSpawnTime)),
+SendPropVector(SENDINFO(m_vecSpawnOrigin), -1, SPROP_COORD),
+SendPropBool(SENDINFO(m_bLeftSpawnArea)),
 SendPropInt(SENDINFO(m_bInLean), NumBitsForCount(NEO_LEAN_ENUM_COUNT), SPROP_UNSIGNED),
 SendPropEHandle(SENDINFO(m_hServerRagdoll)),
 SendPropEHandle(SENDINFO(m_hCommandingPlayer)),
@@ -107,6 +110,9 @@ DEFINE_FIELD(m_bShowTestMessage, FIELD_BOOLEAN),
 DEFINE_FIELD(m_bInAim, FIELD_BOOLEAN),
 
 DEFINE_FIELD(m_flCamoAuxLastTime, FIELD_TIME),
+DEFINE_FIELD(m_flSpawnTime, FIELD_TIME),
+DEFINE_FIELD(m_vecSpawnOrigin, FIELD_POSITION_VECTOR),
+DEFINE_FIELD(m_bLeftSpawnArea, FIELD_BOOLEAN),
 DEFINE_FIELD(m_flVisionLastTime, FIELD_TIME),
 DEFINE_FIELD(m_flJumpLastTime, FIELD_TIME),
 DEFINE_FIELD(m_flNextPingTime, FIELD_TIME),
@@ -147,11 +153,8 @@ extern ConVar sv_neo_dev_loadout;
 extern ConVar neo_bot_difficulty;
 extern ConVar sv_neo_ctg_ghost_beacons_when_inactive;
 
-ConVar sv_neo_can_change_classes_anytime("sv_neo_can_change_classes_anytime", "0", FCVAR_CHEAT | FCVAR_REPLICATED, "Can players change classes at any moment, even mid-round?",
-	true, 0.0f, true, 1.0f);
 ConVar sv_neo_change_suicide_player("sv_neo_change_suicide_player", "0", FCVAR_REPLICATED, "Kill the player if they change the team and they're alive.", true, 0.0f, true, 1.0f);
 ConVar sv_neo_change_threshold_interval("sv_neo_change_threshold_interval", "0.25", FCVAR_REPLICATED, "The interval threshold limit in seconds before the player is allowed to change team.", true, 0.0f, true, 1000.0f);
-ConVar sv_neo_dm_max_class_dur("sv_neo_dm_max_class_dur", "10", FCVAR_REPLICATED, "The time in seconds when the player can change class on respawn during deathmatch.", true, 0.0f, true, 60.0f);
 ConVar sv_neo_warmup_godmode("sv_neo_warmup_godmode", "0", FCVAR_REPLICATED, "If enabled, everyone is invincible on idle and warmup.", true, 0.0f, true, 1.0f);
 
 ConVar bot_class("bot_class", "-1", 0, "Force all bots to spawn with the specified class number, or -1 to disable.", true, NEO_CLASS_RANDOM, true, NEO_CLASS_LOADOUTABLE_COUNT-1);
@@ -237,6 +240,14 @@ void CNEO_Player::RequestSetClass(int newClass)
 	}
 
 	if (newClass == m_iNeoClass) {
+		// Picking the current class again cancels a class queued for the next spawn
+		m_iNextSpawnClassChoice = m_iNeoClass.Get();
+		return;
+	}
+
+	if (GetPickState() == NeoPickState::LoadoutWindow)
+	{
+		Msg("Class locked until your loadout is final.\n");
 		return;
 	}
 
@@ -248,12 +259,7 @@ void CNEO_Player::RequestSetClass(int newClass)
 			return;
 	}
 
-	const bool bIsTypeDM = (NEORules()->GetGameType() == NEO_GAME_TYPE_TDM || NEORules()->GetGameType() == NEO_GAME_TYPE_DM);
-	const NeoRoundStatus status = NEORules()->GetRoundStatus();
-	if (IsDead() || sv_neo_can_change_classes_anytime.GetBool() ||
-		(!m_bIneligibleForLoadoutPick && NEORules()->GetRemainingPreRoundFreezeTime(false) > 0) ||
-		(bIsTypeDM && !m_bIneligibleForLoadoutPick && GetAliveDuration() < sv_neo_dm_max_class_dur.GetFloat()) ||
-		(status == NeoRoundStatus::Idle || status == NeoRoundStatus::Warmup || status == NeoRoundStatus::Countdown))
+	if (CanChangeClassNow())
 	{
 		SetClass(newClass);
 		m_iNextSpawnClassChoice = NEO_CLASS_RANDOM;
@@ -340,6 +346,7 @@ void CNEO_Player::RequestSetStar(int newStar)
 bool CNEO_Player::RequestSetLoadout(int loadoutNumber)
 {
 	int classChosen = m_iNextSpawnClassChoice.Get() != NEO_CLASS_RANDOM ? m_iNextSpawnClassChoice.Get() : m_iNeoClass.Get();
+	const bool bClassChangePending = (classChosen != m_iNeoClass.Get());
 	const int iLoadoutClass = sv_neo_dev_loadout.GetBool() ? NEO_LOADOUT_DEV : classChosen;
 
 	const char *pszWepName = (IN_BETWEEN_AR(0, iLoadoutClass, NEO_LOADOUT__COUNT) && IN_BETWEEN_AR(0, loadoutNumber, MAX_WEAPON_LOADOUTS)) ?
@@ -410,7 +417,13 @@ bool CNEO_Player::RequestSetLoadout(int loadoutNumber)
 	if (result)
 	{
 		m_iLoadoutWepChoice = loadoutNumber;
-		GiveLoadoutWeapon();
+
+		// The slot indexes the pending class's list, but the player keeps the
+		// current class until respawn: Spawn() grants the pick with that class
+		if (!bClassChangePending)
+		{
+			GiveLoadoutWeapon();
+		}
 	}
 	
 	if (pEnt != NULL && !(pEnt->IsMarkedForDeletion()))
@@ -603,6 +616,9 @@ CNEO_Player::CNEO_Player()
 	m_bShowTestMessage = false;
 	V_memset(m_pszTestMessage.GetForModify(), 0, sizeof(m_pszTestMessage));
 
+	m_flSpawnTime = 0;
+	m_vecSpawnOrigin = vec3_origin;
+	m_bLeftSpawnArea = false;
 	m_flCamoAuxLastTime = 0;
 	m_flVisionLastTime = 0;
 	m_botThermOpticCamoDisruptedTimer.Invalidate();
@@ -724,10 +740,17 @@ void CNEO_Player::Spawn(void)
 		}
 
 		SetClass(desiredClass);
+
+		// A class limit may have kept another class; a stale choice would make the
+		// loadout pick below and the client menus read the wrong class list
+		m_iNextSpawnClassChoice = m_iNeoClass.Get();
 	}
 
 	BaseClass::Spawn();
 	FixupOnGroundFlag();
+	m_flSpawnTime = gpGlobals->curtime;
+	m_vecSpawnOrigin = GetAbsOrigin();
+	m_bLeftSpawnArea = false;
 
 	SetMaxHealth(MAX_HEALTH_FOR_CLASS[m_iNeoClass]);
 	SetHealth(GetMaxHealth());
@@ -1566,6 +1589,11 @@ float CNEO_Player::GetCloakObscuredRatio(CNEO_Player* target) const
 void CNEO_Player::PostThink(void)
 {
 	BaseClass::PostThink();
+
+	if (!m_bLeftSpawnArea && IsAlive() && GetLoadoutChangeTimeLeft() > 0.0f && IsFarFromSpawnForLoadout())
+	{
+		m_bLeftSpawnArea = true;
+	}
 
 	if (!IsAlive())
 	{
@@ -3445,15 +3473,9 @@ void CNEO_Player::GiveDefaultItems(void)
 	}
 }
 
-ConVar sv_neo_time_alive_until_cant_change_loadout("sv_neo_time_alive_until_cant_change_loadout", "25.0", FCVAR_CHEAT | FCVAR_REPLICATED, "How long after spawning changing loadouts is disabled ",
-	true, 0.0f, false, 1.0f);
-
 void CNEO_Player::GiveLoadoutWeapon(void)
 {
-	const NeoRoundStatus status = NEORules()->GetRoundStatus();
-	if (!(status == NeoRoundStatus::Idle || status == NeoRoundStatus::Warmup || status == NeoRoundStatus::Countdown) &&
-		(IsObserver() || IsDead() || m_bIneligibleForLoadoutPick
-		 || m_aliveTimer.IsGreaterThen(sv_neo_time_alive_until_cant_change_loadout.GetFloat())))
+	if (!CanChangeLoadoutNow())
 	{
 		return;
 	}
@@ -4239,6 +4261,8 @@ void CNEO_Player::SpectatorTakeoverPlayerPreThink()
 			m_bIneligibleForLoadoutPick = sv_neo_spec_replace_player_loadout_enable.GetBool() ?
 				pPlayerTakeoverTarget->m_bIneligibleForLoadoutPick
 				: true;
+			m_vecSpawnOrigin = pPlayerTakeoverTarget->m_vecSpawnOrigin.Get();
+			m_bLeftSpawnArea = pPlayerTakeoverTarget->m_bLeftSpawnArea.Get();
 
 			// Teleport the takeover target's location and velocity.
 			SetAbsOrigin(pPlayerTakeoverTarget->GetAbsOrigin());

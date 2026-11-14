@@ -287,6 +287,31 @@ static_assert(NEO_ZOOM_SPEED != 0.0f, "Divide by zero");
 #define COLOR_NEO_ORANGE Color(243, 190, 52, 255)
 #define COLOR_NEO_WHITE Color(218, 217, 213, 255)
 
+constexpr float NEO_PICK_NO_DEADLINE = -1.0f;
+
+// Rounded up, so a menu timer never shows zero while the pick is still open
+inline int GetPickSecondsLeft(const float flTimeLeft)
+{
+	return (flTimeLeft > 0.0f) ? static_cast<int>(ceilf(flTimeLeft)) : 0;
+}
+
+inline void FormatPickTime(char *pszOut, const int iOutSize, const float flTimeLeft)
+{
+	const int iSecondsLeft = GetPickSecondsLeft(flTimeLeft);
+	V_snprintf(pszOut, iOutSize, "%02d:%02d", iSecondsLeft / 60, iSecondsLeft % 60);
+}
+
+// What a class or weapon pick does right now. One rule for the server and both menus
+enum class NeoPickState
+{
+	Anytime,		// Warmup, idle, countdown, or class changes allowed anytime: picks apply now
+	AtSpawn,		// Dead or spectating: picks apply at spawn
+	SpawnWindow,	// Freeze time or the DM class window: class and weapon apply now
+	LoadoutWindow,	// The weapon applies now; the class is locked until the loadout is final
+	FinalTime,		// The weapon window ran out: picks apply next spawn
+	FinalLeftSpawn,	// Left the spawn area this life: picks apply next spawn
+};
+
 class CNEO_Player;
 class CNEOBaseCombatWeapon;
 class C_BaseCombatWeapon;

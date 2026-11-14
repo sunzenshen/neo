@@ -29,6 +29,8 @@ namespace vgui
 }
 
 class MouseCode;
+class C_NEO_Player;
+class C_Team;
 
 // NOTE: this class name must match its res file description.
 class CNeoClassMenu : public vgui::Frame,
@@ -74,6 +76,7 @@ protected:
     virtual void OnClose() override;
     void OnCommand(const char *command);
     void ChangeMenu(const char *menuName);
+	bool IsClassSelectable(const C_NEO_Player *pPlayer, const C_Team *pTeam, int neoClass) const;
     void OnKeyCodeReleased(vgui::KeyCode code);
 
     void SetLabelText(const char *textEntryName, const char *text);
@@ -83,6 +86,7 @@ protected:
 	void UpdateSkinImages(int classNumber = -1, int overrideTeamNumber = -1);
 	void UpdateTimer() { }
 	void UpdateClassButtons();
+	void UpdatePickStatus(const C_NEO_Player *pPlayer);
 
     // vgui overrides
 	virtual void PerformLayout() { }
@@ -105,6 +109,7 @@ protected:
     vgui::Label *m_pRecon_Label = nullptr;
     vgui::Label *m_pAssault_Label = nullptr;
     vgui::Label *m_pSupport_Label = nullptr;
+	vgui::Label *m_pPickStatus_Label = nullptr;
 
     bool m_bClassMenu;
 

@@ -116,6 +116,10 @@ CNeoClassMenu::~CNeoClassMenu()
 	m_pRecon_Label->SetAutoDelete(true);
 	m_pAssault_Label->SetAutoDelete(true);
 	m_pSupport_Label->SetAutoDelete(true);
+	if (m_pPickStatus_Label)
+	{
+		m_pPickStatus_Label->SetAutoDelete(true);
+	}
 	m_pRecon_Button->SetAutoDelete(true);
 	m_pAssault_Button->SetAutoDelete(true);
 	m_pSupport_Button->SetAutoDelete(true);
@@ -163,6 +167,7 @@ void CNeoClassMenu::FindControls()
 	m_pRecon_Label = FindControl<Label>("Recon_Label");
 	m_pAssault_Label = FindControl<Label>("Assault_Label");
 	m_pSupport_Label = FindControl<Label>("Support_Label");
+	m_pPickStatus_Label = FindControl<Label>("PickStatus_Label");
 
 	m_pRecon_Button = FindControl<CNeoButton>("Scout_Button");
 	m_pAssault_Button = FindControl<CNeoButton>("Assault_Button");
@@ -225,8 +230,10 @@ void CNeoClassMenu::OnCommand(const char *command)
 	if (Q_stristr(commandBuffer, "setclass") != 0)
 	{ // Picking class, stay on this screen
 		int classNumber = commandBuffer[9] - '1'; // Needed for skin images, 0 indexed, recon class is 1
-		if (team->IsClassFull(classNumber))
+		if (!IsClassSelectable(player, team, classNumber))
+		{
 			return;
+		}
 
 		UpdateSkinImages(classNumber);
 		engine->ClientCmd(commandBuffer);
@@ -246,6 +253,16 @@ void CNeoClassMenu::OnCommand(const char *command)
 		ChangeMenu("teammenu");
 		return;
 	}
+}
+
+bool CNeoClassMenu::IsClassSelectable(const C_NEO_Player *pPlayer, const C_Team *pTeam, int neoClass) const
+{
+	if (pTeam->IsClassFull(neoClass))
+	{
+		return false;
+	}
+
+	return pPlayer->GetPickState() != NeoPickState::LoadoutWindow || pPlayer->GetClass() == neoClass;
 }
 
 void CNeoClassMenu::ChangeMenu(const char* menuName = NULL)
@@ -289,21 +306,21 @@ void CNeoClassMenu::OnKeyCodeReleased(vgui::KeyCode code)
 
 	switch (code) {
 	case KEY_1:
-		if (!team->IsClassFull(NEO_CLASS_RECON))
+		if (IsClassSelectable(player, team, NEO_CLASS_RECON))
 		{
 			UpdateSkinImages(0);
 			engine->ClientCmd("setclass 1");
 		}
 		break;
 	case KEY_2:
-		if (!team->IsClassFull(NEO_CLASS_ASSAULT))
+		if (IsClassSelectable(player, team, NEO_CLASS_ASSAULT))
 		{
 			UpdateSkinImages(1);
 			engine->ClientCmd("setclass 2");
 		}
 		break;
 	case KEY_3:
-		if (!team->IsClassFull(NEO_CLASS_SUPPORT))
+		if (IsClassSelectable(player, team, NEO_CLASS_SUPPORT))
 		{
 			UpdateSkinImages(2);
 			engine->ClientCmd("setclass 3");
@@ -475,7 +492,9 @@ void CNeoClassMenu::OnThink()
 		return;
 	}
 
-	auto updateClassButtonAndLabel = [&pLocalPlayer, &localPlayerTeam](vgui::Label *pClassLabel, vgui::Button *pClassButton, int neoClass, ConVar *classLimit)
+	const bool bClassLocked = pLocalPlayer->GetPickState() == NeoPickState::LoadoutWindow;
+
+	auto updateClassButtonAndLabel = [&pLocalPlayer, &localPlayerTeam, bClassLocked](vgui::Label *pClassLabel, vgui::Button *pClassButton, int neoClass, ConVar *classLimit)
 		{
 			if (!pClassLabel || !pClassButton)
 			{
@@ -502,7 +521,15 @@ void CNeoClassMenu::OnThink()
 				pClassButton->SetEnabled(true);
 			}
 
-			if (NEORules()->IsTeamplay())
+			// The server refuses a class change until the loadout is final, so offer the current class alone
+			const bool bLockedOut = bClassLocked && pLocalPlayer->GetClass() != neoClass;
+			if (bLockedOut)
+			{
+				V_sprintf_safe(textBuff, "LOCKED");
+				pClassButton->SetEnabled(false);
+			}
+
+			if (NEORules()->IsTeamplay() || bLockedOut)
 			{
 				pClassLabel->SetVisible(true);
 				pClassLabel->SetText(textBuff);
@@ -523,4 +550,49 @@ void CNeoClassMenu::OnThink()
 	updateClassButtonAndLabel(m_pRecon_Label, m_pRecon_Button, NEO_CLASS_RECON, &sv_neo_class_limit_recon);
 	updateClassButtonAndLabel(m_pAssault_Label, m_pAssault_Button, NEO_CLASS_ASSAULT, &sv_neo_class_limit_assault);
 	updateClassButtonAndLabel(m_pSupport_Label, m_pSupport_Button, NEO_CLASS_SUPPORT, &sv_neo_class_limit_support);
+
+	UpdatePickStatus(pLocalPlayer);
+}
+
+void CNeoClassMenu::UpdatePickStatus(const C_NEO_Player *pPlayer)
+{
+	if (!m_pPickStatus_Label)
+	{
+		return;
+	}
+
+	char szStatus[64] = "";
+	char szTime[8];
+	switch (pPlayer->GetPickState())
+	{
+	case NeoPickState::SpawnWindow:
+		FormatPickTime(szTime, sizeof(szTime), pPlayer->GetClassChangeTimeLeft());
+		V_sprintf_safe(szStatus, "Time until your class is final: %s", szTime);
+		break;
+	case NeoPickState::LoadoutWindow:
+		FormatPickTime(szTime, sizeof(szTime), pPlayer->GetLoadoutChangeTimeLeft());
+		V_sprintf_safe(szStatus, "Class locked until your loadout is final: %s", szTime);
+		break;
+	case NeoPickState::FinalTime:
+	case NeoPickState::FinalLeftSpawn:
+	{
+		const int iNextClass = pPlayer->m_iNextSpawnClassChoice.Get();
+		if (iNextClass != NEO_CLASS_RANDOM && iNextClass != pPlayer->GetClass())
+		{
+			V_sprintf_safe(szStatus, "You will spawn as %s", GetNeoClassName(iNextClass));
+		}
+		else
+		{
+			V_sprintf_safe(szStatus, "New class picks apply next spawn");
+		}
+		break;
+	}
+	case NeoPickState::AtSpawn:
+		V_sprintf_safe(szStatus, "Your class applies when you spawn");
+		break;
+	case NeoPickState::Anytime:
+		break;
+	}
+
+	m_pPickStatus_Label->SetText(szStatus);
 }
