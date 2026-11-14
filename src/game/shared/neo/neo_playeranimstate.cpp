@@ -46,6 +46,11 @@ static constexpr float FEET_FACE_EYES_TOLERANCE = 1.0f;
 // sometimes the client still has the on-ground flag set right when the jump event comes in
 static constexpr float JUMP_MIN_TIME = 0.2f;
 
+// A player on foot this long in the air without a jump event shows the jump pose:
+// a ledge walk-off, or a jump whose event the client never got. A step down a stair or a curb lands sooner
+static constexpr float FALL_POSE_DELAY = 0.25f;
+static_assert( FALL_POSE_DELAY > JUMP_MIN_TIME, "a fall pose must end on the first frame on the ground" );
+
 // The remote of a thrown detpack fires the remote's sequence only this long after the detpack is ready to trigger
 static constexpr float DET_REMOTE_FIRE_DELAY = 0.005f;
 
@@ -61,6 +66,7 @@ CNEOPlayerAnimState::CNEOPlayerAnimState( CHL2MP_Player *pPlayer )
 	m_bJumping = false;
 	m_bFirstJumpFrame = false;
 	m_flJumpStartTime = 0.0f;
+	m_flLastGroundTime = gpGlobals->curtime;
 	m_iGestureSequence = 0;
 	m_flGestureCycle = 0.0f;
 
@@ -74,6 +80,7 @@ CNEOPlayerAnimState::CNEOPlayerAnimState( CHL2MP_Player *pPlayer )
 void CNEOPlayerAnimState::ClearAnimationState()
 {
 	m_bJumping = false;
+	m_flLastGroundTime = gpGlobals->curtime;
 	m_iGestureSequence = 0;
 	BaseClass::ClearAnimationState();
 }
@@ -200,8 +207,37 @@ Activity CNEOPlayerAnimState::CalcMainActivity()
 	return ( m_pPlayer->IsSprinting() && flSpeed > SPRINT_LEGS_MIN_SPEED ) ? ACT_RUN : ACT_WALK;
 }
 
+void CNEOPlayerAnimState::CheckFallPose()
+{
+	const bool bOnFoot = m_pPlayer->GetMoveType() == MOVETYPE_WALK && m_pPlayer->GetWaterLevel() < WL_Waist;
+	if ( !bOnFoot || ( m_pPlayer->GetFlags() & FL_ONGROUND ) )
+	{
+		m_flLastGroundTime = gpGlobals->curtime;
+		return;
+	}
+
+	if ( m_bJumping || gpGlobals->curtime - m_flLastGroundTime < FALL_POSE_DELAY )
+	{
+		return;
+	}
+
+	m_bJumping = true;
+	m_bFirstJumpFrame = false;
+	m_flJumpStartTime = gpGlobals->curtime - FALL_POSE_DELAY;
+
+	// start at the frame a jump shows after the same time in the air: the takeoff crouch would read as a squat mid-air
+	RestartMainSequence();
+	const int iJumpSequence = SelectWeightedSequence( ACT_HOP );
+	if ( iJumpSequence >= 0 )
+	{
+		m_pOuter->SetCycle( FALL_POSE_DELAY * m_pOuter->GetSequenceCycleRate( m_pOuter->GetModelPtr(), iJumpSequence ) );
+	}
+}
+
 bool CNEOPlayerAnimState::HandleJumping()
 {
+	CheckFallPose();
+
 	if ( !m_bJumping )
 	{
 		return false;

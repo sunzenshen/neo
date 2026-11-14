@@ -49,15 +49,17 @@ private:
 	void StartGesture( int iSequence );
 	void ComputeGestureSequence( CStudioHdr *pStudioHdr );
 
+	void CheckFallPose();
 	bool HandleJumping();
 	bool IsLeaning() const;
 
 	CHL2MP_Player *m_pPlayer;
 
-	// the jump pose plays from the jump event until the player lands
+	// the jump pose plays from the jump event, or a fall without one, until the player lands
 	bool m_bJumping;
 	bool m_bFirstJumpFrame;
 	float m_flJumpStartTime;
+	float m_flLastGroundTime;
 
 	// fire, reload and throw sequences share one layer above the aim layers, and a new one restarts it
 	int m_iGestureSequence;
