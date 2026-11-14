@@ -169,6 +169,8 @@ void CNEOPlayerAnimState::ComputeGestureSequence( CStudioHdr *pStudioHdr )
 	pLayer->m_nOrder = GESTURE_LAYER;
 #ifndef CLIENT_DLL
 	pLayer->m_fFlags |= ANIM_LAYER_ACTIVE;
+	// the server layer's init leaves this unset, and its frame advance reads it to wrap or clamp the cycle
+	pLayer->m_bLooping = false;
 #endif
 }
 
