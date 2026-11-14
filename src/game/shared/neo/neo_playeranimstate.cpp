@@ -214,6 +214,15 @@ bool CNEOPlayerAnimState::HandleJumping()
 	const bool bInWater = m_pPlayer->GetWaterLevel() >= WL_Waist;
 	if ( bInWater || ( gpGlobals->curtime - m_flJumpStartTime > JUMP_MIN_TIME && (m_pPlayer->GetFlags() & FL_ONGROUND) ) )
 	{
+#ifdef CLIENT_DLL
+		constexpr float JUMP_LANDING_Z_TOLERANCE = 1.0f;
+		if ( !bInWater && !m_pPlayer->IsLocalPlayer() &&
+			m_pPlayer->GetLocalOrigin().z > m_pPlayer->GetNetworkOrigin().z + JUMP_LANDING_Z_TOLERANCE )
+		{
+			// The ground flag arrives before the remote origin finishes interpolating.
+			return true;
+		}
+#endif
 		m_bJumping = false;
 		RestartMainSequence();
 	}
