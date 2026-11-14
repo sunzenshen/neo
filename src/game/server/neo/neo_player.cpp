@@ -3453,8 +3453,6 @@ void CNEO_Player::GiveDefaultItems(void)
 	}
 }
 
-ConVar sv_neo_time_alive_until_cant_change_loadout("sv_neo_time_alive_until_cant_change_loadout", "25.0", FCVAR_CHEAT | FCVAR_REPLICATED, "How long after spawning changing loadouts is disabled ",
-	true, 0.0f, false, 1.0f);
 ConVar sv_neo_dist_from_spawn_until_cant_change_loadout("sv_neo_dist_from_spawn_until_cant_change_loadout", "1024.0", FCVAR_CHEAT | FCVAR_REPLICATED,
 	"How far from the spawn point, in horizontal units, changing loadouts is disabled", true, 0.0f, false, 1.0f);
 
@@ -3467,11 +3465,8 @@ bool CNEO_Player::IsFarFromSpawnForLoadout() const
 
 void CNEO_Player::GiveLoadoutWeapon(void)
 {
-	const NeoRoundStatus status = NEORules()->GetRoundStatus();
-	if (!(status == NeoRoundStatus::Idle || status == NeoRoundStatus::Warmup || status == NeoRoundStatus::Countdown) &&
-		(IsObserver() || IsDead() || m_bIneligibleForLoadoutPick
-		 || m_aliveTimer.IsGreaterThen(sv_neo_time_alive_until_cant_change_loadout.GetFloat())
-		 || IsFarFromSpawnForLoadout()))
+	const float flTimeLeft = GetLoadoutChangeTimeLeft();
+	if (flTimeLeft != NEO_PICK_NO_DEADLINE && (flTimeLeft <= 0.0f || IsFarFromSpawnForLoadout()))
 	{
 		return;
 	}

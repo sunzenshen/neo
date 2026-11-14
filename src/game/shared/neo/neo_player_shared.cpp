@@ -83,6 +83,8 @@ ConVar sv_neo_spec_replace_player_afk_time_sec( "sv_neo_spec_replace_player_afk_
 
 ConVar sv_neo_can_change_classes_anytime("sv_neo_can_change_classes_anytime", "0", FCVAR_CHEAT | FCVAR_REPLICATED, "Can players change classes at any moment, even mid-round?",
 	true, 0.0f, true, 1.0f);
+ConVar sv_neo_time_alive_until_cant_change_loadout("sv_neo_time_alive_until_cant_change_loadout", "25.0", FCVAR_CHEAT | FCVAR_REPLICATED, "How long after spawning changing loadouts is disabled ",
+	true, 0.0f, false, 1.0f);
 ConVar sv_neo_dm_max_class_dur("sv_neo_dm_max_class_dur", "10", FCVAR_REPLICATED, "The time in seconds when the player can change class on respawn during deathmatch.", true, 0.0f, true, 60.0f);
 ConVar sv_neo_aimpunch_damping("sv_neo_aimpunch_damping", "12", FCVAR_NOTIFY | FCVAR_REPLICATED, "Aim punch damping");
 ConVar sv_neo_aimpunch_spring_constant("sv_neo_aimpunch_spring_constant", "65", FCVAR_NOTIFY | FCVAR_REPLICATED, "Aim punch spring constant");
@@ -448,20 +450,20 @@ bool CNEO_Player::IsMakingFootstepSounds(float* pVelRun, float* pSpeed, int* pLa
 bool CNEO_Player::CanChangeClassNow() const
 {
 	const float flTimeLeft = GetClassChangeTimeLeft();
-	return flTimeLeft == NEO_CLASS_CHANGE_NO_DEADLINE || flTimeLeft > 0.0f;
+	return flTimeLeft == NEO_PICK_NO_DEADLINE || flTimeLeft > 0.0f;
 }
 
 float CNEO_Player::GetClassChangeTimeLeft() const
 {
 	if (m_lifeState == LIFE_DEAD || sv_neo_can_change_classes_anytime.GetBool())
 	{
-		return NEO_CLASS_CHANGE_NO_DEADLINE;
+		return NEO_PICK_NO_DEADLINE;
 	}
 
 	const NeoRoundStatus status = NEORules()->GetRoundStatus();
 	if (status == NeoRoundStatus::Idle || status == NeoRoundStatus::Warmup || status == NeoRoundStatus::Countdown)
 	{
-		return NEO_CLASS_CHANGE_NO_DEADLINE;
+		return NEO_PICK_NO_DEADLINE;
 	}
 
 	if (m_bIneligibleForLoadoutPick)
@@ -482,6 +484,22 @@ float CNEO_Player::GetClassChangeTimeLeft() const
 	}
 
 	return Max(0.0f, sv_neo_dm_max_class_dur.GetFloat() - (gpGlobals->curtime - m_flSpawnTime));
+}
+
+float CNEO_Player::GetLoadoutChangeTimeLeft() const
+{
+	const NeoRoundStatus status = NEORules()->GetRoundStatus();
+	if (status == NeoRoundStatus::Idle || status == NeoRoundStatus::Warmup || status == NeoRoundStatus::Countdown)
+	{
+		return NEO_PICK_NO_DEADLINE;
+	}
+
+	if (IsObserver() || m_lifeState == LIFE_DEAD || m_bIneligibleForLoadoutPick)
+	{
+		return 0.0f;
+	}
+
+	return Max(0.0f, sv_neo_time_alive_until_cant_change_loadout.GetFloat() - (gpGlobals->curtime - m_flSpawnTime));
 }
 
 // Crouching speed and walking speed are the same, so crouching, walking and aiming share one silent limit.

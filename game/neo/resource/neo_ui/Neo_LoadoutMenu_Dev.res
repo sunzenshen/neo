@@ -374,4 +374,23 @@
 		"Command"		"classmenu"
 		"Default"		"0"
 	}
+	"Timer_Label"
+	{
+		"ControlName"	"Label"
+		"fieldName"		"Timer_Label"
+		"xpos"			"672"
+		"ypos"			"20"
+		"wide"			"120"
+		"tall"			"32"
+		"autoResize"	"0"
+		"pinCorner"		"0"
+		"visible"		"0"
+		"enabled"		"1"
+		"tabPosition"	"0"
+		"labelText"		""
+		"textAlignment"	"east"
+		"dulltext"		"0"
+		"brighttext"	"1"
+		"font"			"CLTDefaultBold"
+	}
 }

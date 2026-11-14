@@ -168,8 +168,10 @@ public:
 
 	void RequestSetClass(int newClass);
 	bool CanChangeClassNow() const;
-	// Seconds until class changes close; NEO_CLASS_CHANGE_NO_DEADLINE if they stay open, 0 once closed
+	// Seconds until class changes close; NEO_PICK_NO_DEADLINE if they stay open, 0 once closed
 	float GetClassChangeTimeLeft() const;
+	// Seconds until loadout picks stop being granted now; NEO_PICK_NO_DEADLINE if never, 0 once closed
+	float GetLoadoutChangeTimeLeft() const;
 	void RequestSetSkin(int newSkin);
 	bool RequestSetLoadout(int loadoutNumber);
 	void RequestSetStar(int newStar);

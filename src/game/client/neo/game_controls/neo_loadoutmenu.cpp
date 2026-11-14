@@ -124,6 +124,8 @@ void CNeoLoadoutMenu::FindButtons()
 		button->SetButtonTextureID(m_iLoadoutNone);
 	}
 
+	m_pTimer_Label = FindControl<Label>("Timer_Label");
+
 	returnButton = FindControl<CNeoButton>("ReturnButton");
 	returnButton->SetMouseInputEnabled(true);
 	if (!returnButton)
@@ -181,6 +183,28 @@ void CNeoLoadoutMenu::OnMessage(const KeyValues* params, vgui::VPANEL fromPanel)
 void CNeoLoadoutMenu::OnThink()
 {
 	BaseClass::OnThink();
+
+	C_NEO_Player *pLocalPlayer = C_NEO_Player::GetLocalNEOPlayer();
+	if (!m_pTimer_Label || !pLocalPlayer)
+	{
+		return;
+	}
+
+	// A pick after the window is stored and granted on the next spawn
+	const float flTimeLeft = pLocalPlayer->GetLoadoutChangeTimeLeft();
+	const int iSecondsLeft = GetPickSecondsLeft(flTimeLeft);
+	char szTimer[16];
+	if (iSecondsLeft > 0)
+	{
+		V_sprintf_safe(szTimer, "%ds", iSecondsLeft);
+	}
+	else
+	{
+		V_sprintf_safe(szTimer, "NEXT SPAWN");
+	}
+
+	m_pTimer_Label->SetVisible(flTimeLeft != NEO_PICK_NO_DEADLINE);
+	m_pTimer_Label->SetText(szTimer);
 }
 
 void CNeoLoadoutMenu::OnMousePressed(vgui::MouseCode code)
@@ -332,5 +356,6 @@ void CNeoLoadoutMenu::ApplySchemeSettings(vgui::IScheme *pScheme)
 
 	returnButton = FindControl<CNeoButton>("ReturnButton");
 	returnButton->SetMouseInputEnabled(true);
+	m_pTimer_Label = FindControl<Label>("Timer_Label");
 	InvalidateLayout();
 }

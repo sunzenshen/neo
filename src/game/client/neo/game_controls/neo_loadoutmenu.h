@@ -80,6 +80,7 @@ protected:
 	vgui::CNeoImageButton *m_pButton11;
 	vgui::CNeoImageButton *m_pButton12;
 	vgui::CNeoButton *returnButton;
+	vgui::Label *m_pTimer_Label = nullptr;
 
 	// Our viewport interface accessor
 	IViewPort *m_pViewPort;
