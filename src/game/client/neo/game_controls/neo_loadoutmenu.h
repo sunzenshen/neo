@@ -58,6 +58,7 @@ protected:
 	void SetLabelText(const char *textEntryName, wchar_t *text);
 	void MoveLabelToFront(const char *textEntryName);
 	void FindButtons();
+	void FindLabels();
 	void UpdateTimer() { }
 
 	// vgui overrides
@@ -81,6 +82,7 @@ protected:
 	vgui::CNeoImageButton *m_pButton12;
 	vgui::CNeoButton *returnButton;
 	vgui::Label *m_pTimer_Label = nullptr;
+	vgui::Label *m_pLock_Label = nullptr;
 
 	// Our viewport interface accessor
 	IViewPort *m_pViewPort;

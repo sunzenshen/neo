@@ -154,6 +154,8 @@ public:
 	float GetClassChangeTimeLeft() const;
 	// Seconds until loadout picks stop being granted now; NEO_PICK_NO_DEADLINE if never, 0 once closed
 	float GetLoadoutChangeTimeLeft() const;
+	bool IsFarFromSpawnForLoadout() const;
+	bool CanChangeLoadoutNow() const;
 	int GetStar() const { return m_iNeoStar; }
 	int GetDisplayedHealth(int mode) const;
 
@@ -257,6 +259,8 @@ public:
 	CNetworkVar(bool, m_bCarryingGhost);
 	CNetworkVar(bool, m_bIneligibleForLoadoutPick);
 	CNetworkVar(float, m_flSpawnTime);
+	// Where this life started, for the loadout change distance limit
+	CNetworkVector(m_vecSpawnOrigin);
 	CNetworkHandle(CBaseEntity, m_hServerRagdoll);
 	CNetworkHandle(CBasePlayer, m_hCommandingPlayer);
 

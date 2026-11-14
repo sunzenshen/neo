@@ -57,6 +57,7 @@ SendPropInt(SENDINFO(m_iXP)),
 SendPropInt(SENDINFO(m_iLoadoutWepChoice), NumBitsForCount(MAX_WEAPON_LOADOUTS), SPROP_UNSIGNED),
 SendPropInt(SENDINFO(m_iNextSpawnClassChoice)),
 SendPropTime(SENDINFO(m_flSpawnTime)),
+SendPropVector(SENDINFO(m_vecSpawnOrigin), -1, SPROP_COORD),
 SendPropInt(SENDINFO(m_bInLean), NumBitsForCount(NEO_LEAN_ENUM_COUNT), SPROP_UNSIGNED),
 SendPropEHandle(SENDINFO(m_hServerRagdoll)),
 SendPropEHandle(SENDINFO(m_hCommandingPlayer)),
@@ -109,6 +110,7 @@ DEFINE_FIELD(m_bInAim, FIELD_BOOLEAN),
 
 DEFINE_FIELD(m_flCamoAuxLastTime, FIELD_TIME),
 DEFINE_FIELD(m_flSpawnTime, FIELD_TIME),
+DEFINE_FIELD(m_vecSpawnOrigin, FIELD_POSITION_VECTOR),
 DEFINE_FIELD(m_flVisionLastTime, FIELD_TIME),
 DEFINE_FIELD(m_flJumpLastTime, FIELD_TIME),
 DEFINE_FIELD(m_flNextPingTime, FIELD_TIME),
@@ -605,6 +607,7 @@ CNEO_Player::CNEO_Player()
 	V_memset(m_pszTestMessage.GetForModify(), 0, sizeof(m_pszTestMessage));
 
 	m_flSpawnTime = 0;
+	m_vecSpawnOrigin = vec3_origin;
 	m_flCamoAuxLastTime = 0;
 	m_flVisionLastTime = 0;
 	m_botThermOpticCamoDisruptedTimer.Invalidate();
@@ -3453,20 +3456,9 @@ void CNEO_Player::GiveDefaultItems(void)
 	}
 }
 
-ConVar sv_neo_dist_from_spawn_until_cant_change_loadout("sv_neo_dist_from_spawn_until_cant_change_loadout", "1024.0", FCVAR_CHEAT | FCVAR_REPLICATED,
-	"How far from the spawn point, in horizontal units, changing loadouts is disabled", true, 0.0f, false, 1.0f);
-
-// Horizontal only: spawn areas are flat, and a lane is a horizontal move away from them
-bool CNEO_Player::IsFarFromSpawnForLoadout() const
-{
-	const float flMaxDist = sv_neo_dist_from_spawn_until_cant_change_loadout.GetFloat();
-	return GetAbsOrigin().AsVector2D().DistToSqr(m_vecSpawnOrigin.AsVector2D()) > Square(flMaxDist);
-}
-
 void CNEO_Player::GiveLoadoutWeapon(void)
 {
-	const float flTimeLeft = GetLoadoutChangeTimeLeft();
-	if (flTimeLeft != NEO_PICK_NO_DEADLINE && (flTimeLeft <= 0.0f || IsFarFromSpawnForLoadout()))
+	if (!CanChangeLoadoutNow())
 	{
 		return;
 	}
@@ -4252,7 +4244,7 @@ void CNEO_Player::SpectatorTakeoverPlayerPreThink()
 			m_bIneligibleForLoadoutPick = sv_neo_spec_replace_player_loadout_enable.GetBool() ?
 				pPlayerTakeoverTarget->m_bIneligibleForLoadoutPick
 				: true;
-			m_vecSpawnOrigin = pPlayerTakeoverTarget->m_vecSpawnOrigin;
+			m_vecSpawnOrigin = pPlayerTakeoverTarget->m_vecSpawnOrigin.Get();
 
 			// Teleport the takeover target's location and velocity.
 			SetAbsOrigin(pPlayerTakeoverTarget->GetAbsOrigin());

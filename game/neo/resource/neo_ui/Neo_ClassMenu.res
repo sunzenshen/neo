@@ -330,7 +330,7 @@
 		"visible"		"0"
 		"enabled"		"1"
 		"tabPosition"	"0"
-		"labelText"		"CLASS CHANGES CLOSED UNTIL RESPAWN"
+		"labelText"		""
 		"textAlignment"	"center"
 		"dulltext"		"0"
 		"brighttext"	"1"

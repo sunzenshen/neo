@@ -85,6 +85,8 @@ ConVar sv_neo_can_change_classes_anytime("sv_neo_can_change_classes_anytime", "0
 	true, 0.0f, true, 1.0f);
 ConVar sv_neo_time_alive_until_cant_change_loadout("sv_neo_time_alive_until_cant_change_loadout", "25.0", FCVAR_CHEAT | FCVAR_REPLICATED, "How long after spawning changing loadouts is disabled ",
 	true, 0.0f, false, 1.0f);
+ConVar sv_neo_dist_from_spawn_until_cant_change_loadout("sv_neo_dist_from_spawn_until_cant_change_loadout", "1024.0", FCVAR_CHEAT | FCVAR_REPLICATED,
+	"How far from the spawn point, in horizontal units, changing loadouts is disabled", true, 0.0f, false, 1.0f);
 ConVar sv_neo_dm_max_class_dur("sv_neo_dm_max_class_dur", "10", FCVAR_REPLICATED, "The time in seconds when the player can change class on respawn during deathmatch.", true, 0.0f, true, 60.0f);
 ConVar sv_neo_aimpunch_damping("sv_neo_aimpunch_damping", "12", FCVAR_NOTIFY | FCVAR_REPLICATED, "Aim punch damping");
 ConVar sv_neo_aimpunch_spring_constant("sv_neo_aimpunch_spring_constant", "65", FCVAR_NOTIFY | FCVAR_REPLICATED, "Aim punch spring constant");
@@ -500,6 +502,25 @@ float CNEO_Player::GetLoadoutChangeTimeLeft() const
 	}
 
 	return Max(0.0f, sv_neo_time_alive_until_cant_change_loadout.GetFloat() - (gpGlobals->curtime - m_flSpawnTime));
+}
+
+// Horizontal only: spawn areas are flat, and a lane is a horizontal move away from them
+bool CNEO_Player::IsFarFromSpawnForLoadout() const
+{
+	const float flMaxDist = sv_neo_dist_from_spawn_until_cant_change_loadout.GetFloat();
+	return GetAbsOrigin().AsVector2D().DistToSqr(m_vecSpawnOrigin.Get().AsVector2D()) > Square(flMaxDist);
+}
+
+// Shared so the loadout menu says when the server would refuse a weapon now
+bool CNEO_Player::CanChangeLoadoutNow() const
+{
+	const float flTimeLeft = GetLoadoutChangeTimeLeft();
+	if (flTimeLeft == NEO_PICK_NO_DEADLINE)
+	{
+		return true;
+	}
+
+	return flTimeLeft > 0.0f && !IsFarFromSpawnForLoadout();
 }
 
 // Crouching speed and walking speed are the same, so crouching, walking and aiming share one silent limit.

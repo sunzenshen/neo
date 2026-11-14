@@ -393,4 +393,24 @@
 		"brighttext"	"1"
 		"font"			"CLTDefaultBold"
 	}
+	"WeaponLock_Label"
+	{
+		"ControlName"	"Label"
+		"fieldName"		"WeaponLock_Label"
+		"xpos"			"536"
+		"ypos"			"604"
+		"wide"			"256"
+		"tall"			"32"
+		"autoResize"	"0"
+		"pinCorner"		"0"
+		"visible"		"0"
+		"enabled"		"1"
+		"tabPosition"	"0"
+		"labelText"		""
+		"textAlignment"	"center"
+		"dulltext"		"0"
+		"brighttext"	"1"
+		"font"			"CLTDefault"
+		"wrap"			"1"
+	}
 }

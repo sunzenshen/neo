@@ -172,6 +172,11 @@ void CNeoClassMenu::FindControls()
 	m_pAssault_Label = FindControl<Label>("Assault_Label");
 	m_pSupport_Label = FindControl<Label>("Support_Label");
 	m_pClassLock_Label = FindControl<Label>("ClassLock_Label");
+	if (m_pClassLock_Label)
+	{
+		// Set here because a .res string cannot hold a line break
+		m_pClassLock_Label->SetText("CLASS CHANGES CLOSED\nUNTIL NEXT SPAWN");
+	}
 	m_pTimer_Label = FindControl<Label>("Timer_Label");
 
 	m_pRecon_Button = FindControl<CNeoButton>("Scout_Button");
