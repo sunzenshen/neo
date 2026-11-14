@@ -124,7 +124,7 @@ void CNeoLoadoutMenu::FindButtons()
 		button->SetButtonTextureID(m_iLoadoutNone);
 	}
 
-	m_pTimer_Label = FindControl<Label>("Timer_Label");
+	FindLabels();
 
 	returnButton = FindControl<CNeoButton>("ReturnButton");
 	returnButton->SetMouseInputEnabled(true);
@@ -185,26 +185,37 @@ void CNeoLoadoutMenu::OnThink()
 	BaseClass::OnThink();
 
 	C_NEO_Player *pLocalPlayer = C_NEO_Player::GetLocalNEOPlayer();
-	if (!m_pTimer_Label || !pLocalPlayer)
+	if (!pLocalPlayer)
 	{
 		return;
 	}
 
-	// A pick after the window is stored and granted on the next spawn
-	const float flTimeLeft = pLocalPlayer->GetLoadoutChangeTimeLeft();
-	const int iSecondsLeft = GetPickSecondsLeft(flTimeLeft);
-	char szTimer[16];
-	if (iSecondsLeft > 0)
+	// A pick the server refuses now is stored and granted on the next spawn
+	const bool bCanChange = pLocalPlayer->CanChangeLoadoutNow();
+	if (m_pLock_Label)
 	{
-		V_sprintf_safe(szTimer, "%ds", iSecondsLeft);
-	}
-	else
-	{
-		V_sprintf_safe(szTimer, "NEXT SPAWN");
+		m_pLock_Label->SetVisible(!bCanChange);
 	}
 
-	m_pTimer_Label->SetVisible(flTimeLeft != NEO_PICK_NO_DEADLINE);
-	m_pTimer_Label->SetText(szTimer);
+	if (m_pTimer_Label)
+	{
+		const float flTimeLeft = pLocalPlayer->GetLoadoutChangeTimeLeft();
+		char szTimer[16];
+		V_sprintf_safe(szTimer, "%ds", GetPickSecondsLeft(flTimeLeft));
+		m_pTimer_Label->SetVisible(bCanChange && flTimeLeft != NEO_PICK_NO_DEADLINE);
+		m_pTimer_Label->SetText(szTimer);
+	}
+}
+
+void CNeoLoadoutMenu::FindLabels()
+{
+	m_pTimer_Label = FindControl<Label>("Timer_Label");
+	m_pLock_Label = FindControl<Label>("WeaponLock_Label");
+	if (m_pLock_Label)
+	{
+		// Set here because a .res string cannot hold a line break
+		m_pLock_Label->SetText("WEAPON CHANGES CLOSED\nUNTIL NEXT SPAWN");
+	}
 }
 
 void CNeoLoadoutMenu::OnMousePressed(vgui::MouseCode code)
@@ -356,6 +367,6 @@ void CNeoLoadoutMenu::ApplySchemeSettings(vgui::IScheme *pScheme)
 
 	returnButton = FindControl<CNeoButton>("ReturnButton");
 	returnButton->SetMouseInputEnabled(true);
-	m_pTimer_Label = FindControl<Label>("Timer_Label");
+	FindLabels();
 	InvalidateLayout();
 }

@@ -187,6 +187,8 @@ public:
 	float GetClassChangeTimeLeft() const;
 	// Seconds until loadout picks stop being granted now; NEO_PICK_NO_DEADLINE if never, 0 once closed
 	float GetLoadoutChangeTimeLeft() const;
+	bool IsFarFromSpawnForLoadout() const;
+	bool CanChangeLoadoutNow() const;
 	void RequestSetSkin(int newSkin);
 	bool RequestSetLoadout(int loadoutNumber);
 	void RequestSetStar(int newStar);
@@ -334,6 +336,8 @@ public:
 	CNetworkVar(bool, m_bCarryingGhost);
 	CNetworkVar(bool, m_bIneligibleForLoadoutPick);
 	CNetworkVar(float, m_flSpawnTime);
+	// Where this life started, for the loadout change distance limit
+	CNetworkVector(m_vecSpawnOrigin);
 	CNetworkHandle(CBaseEntity, m_hServerRagdoll);
 
 	CNetworkVar(float, m_flCamoAuxLastTime);
@@ -393,11 +397,6 @@ private:
 	// blood decals are client-side, so track injury event count for bots
 	int m_iBotDetectableBleedingInjuryEvents = 0;
 	bool m_bSpectatorTakeoverPlayerPending{false};
-
-	bool IsFarFromSpawnForLoadout() const;
-
-	// Where this life started, for the loadout change distance limit
-	Vector m_vecSpawnOrigin = vec3_origin;
 
 	// Cache for GetFogObscuredRatio for each player
 	mutable CNEO_Player_FogCacheEntry m_playerFogCache[MAX_PLAYERS_ARRAY_SAFE];
