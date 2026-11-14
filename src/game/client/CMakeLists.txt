@@ -1598,6 +1598,9 @@ set(UNITY_SOURCE_NEO_SRC_CLIENT
     neo/c_neo_point_world_text.cpp
     neo/c_neo_player.cpp
     neo/c_neo_te_tocflash.cpp
+    neo/c_neo_volsmoke.cpp
+    neo/neo_volsmoke_cover.cpp
+    neo/c_neo_smoke_volume_ent.cpp
     neo/neo_fixup_glshaders.cpp
     neo/c_neo_bloom_controller.cpp
     neo/c_neo_killer_damage_infos.cpp
@@ -1617,6 +1620,8 @@ target_sources_grouped(
     neo/c_neo_point_world_text.h
     neo/c_neo_player.h
     neo/c_neo_te_tocflash.h
+    neo/c_neo_volsmoke.h
+    neo/neo_volsmoke_cover.h
     neo/neo_fixup_glshaders.h
     neo/c_neo_killer_damage_infos.h
     ${UNITY_SOURCE_NEO_SRC_CLIENT}
@@ -1770,12 +1775,27 @@ set(UNITY_SOURCE_NEO_SHARED
     ${CMAKE_SOURCE_DIR}/game/shared/neo/neo_worldpos_marker.cpp
     ${CMAKE_SOURCE_DIR}/game/shared/neo/neo_crosshair.cpp
     ${CMAKE_SOURCE_DIR}/game/shared/neo/neo_serial.cpp
+    ${CMAKE_SOURCE_DIR}/game/shared/neo/neo_smoke_fill.cpp
+    ${CMAKE_SOURCE_DIR}/game/shared/neo/neo_smoke_jobs.cpp
+    ${CMAKE_SOURCE_DIR}/game/shared/neo/neo_smoke_world.cpp
 )
 
 set_source_files_properties(
     ${UNITY_SOURCE_NEO_SHARED}
     PROPERTIES UNITY_GROUP neo_shared_client
 )
+
+# The smoke field must be the same in GCC and MSVC builds: no fast-math
+# reassociation in the fill and its world queries. MSVC needs no flag here:
+# the fill is integer arithmetic.
+if(NOT COMPILER_MSVC)
+    set_source_files_properties(
+        ${CMAKE_SOURCE_DIR}/game/shared/neo/neo_smoke_fill.cpp
+        ${CMAKE_SOURCE_DIR}/game/shared/neo/neo_smoke_world.cpp
+        PROPERTIES SKIP_UNITY_BUILD_INCLUSION ON SKIP_PRECOMPILE_HEADERS ON
+        COMPILE_OPTIONS -fno-fast-math
+    )
+endif()
 
 target_sources_grouped(
     TARGET client
@@ -1801,6 +1821,10 @@ target_sources_grouped(
     ${CMAKE_SOURCE_DIR}/game/shared/neo/neo_enums.h
     ${CMAKE_SOURCE_DIR}/game/shared/neo/neo_crosshair.h
     ${CMAKE_SOURCE_DIR}/game/shared/neo/neo_serial.h
+    ${CMAKE_SOURCE_DIR}/game/shared/neo/neo_smoke_fill.h
+    ${CMAKE_SOURCE_DIR}/game/shared/neo/neo_smoke_jobs.h
+    ${CMAKE_SOURCE_DIR}/game/shared/neo/neo_smoke_shared.h
+    ${CMAKE_SOURCE_DIR}/game/shared/neo/neo_smoke_world.h
     ${UNITY_SOURCE_NEO_SHARED}
 )
 

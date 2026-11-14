@@ -18,6 +18,10 @@ public:
 	// Starts LOS interception after scheduled delay when smoke particles are practically occluded
 	void ActivateLOSBlocker();
 
+	// A blocker that follows the server's smoke field of `pGrenade`
+	// (volumetric smoke): sight is lost where the smoke gets thick enough.
+	static CNEOSmokeLineOfSightBlocker *CreateForSmokeField( const Vector &origin, CBaseEntity *pGrenade );
+
 	void Spawn() override {
 		BaseClass::Spawn();
 		SetSolid(SOLID_BBOX);
@@ -29,6 +33,10 @@ public:
 	{
 		if (((fContentsMask & CONTENTS_BLOCKLOS) != 0) && !m_bNextEntitySeesThroughSmoke)
 		{
+			if (m_bFollowsSmokeField)
+			{
+				return TestSmokeField(ray, tr);
+			}
 			tr.fraction = 0.f; // NEO NOTE (Adam) Shouldn't returning true be enough? Should we calculate correct value for the fraction?
 			return true;
 		}
@@ -43,7 +51,12 @@ public:
 	void SetBounds(const Vector& mins, const Vector& maxs) { m_mins = mins; m_maxs = maxs; }
 
 private:
+	bool TestSmokeField(const Ray_t& ray, trace_t& tr) const;
+	void UpdateSmokeBounds();
+
 	Vector m_mins, m_maxs;
+	bool m_bFollowsSmokeField = false;
+	EHANDLE m_hGrenade;
 
 	// for smoke LOS transparency toggle
 	static bool m_bNextEntitySeesThroughSmoke;

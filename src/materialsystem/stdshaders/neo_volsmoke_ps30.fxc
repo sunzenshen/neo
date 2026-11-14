@@ -1,0 +1,346 @@
+// NEO volumetric smoke - pixel shader.
+//
+// Raymarches a CPU-simulated voxel grid (uploaded as a 2D slice atlas, since
+// the material system only hands us 2D procedural textures) through the
+// volume's AABB. One fragment per pixel per draw means transmittance is
+// integrated along the ray: no intra-volume sorting, so no OIT problem.
+//
+// Samples sit on a lattice of fixed world length along each eye ray, and a
+// draw owns only the lattice points whose view depth lies in its own range
+// (per vertex). Draws that split the depth range between them therefore
+// neither overlap nor leave a gap, and composite like one march.
+//
+// Scene depth comes from the engine's depth-in-dest-alpha copy
+// (TEXTURE_FRAME_BUFFER_FULL_DEPTH), using exactly the encoding that
+// spritecard's $DEPTHBLEND path reads, so the march stops at geometry.
+
+// STATIC: "CONVERT_TO_SRGB"	"0..1"	[ps30][= g_pHardwareConfig->NeedsShaderSRGBConversion()] [PC]
+// STATIC: "CONVERT_TO_SRGB"	"0..0"	[= 0] [XBOX]
+// DYNAMIC: "DLIGHTS"			"0..2"
+
+#include "common_ps_fxc.h"
+
+sampler AtlasSampler : register( s0 ); // atlas: R = cell weight, G = light, B = gas path length, A = wall distance
+sampler DepthSampler : register( s1 ); // frame buffer copy, depth in .a
+sampler NoiseSampler : register( s2 ); // tiled value noise: R = lattice layer z, G = layer z + 1, wraps
+
+const float4 g_EyePos       : register( c0 ); // xyz eye, w unused
+const float4 g_VolMin       : register( c1 ); // xyz, w = extinction per unit at density 1
+const float4 g_VolMax       : register( c2 ); // xyz, w = 1 in a far slab
+const float4 g_Grid         : register( c3 ); // x = slices, y = tiles per atlas row, zw = atlas size in tiles
+const float4 g_Ambient      : register( c4 ); // rgb ambient light, w = jitter enable
+const float4 g_Light        : register( c5 ); // rgb directional light, w = time
+const float4 g_Misc         : register( c6 ); // x unused, y = volume age, z = bloom front path length, w = debug mode
+const float4 g_ScreenParams : register( c7 ); // xy = half texel, z = path length at atlas value 1, w = 1 / edge width
+const float4 g_SmokeMin     : register( c8 ); // xyz box around the cells that hold smoke, w unused
+const float4 g_SmokeMax     : register( c9 ); // xyz, w unused
+const float4 g_SmokeSphere  : register( c10 ); // xyz gas seed, w radius that holds all smoke
+const float4 g_TileHalf     : register( c11 ); // xy = half a texel in tile coordinates, zw unused
+const float4 g_SpinCenter   : register( c12 ); // xyz the point the billows turn about, w unused
+const float4 g_DLight0Pos   : register( c13 ); // xyz dynamic light position, w = 1 / reach squared
+const float4 g_DLight0Color : register( c14 ); // rgb added light at the center (linear), w unused
+const float4 g_DLight1Pos   : register( c15 ); // as c13, second light
+const float4 g_DLight1Color : register( c16 ); // as c14, second light
+
+#define STEP_LEN  8.0f
+
+// Atlas alpha is the distance to the wall beside the gas, set by the client:
+// WALL_SCALE units over the byte range, zero at WALL_ZERO. Smoke fades over
+// one unit and ends WALL_MARGIN short of the face, so none shows past it.
+// A far slab is not clipped by scene depth: its march ends where the
+// distance turns negative, at the face that hides the rest of the ray.
+#define WALL_SCALE  21.25f     // 255 / 12 steps per unit
+#define WALL_ZERO   16.25f     // byte 195
+#define WALL_MARGIN 0.25f
+#define MAX_STEPS 64
+
+// Smoke behind this transmittance no longer shows.
+#define T_CUTOFF 0.005f
+
+// Look noise (cosmetic). Billows the size of the legacy smoke sprites move
+// the front inward by up to PUFF_BITE: with the soft edge, smoke deeper than
+// the legacy sprite radius below the front keeps its density, and the noise
+// only ever removes smoke.
+#define PUFF_BITE   28.0f
+#define FRINGE      55.0f   // PUFF_BITE plus the 27 u edge width
+#define PUFF_SCALE  0.0208f // 1 / 48 u
+#define PUFF_DETAIL 2.53f   // second octave frequency
+#define PUFF_SPIN   0.035f  // radians per second about the vertical axis
+#define PUFF_RISE   1.5f    // world units per second
+#define PUFF_SHADE  0.45f   // light lost in a crevice, where the noise bites
+#define FLASH_GRAIN_SCALE 4.0f // grain of a dynamic light's glow, against the billows
+#define FLASH_GRAIN 0.6f       // its strength: the glow varies by this share either way
+#define FLASH_CORE  0.0625f    // (core radius / reach)^2: the glow halves this close to the light
+
+// Noise texture layout, set by the client: layer z of the lattice is the
+// texture shifted by z times NOISE_Z_SHIFT texels.
+#define NOISE_SIZE    64.0f
+#define NOISE_Z_SHIFT float2( 37.0f, 17.0f )
+
+struct PS_INPUT
+{
+	float2 vPixel     : VPOS;
+	float3 vWorldPos  : TEXCOORD0;
+	float4 vScreenPos : TEXCOORD1;
+	float4 vDepth     : TEXCOORD2; // x, y = clip Z here and at the eye; z, w = view depth here and at the eye
+	float2 vZRange    : TEXCOORD3; // view depth range this draw marches, [x, y)
+};
+
+// ---------------------------------------------------------------------------
+// Atlas lookup: slice z lives at tile (z % cols, z / cols). The atlas may be
+// wider or taller than its tiles, so uv scales by its size in tiles.
+// ---------------------------------------------------------------------------
+float2 SliceUV( float2 uv, float slice )
+{
+	// The half keeps the row exact when cols is not a power of two: a divide
+	// by multiplying with the reciprocal can land just under a whole number.
+	float row = floor( ( slice + 0.5f ) / g_Grid.y );
+	float col = slice - row * g_Grid.y;
+	return ( float2( col, row ) + uv ) / g_Grid.zw;
+}
+
+float4 SampleVolume( float3 uvw )
+{
+	// Keep xy inside the tile by half a texel so bilinear never bleeds into
+	// the neighbouring slice.
+	float2 uv = clamp( uvw.xy, g_TileHalf.xy, 1.0f - g_TileHalf.xy );
+
+	float z  = clamp( uvw.z * g_Grid.x - 0.5f, 0.0f, g_Grid.x - 1.0f );
+	float z0 = floor( z );
+	float z1 = min( z0 + 1.0f, g_Grid.x - 1.0f );
+	float fz = z - z0;
+
+	float4 s0 = tex2Dlod( AtlasSampler, float4( SliceUV( uv, z0 ), 0, 0 ) );
+	float4 s1 = tex2Dlod( AtlasSampler, float4( SliceUV( uv, z1 ), 0, 0 ) );
+	return lerp( s0, s1, fz );
+}
+
+// ---------------------------------------------------------------------------
+// 3D value noise for the billows from one bilinear fetch: the hardware
+// interpolates x and y inside two lattice layers at once, the shader along z.
+// A texture lookup stays continuous where a sine hash of the lattice point
+// jumps with the last bit of its input.
+// ---------------------------------------------------------------------------
+float ValueNoise3( float3 p )
+{
+	float3 i = floor( p );
+	float3 f = frac( p );
+	f = f * f * ( 3.0f - 2.0f * f );
+
+	float2 uv = ( i.xy + NOISE_Z_SHIFT * i.z + f.xy + 0.5f ) / NOISE_SIZE;
+	float2 layers = tex2Dlod( NoiseSampler, float4( uv, 0, 0 ) ).rg;
+	return lerp( layers.x, layers.y, f.z );
+}
+
+// Premultiplied output for blending in gamma space. The draws of one volume
+// split the ray, so each layer premultiplies its gamma color by its own alpha:
+// layers of one color then sum to what a single draw would give.
+float4 BlendOutput( float3 linearColor, float alpha )
+{
+	float3 c = float3( SrgbLinearToGamma( linearColor.r ), SrgbLinearToGamma( linearColor.g ), SrgbLinearToGamma( linearColor.b ) );
+	return float4( c * alpha, alpha );
+}
+
+// Light the dynamic lights (muzzle flashes, explosions) add at a point, in
+// linear light after the client's darkness factor, so a flash reads stronger
+// in a dark cloud than in a sunlit one. The march weights it by the sample's
+// opacity and the transmittance in front, like the rest of the light.
+#if DLIGHTS > 0
+// Light scattered from a point in dense smoke: an inverse square with a
+// small core, so it is hot at the light and falls steeply, windowed to
+// zero at the reach (x = distance^2 / reach^2).
+float Falloff( float x )
+{
+	float window = saturate( 1.0f - x );
+	return window * window * FLASH_CORE / ( x + FLASH_CORE );
+}
+
+float3 DynamicLight( float3 p )
+{
+	float3 d0 = p - g_DLight0Pos.xyz;
+	float3 add = g_DLight0Color.rgb * Falloff( dot( d0, d0 ) * g_DLight0Pos.w );
+#if DLIGHTS > 1
+	float3 d1 = p - g_DLight1Pos.xyz;
+	add += g_DLight1Color.rgb * Falloff( dot( d1, d1 ) * g_DLight1Pos.w );
+#endif
+	return add;
+}
+#endif
+
+// Interleaved gradient noise - per-pixel march offset to trade banding for grain.
+float IGN( float2 pixel )
+{
+	return frac( 52.9829189f * frac( dot( pixel, float2( 0.06711056f, 0.00583715f ) ) ) );
+}
+
+float4 main( PS_INPUT i ) : COLOR
+{
+	// --- eye ray --------------------------------------------------------
+	float3 toVert   = i.vWorldPos - g_EyePos.xyz;
+	float  distVert = length( toVert );
+	float3 rd       = toVert / distVert;
+	float3 ro       = g_EyePos.xyz;
+
+	// --- screen uv + scene depth ---------------------------------------
+	float2 screenUV = i.vScreenPos.xy / i.vScreenPos.w;
+	screenUV = screenUV * float2( 0.5f, -0.5f ) + 0.5f + g_ScreenParams.xy;
+
+	float sceneA = tex2D( DepthSampler, screenUV ).a;
+
+	// Clip Z and view depth are affine along the ray. Dest alpha of ~0
+	// (cleared/sky) or ~1 (saturated range) both mean "nothing in front of us".
+	float dClipZ = ( i.vDepth.x - i.vDepth.y ) / distVert;
+	float dViewZ = ( i.vDepth.z - i.vDepth.w ) / distVert;
+	float tScene = 1.0e9f;
+	if ( sceneA > 0.002f && sceneA < 0.995f && abs( dClipZ ) > 1.0e-6f )
+	{
+		float sceneClipZ = sceneA / OO_DESTALPHA_DEPTH_RANGE;
+		tScene = ( sceneClipZ - i.vDepth.y ) / dClipZ;
+	}
+
+	// --- AABB slab test -------------------------------------------------
+	// Against the box around the smoke, not the whole grid: the rest of the
+	// grid is empty, and a ray would spend its steps there.
+	float3 invDir = 1.0f / rd;
+	float3 tA = ( g_SmokeMin.xyz - ro ) * invDir;
+	float3 tB = ( g_SmokeMax.xyz - ro ) * invDir;
+	float3 tNear = min( tA, tB );
+	float3 tFar  = max( tA, tB );
+	float t0 = max( max( tNear.x, tNear.y ), tNear.z );
+	float t1 = min( min( tFar.x,  tFar.y  ), tFar.z  );
+
+	t0 = max( t0, 0.0f );        // camera may be inside the box
+	t1 = min( t1, tScene );      // stop at opaque geometry
+
+	int debugMode = (int)g_Misc.w;
+	if ( debugMode == 2 )
+	{
+		// Visualize the depth we think the scene has (gray = closer).
+		float v = saturate( tScene / 2048.0f );
+		return BlendOutput( v.xxx, 1.0f );
+	}
+
+	// A gas path is never shorter than the straight line from the seed, so
+	// all smoke lies inside this sphere. It trims an open-floor cloud's box
+	// corners, where the box holds no smoke.
+	float3 toSeed = ro - g_SmokeSphere.xyz;
+	float  bHalf  = dot( toSeed, rd );
+	float  disc   = bHalf * bHalf - ( dot( toSeed, toSeed ) - g_SmokeSphere.w * g_SmokeSphere.w );
+	if ( disc <= 0.0f )
+	{
+		return float4( 0, 0, 0, 0 );
+	}
+
+	float chordHalf = sqrt( disc );
+	t0 = max( t0, -bHalf - chordHalf );
+	t1 = min( t1, -bHalf + chordHalf );
+
+	if ( t1 <= t0 || dViewZ <= 1.0e-6f )
+	{
+		return float4( 0, 0, 0, 0 ); // premultiplied: leaves the frame buffer untouched
+	}
+
+	// --- lattice ------------------------------------------------------------
+	// Point n sits at t = ( n + jitter ) * STEP_LEN and stands for the cell of
+	// one step around it. This draw owns the points inside its depth range;
+	// each cell is clipped to the box and the scene, so clipping stays soft.
+	// The range ends are whole units, rounded so every draw sees the same value.
+	float jitter = ( g_Ambient.w > 0.5f ) ? IGN( i.vPixel + g_Light.w * 100.0f ) : 0.5f;
+	float2 zRange = floor( i.vZRange + 0.5f );
+	float tLo = ( zRange.x - i.vDepth.w ) / dViewZ;
+	float tHi = ( zRange.y - i.vDepth.w ) / dViewZ;
+
+	float nFirst = max( ceil( tLo / STEP_LEN - jitter ), ceil( t0 / STEP_LEN - 0.5f - jitter ) );
+	float nEnd   = min( ceil( tHi / STEP_LEN - jitter ), ceil( t1 / STEP_LEN + 0.5f - jitter ) );
+	if ( nEnd <= nFirst )
+	{
+		return float4( 0, 0, 0, 0 );
+	}
+
+	if ( debugMode == 3 )
+	{
+		return BlendOutput( float3( 0.2f, 0.6f, 0.2f ), 0.6f );
+	}
+
+	// --- march ------------------------------------------------------------
+	float3 volSize = g_VolMax.xyz - g_VolMin.xyz;
+
+	float  T   = 1.0f;          // transmittance
+	float  hidden = 0.0f;       // a far slab's ray has passed a wall face
+	float3 col = float3( 0, 0, 0 );
+
+	// The billows turn slowly about the grenade and rise, like the legacy
+	// sprites. The volume's age keeps the noise input small.
+	float  age = g_Misc.y;
+	float3 center = g_SpinCenter.xyz;
+	float2 spin;
+	sincos( age * PUFF_SPIN, spin.y, spin.x );
+	float3 puffDrift = float3( 0.0f, 0.0f, age * PUFF_RISE );
+
+	// The exit tests sit in the loop condition: fxc compiles a break inside
+	// this loop body to a compare of two equal constants, which never fires.
+	float n = nFirst;
+	[loop]
+	for ( int s = 0; s < MAX_STEPS && n < nEnd && T >= T_CUTOFF && hidden < 0.5f; s++ )
+	{
+		float tc  = ( n + jitter ) * STEP_LEN;
+		float c0  = max( tc - 0.5f * STEP_LEN, t0 );
+		float c1  = min( tc + 0.5f * STEP_LEN, t1 );
+		float len = c1 - c0;
+		if ( len > 0.0f )
+		{
+			float3 p   = ro + rd * ( 0.5f * ( c0 + c1 ) );
+			float3 uvw = ( p - g_VolMin.xyz ) / volSize;
+			float4 v   = SampleVolume( uvw );
+
+			// Depth below the bloom front along the gas path.
+			float depth = g_Misc.z - v.b * g_ScreenParams.z;
+			float wallDist = v.a * WALL_SCALE - WALL_ZERO;
+			float wall  = saturate( wallDist - WALL_MARGIN );
+			hidden = ( wallDist < 0.0f ) ? g_VolMax.w : 0.0f;
+			if ( v.r * wall > 0.001f && depth > 0.0f )
+			{
+				float3 q = p - center;
+				q = float3( spin.x * q.x - spin.y * q.y, spin.y * q.x + spin.x * q.y, q.z ) - puffDrift;
+
+				// Near the surface, where the smoke shows, add a finer octave and
+				// move the front inward by up to PUFF_BITE.
+				float puff = ValueNoise3( q * PUFF_SCALE );
+				if ( depth < FRINGE )
+				{
+					float detail = ValueNoise3( q * ( PUFF_SCALE * PUFF_DETAIL ) + 17.0f );
+					puff = 0.6f * puff + 0.4f * detail;
+					depth -= PUFF_BITE * saturate( 2.2f * puff - 0.8f );
+				}
+
+				float d = v.r * wall * smoothstep( 0.0f, 1.0f, saturate( depth * g_ScreenParams.w ) );
+
+				float sigma = d * g_VolMin.w * len;
+				float a     = 1.0f - exp( -sigma );
+
+				float shade = 1.0f - PUFF_SHADE * puff;
+				float3 lit = g_Ambient.rgb + g_Light.rgb * v.g;
+#if DLIGHTS > 0
+				// The billows shade a near light more than the sky, and a finer
+				// noise breaks it up: without them the lit core is a smooth
+				// plateau where the legacy particles are grainy.
+				float grain = ValueNoise3( q * ( PUFF_SCALE * FLASH_GRAIN_SCALE ) + 31.0f );
+				lit += DynamicLight( p ) * ( shade * shade * shade ) * ( 1.0f + FLASH_GRAIN * ( 2.0f * grain - 1.0f ) );
+#endif
+				lit *= shade;
+				col += T * a * lit;
+				T   *= 1.0f - a;
+			}
+		}
+		n += 1.0f;
+	}
+
+	if ( debugMode == 1 )
+	{
+		return BlendOutput( float3( 1.0f, 1.0f, 1.0f ), 1.0f - T );
+	}
+
+	// Premultiplied output; shader sets ONE / ONE_MINUS_SRC_ALPHA.
+	float alpha = 1.0f - T;
+	return BlendOutput( col / max( alpha, 1.0e-5f ) * LINEAR_LIGHT_SCALE, alpha );
+}

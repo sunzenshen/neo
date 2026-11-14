@@ -1434,6 +1434,9 @@ set(UNITY_SOURCE_NEO_SHARED
     ${CMAKE_SOURCE_DIR}/game/shared/neo/neo_worldpos_marker.cpp
     ${CMAKE_SOURCE_DIR}/game/shared/neo/neo_crosshair.cpp
     ${CMAKE_SOURCE_DIR}/game/shared/neo/neo_serial.cpp
+    ${CMAKE_SOURCE_DIR}/game/shared/neo/neo_smoke_fill.cpp
+    ${CMAKE_SOURCE_DIR}/game/shared/neo/neo_smoke_jobs.cpp
+    ${CMAKE_SOURCE_DIR}/game/shared/neo/neo_smoke_world.cpp
 )
 
 set(UNITY_SOURCE_NEO_SRC_SERVER
@@ -1452,6 +1455,7 @@ set(UNITY_SOURCE_NEO_SRC_SERVER
     neo/neo_smokelineofsightblocker.cpp
     neo/neo_spawn_manager.cpp
     neo/neo_smokegrenade.cpp
+    neo/neo_smoke_volume.cpp
     neo/neo_te_tocflash.cpp
     neo/neo_typeconverter.cpp
     neo/neo_dm_spawn.cpp
@@ -1462,6 +1466,18 @@ set_source_files_properties(
     ${UNITY_SOURCE_NEO_SHARED}
     PROPERTIES UNITY_GROUP neo_shared_server
 )
+
+# The smoke field must be the same in GCC and MSVC builds: no fast-math
+# reassociation in the fill and its world queries. MSVC needs no flag here:
+# the fill is integer arithmetic.
+if(NOT COMPILER_MSVC)
+    set_source_files_properties(
+        ${CMAKE_SOURCE_DIR}/game/shared/neo/neo_smoke_fill.cpp
+        ${CMAKE_SOURCE_DIR}/game/shared/neo/neo_smoke_world.cpp
+        PROPERTIES SKIP_UNITY_BUILD_INCLUSION ON SKIP_PRECOMPILE_HEADERS ON
+        COMPILE_OPTIONS -fno-fast-math
+    )
+endif()
 
 set_source_files_properties(
     ${UNITY_SOURCE_NEO_SRC_SERVER}
@@ -1492,6 +1508,10 @@ target_sources_grouped(
     ${CMAKE_SOURCE_DIR}/game/shared/neo/neo_enums.h
     ${CMAKE_SOURCE_DIR}/game/shared/neo/neo_crosshair.h
     ${CMAKE_SOURCE_DIR}/game/shared/neo/neo_serial.h
+    ${CMAKE_SOURCE_DIR}/game/shared/neo/neo_smoke_fill.h
+    ${CMAKE_SOURCE_DIR}/game/shared/neo/neo_smoke_jobs.h
+    ${CMAKE_SOURCE_DIR}/game/shared/neo/neo_smoke_shared.h
+    ${CMAKE_SOURCE_DIR}/game/shared/neo/neo_smoke_world.h
     ${UNITY_SOURCE_NEO_SHARED}
     neo/neo_detpack.h
     neo/neo_game_config.h
@@ -1506,6 +1526,7 @@ target_sources_grouped(
     neo/neo_smokelineofsightblocker.h
     neo/neo_spawn_manager.h
     neo/neo_smokegrenade.h
+    neo/neo_smoke_volume.h
     neo/neo_te_tocflash.h
     neo/neo_tracefilter_collisiongroupdelta.h
     neo/neo_dm_spawn.h

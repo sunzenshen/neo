@@ -43,6 +43,25 @@ extern ConVar muzzleflash_light;
 
 #define TENT_WIND_ACCEL 50
 
+#ifdef NEO
+// Debris lies where it fell until the round restarts.
+static CUtlVector< CHandle< C_PhysPropClientside > > s_NeoDebris;
+
+void NEO_RemoveTempEntDebris()
+{
+	for ( int i = 0; i < s_NeoDebris.Count(); ++i )
+	{
+		C_PhysPropClientside *pDebris = s_NeoDebris[i];
+		if ( pDebris )
+		{
+			pDebris->Release();
+		}
+	}
+
+	s_NeoDebris.Purge();
+}
+
+#endif // NEO
 //Precache the effects
 #ifndef TF_CLIENT_DLL
 CLIENTEFFECT_REGISTER_BEGIN( PrecacheEffectMuzzleFlash )
@@ -1173,6 +1192,14 @@ C_PhysPropClientside *CTempEnts::PhysicsProp( const model_t *model, int skin, co
 		pEntity->Break();
 	}
 
+#ifdef NEO
+	if ( physFlags & TE_PHYSPROPFLAG_DEBRIS )
+	{
+		pEntity->SetCollisionGroup( COLLISION_GROUP_DEBRIS );
+		s_NeoDebris.AddToTail( pEntity );
+	}
+
+#endif // NEO
 	return pEntity;
 }
 

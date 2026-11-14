@@ -26,6 +26,14 @@ float		g_SmokeFogOverlayAlpha;
 Vector		g_SmokeFogOverlayColor;
 #ifdef NEO
 bool		g_SmokeFogOverlayThermalOverride;
+
+// This frame's colored share of the overlay alpha, and its alpha-weighted color.
+static float s_flColoredAlpha = 0.0f;
+static Vector s_vecColoredSum( 0.0f, 0.0f, 0.0f );
+static int s_nColoredFrame = -1;
+
+// Share of the screen size the overlay quad reaches past each edge.
+static const float SMOKE_FOG_OVERLAY_MARGIN = 0.01f;
 #endif
 
 CLIENTEFFECT_REGISTER_BEGIN( PrecacheSmokeFogOverlay )
@@ -71,6 +79,15 @@ void DrawSmokeFogOverlay()
 
 	// Hard-coded for now..
 	g_SmokeFogOverlayColor.Init( 0.3, 0.3, 0.3 );
+#ifdef NEO
+	// Volumes in a dark place give the overlay their own darker color; the
+	// legacy smoke's share keeps the gray.
+	if ( s_nColoredFrame == gpGlobals->framecount && s_flColoredAlpha > 0.0f )
+	{
+		const float colored = Min( s_flColoredAlpha / g_SmokeFogOverlayAlpha, 1.0f );
+		g_SmokeFogOverlayColor = Lerp( colored, g_SmokeFogOverlayColor, s_vecColoredSum / s_flColoredAlpha );
+	}
+#endif // NEO
 	
 	CMatRenderContextPtr pRenderContext( materials );
 
@@ -104,6 +121,35 @@ void DrawSmokeFogOverlay()
 	vColor.z = MIN(MAX(vColor.z, 0), 1);
 	float alpha = MIN(MAX(g_SmokeFogOverlayAlpha, 0), 1);
 
+#ifdef NEO
+	// Reach past the screen edges: with the half-pixel offset of the D3D9
+	// convention, a quad that ends on them can leave the first row and
+	// column uncovered.
+	const float lo = -SMOKE_FOG_OVERLAY_MARGIN;
+	const float hi = 1.0f + SMOKE_FOG_OVERLAY_MARGIN;
+
+	meshBuilder.Begin( pMesh, MATERIAL_QUADS, 1 );
+
+	meshBuilder.Position3f( lo, lo, dist );
+	meshBuilder.Color4f( vColor.x, vColor.y, vColor.z, alpha );
+	meshBuilder.TexCoord2f( 0, 0.0f, 0.0f );
+	meshBuilder.AdvanceVertex();
+
+	meshBuilder.Position3f( lo, hi, dist );
+	meshBuilder.Color4f( vColor.x, vColor.y, vColor.z, alpha );
+	meshBuilder.TexCoord2f( 0, 0.0f, 0.0f );
+	meshBuilder.AdvanceVertex();
+
+	meshBuilder.Position3f( hi, hi, dist );
+	meshBuilder.Color4f( vColor.x, vColor.y, vColor.z, alpha );
+	meshBuilder.TexCoord2f( 0, 0.0f, 0.0f );
+	meshBuilder.AdvanceVertex();
+
+	meshBuilder.Position3f( hi, lo, dist );
+	meshBuilder.Color4f( vColor.x, vColor.y, vColor.z, alpha );
+	meshBuilder.TexCoord2f( 0, 0.0f, 0.0f );
+	meshBuilder.AdvanceVertex();
+#else
 	meshBuilder.Begin( pMesh, MATERIAL_QUADS, 1 );
 
 	meshBuilder.Position3f( 0, 0, dist );
@@ -125,6 +171,7 @@ void DrawSmokeFogOverlay()
 	meshBuilder.Color4f( vColor.x, vColor.y, vColor.z, alpha );
 	meshBuilder.TexCoord2f( 0, 0.0f, 0.0f );
 	meshBuilder.AdvanceVertex();
+#endif // NEO
 
 	meshBuilder.End();
 	pMesh->Draw();
@@ -142,6 +189,81 @@ void DrawSmokeFogOverlay()
 extern ConVar glow_outline_effect_enable;
 #endif // GLOWS_ENABLE
 extern ConVar mp_forcecamera;
+#ifdef NEO
+enum SmokeFogOverlayView_t
+{
+	SMOKE_FOG_VIEW_NORMAL,
+	SMOKE_FOG_VIEW_THERMAL, // a support's vision, or observing one in first person
+	SMOKE_FOG_VIEW_GLOWS, // a spectator who sees players through walls
+};
+
+static SmokeFogOverlayView_t SmokeFogOverlayView()
+{
+	auto localPlayer = C_NEO_Player::GetLocalNEOPlayer();
+	Assert(localPlayer);
+	if (!localPlayer)
+	{
+		return SMOKE_FOG_VIEW_NORMAL;
+	}
+
+	if (localPlayer->IsAlive())
+	{
+		if (localPlayer->GetClass() == NEO_CLASS_SUPPORT && localPlayer->IsInVision())
+		{
+			return SMOKE_FOG_VIEW_THERMAL;
+		}
+	}
+	else if (localPlayer->GetObserverMode() == OBS_MODE_IN_EYE)
+	{
+		auto targetPlayer = ToNEOPlayer(localPlayer->GetObserverTarget());
+		if (targetPlayer && targetPlayer->IsAlive())
+		{
+			if (targetPlayer->GetClass() == NEO_CLASS_SUPPORT && targetPlayer->IsInVision())
+			{
+				return SMOKE_FOG_VIEW_THERMAL;
+			}
+		}
+	}
+#ifdef GLOWS_ENABLE
+	else if (localPlayer->IsObserver() && (localPlayer->GetTeamNumber() == TEAM_SPECTATOR || mp_forcecamera.GetInt() == OBS_ALLOW_ALL))
+	{
+		return SMOKE_FOG_VIEW_GLOWS;
+	}
+#endif // GLOWS_ENABLE
+	return SMOKE_FOG_VIEW_NORMAL;
+}
+
+void UpdateThermalOverride()
+{
+	const SmokeFogOverlayView_t view = SmokeFogOverlayView();
+	g_SmokeFogOverlayThermalOverride = ( view == SMOKE_FOG_VIEW_THERMAL );
+	if (view != SMOKE_FOG_VIEW_NORMAL)
+	{
+		g_SmokeFogOverlayAlpha = 0;
+	}
+}
+
+void AddSmokeFogOverlayColored( float alpha, const Vector &color )
+{
+	if ( s_nColoredFrame != gpGlobals->framecount )
+	{
+		s_nColoredFrame = gpGlobals->framecount;
+		s_flColoredAlpha = 0.0f;
+		s_vecColoredSum.Init();
+	}
+
+	g_SmokeFogOverlayAlpha += alpha;
+	s_flColoredAlpha += alpha;
+	s_vecColoredSum += color * alpha;
+}
+
+// Read before UpdateThermalOverride runs, so it applies the same rules to
+// the alpha the overlay will draw with this frame.
+bool SmokeFogOverlayCoversView()
+{
+	return g_SmokeFogOverlayAlpha >= 1.0f && SmokeFogOverlayView() == SMOKE_FOG_VIEW_NORMAL;
+}
+#else
 void UpdateThermalOverride()
 {
 	auto localPlayer = C_NEO_Player::GetLocalNEOPlayer();
@@ -178,3 +300,4 @@ void UpdateThermalOverride()
 #endif // GLOWS_ENABLE
 	g_SmokeFogOverlayThermalOverride = false;
 }
+#endif // NEO
