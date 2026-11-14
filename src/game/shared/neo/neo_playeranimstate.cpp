@@ -63,6 +63,7 @@ CNEOPlayerAnimState::CNEOPlayerAnimState( CHL2MP_Player *pPlayer )
 	m_flJumpStartTime = 0.0f;
 	m_iGestureSequence = 0;
 	m_flGestureCycle = 0.0f;
+	ClearAimSequenceCache();
 
 	CModAnimConfig config;
 	config.m_flMaxBodyYawDegrees = NEO_ANIMSTATE_MAX_BODY_YAW_DEGREES;
@@ -169,6 +170,8 @@ void CNEOPlayerAnimState::ComputeGestureSequence( CStudioHdr *pStudioHdr )
 	pLayer->m_nOrder = GESTURE_LAYER;
 #ifndef CLIENT_DLL
 	pLayer->m_fFlags |= ANIM_LAYER_ACTIVE;
+	// the server layer's init leaves this unset, and its frame advance reads it to wrap or clamp the cycle
+	pLayer->m_bLooping = false;
 #endif
 }
 
@@ -331,22 +334,63 @@ int CNEOPlayerAnimState::CalcAimLayerSequence( float *flCycle, float *flAimSeque
 	const Activity act = GetCurrentMainSequenceActivity();
 	if ( bForceIdle )
 	{
-		return CalcSequenceIndex( "%s%s", ( act == ACT_CROUCHIDLE ) ? AIM_CROUCH_IDLE_NAME : AIM_IDLE_NAME, pSuffix );
+		// Keep the idle layer crouched while the crouch-walk layer starts or stops.
+		const bool bIsCrouching = act == ACT_CROUCHIDLE || act == ACT_RUN_CROUCH;
+		return LookupAimSequence( bIsCrouching ? AIM_CROUCH_IDLE_NAME : AIM_IDLE_NAME, pSuffix );
 	}
 
 	switch ( act )
 	{
 	case ACT_RUN:
-		return CalcSequenceIndex( "%s%s", AIM_RUN_NAME, pSuffix );
+		return LookupAimSequence( AIM_RUN_NAME, pSuffix );
 	case ACT_WALK:
-		return CalcSequenceIndex( "%s%s", AIM_WALK_NAME, pSuffix );
+		return LookupAimSequence( AIM_WALK_NAME, pSuffix );
 	case ACT_CROUCHIDLE:
-		return CalcSequenceIndex( "%s%s", AIM_CROUCH_IDLE_NAME, pSuffix );
+		return LookupAimSequence( AIM_CROUCH_IDLE_NAME, pSuffix );
 	case ACT_RUN_CROUCH:
-		return CalcSequenceIndex( "%s%s", AIM_CROUCH_WALK_NAME, pSuffix );
+		return LookupAimSequence( AIM_CROUCH_WALK_NAME, pSuffix );
 	default:
-		return CalcSequenceIndex( "%s%s", AIM_IDLE_NAME, pSuffix );
+		return LookupAimSequence( AIM_IDLE_NAME, pSuffix );
 	}
+}
+
+int CNEOPlayerAnimState::LookupAimSequence( const char *pBaseName, const char *pSuffix )
+{
+	// The index depends on the model, the base name and the weapon suffix. The names and suffixes
+	// are static strings, so their addresses identify them; a new model empties the cache.
+	const int iModel = GetOuter()->GetModelIndex();
+	const CStudioHdr *pStudioHdr = GetOuter()->GetModelPtr();
+	if ( iModel != m_iAimSequenceCacheModel || pStudioHdr != m_pAimSequenceCacheHdr )
+	{
+		ClearAimSequenceCache();
+		m_iAimSequenceCacheModel = iModel;
+		m_pAimSequenceCacheHdr = pStudioHdr;
+	}
+
+	for ( const AimSequenceCacheEntry_t &entry : m_aimSequenceCache )
+	{
+		if ( entry.pBaseName == pBaseName && entry.pSuffix == pSuffix )
+		{
+			return entry.iSequence;
+		}
+	}
+
+	const int iSequence = CalcSequenceIndex( "%s%s", pBaseName, pSuffix );
+	m_aimSequenceCache[m_iAimSequenceCacheNext] = { pBaseName, pSuffix, iSequence };
+	m_iAimSequenceCacheNext = ( m_iAimSequenceCacheNext + 1 ) % AIM_SEQUENCE_CACHE_SIZE;
+	return iSequence;
+}
+
+void CNEOPlayerAnimState::ClearAimSequenceCache()
+{
+	for ( AimSequenceCacheEntry_t &entry : m_aimSequenceCache )
+	{
+		entry = { nullptr, nullptr, 0 };
+	}
+
+	m_iAimSequenceCacheNext = 0;
+	m_iAimSequenceCacheModel = -1;
+	m_pAimSequenceCacheHdr = nullptr;
 }
 
 int CNEOPlayerAnimState::CalcFireSequence()
