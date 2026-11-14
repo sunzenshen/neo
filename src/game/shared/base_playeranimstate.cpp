@@ -297,6 +297,12 @@ void CBasePlayerAnimState::ComputeMainSequence()
 
 	pPlayer->ResetSequence( animDesired );
 
+#ifdef NEO
+	// The cycle is not networked for players and each side switches at its own time,
+	// so carrying it across a switch lets the client and server phases drift apart.
+	RestartMainSequence();
+#endif
+
 #ifdef CLIENT_DLL
 	// If we went from idle to walk, reset the interpolation history.
 	// Kind of hacky putting this here.. it might belong outside the base class.
