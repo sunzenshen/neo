@@ -288,7 +288,13 @@ static_assert(NEO_ZOOM_SPEED != 0.0f, "Divide by zero");
 #define COLOR_NEO_WHITE Color(218, 217, 213, 255)
 #define COLOR_NEO_WHITE_STR "218 217 213 255"
 
-constexpr float NEO_CLASS_CHANGE_NO_DEADLINE = -1.0f;
+constexpr float NEO_PICK_NO_DEADLINE = -1.0f;
+
+// Rounded up, so a menu timer never shows zero while the pick is still open
+inline int GetPickSecondsLeft(const float flTimeLeft)
+{
+	return (flTimeLeft > 0.0f) ? static_cast<int>(ceilf(flTimeLeft)) : 0;
+}
 
 class CNEO_Player;
 class CNEOBaseCombatWeapon;
