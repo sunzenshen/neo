@@ -38,9 +38,11 @@ public:
 	virtual Activity CalcMainActivity() override;
 	virtual int CalcAimLayerSequence( float *flCycle, float *flAimSequenceWeight, bool bForceIdle ) override;
 	virtual float GetCurrentMaxGroundSpeed() override;
+	virtual float CalcMovementPlaybackRate( bool *bIsMoving ) override;
 
 protected:
 	virtual void ComputePoseParam_BodyYaw() override;
+	virtual void ComputePoseParam_MoveYaw( CStudioHdr *pStudioHdr ) override;
 
 private:
 	const char *GetAimSuffix() const;
@@ -52,6 +54,8 @@ private:
 	void CheckFallPose();
 	bool HandleJumping();
 	bool IsLeaning() const;
+	bool IsOnLadder() const;
+	float GetClimbSpeed() const;
 
 	CHL2MP_Player *m_pPlayer;
 
