@@ -38,9 +38,11 @@ public:
 	virtual Activity CalcMainActivity() override;
 	virtual int CalcAimLayerSequence( float *flCycle, float *flAimSequenceWeight, bool bForceIdle ) override;
 	virtual float GetCurrentMaxGroundSpeed() override;
+	virtual float CalcMovementPlaybackRate( bool *bIsMoving ) override;
 
 protected:
 	virtual void ComputePoseParam_BodyYaw() override;
+	virtual void ComputePoseParam_MoveYaw( CStudioHdr *pStudioHdr ) override;
 
 private:
 	const char *GetAimSuffix() const;
@@ -49,15 +51,19 @@ private:
 	void StartGesture( int iSequence );
 	void ComputeGestureSequence( CStudioHdr *pStudioHdr );
 
+	void CheckFallPose();
 	bool HandleJumping();
 	bool IsLeaning() const;
+	bool IsOnLadder() const;
+	float GetClimbSpeed() const;
 
 	CHL2MP_Player *m_pPlayer;
 
-	// the jump pose plays from the jump event until the player lands
+	// the jump pose plays from the jump event, or a fall without one, until the player lands
 	bool m_bJumping;
 	bool m_bFirstJumpFrame;
 	float m_flJumpStartTime;
+	float m_flLastGroundTime;
 
 	// fire, reload and throw sequences share one layer above the aim layers, and a new one restarts it
 	int m_iGestureSequence;

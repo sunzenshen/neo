@@ -42,9 +42,18 @@ static constexpr float SPRINT_LEGS_MIN_SPEED = 100.0f;
 // The feet face the eyes when they are this close (degrees)
 static constexpr float FEET_FACE_EYES_TOLERANCE = 1.0f;
 
+// The 9-way leg blend's pose parameters: forward and sideways stride
+static constexpr const char *POSE_MOVE_X = "move_x";
+static constexpr const char *POSE_MOVE_Y = "move_y";
+
 // Don't check if a jumping player is on the ground for this long:
 // sometimes the client still has the on-ground flag set right when the jump event comes in
 static constexpr float JUMP_MIN_TIME = 0.2f;
+
+// A player on foot this long in the air without a jump event shows the jump pose:
+// a ledge walk-off, or a jump whose event the client never got. A step down a stair or a curb lands sooner
+static constexpr float FALL_POSE_DELAY = 0.25f;
+static_assert( FALL_POSE_DELAY > JUMP_MIN_TIME, "a fall pose must end on the first frame on the ground" );
 
 // The remote of a thrown detpack fires the remote's sequence only this long after the detpack is ready to trigger
 static constexpr float DET_REMOTE_FIRE_DELAY = 0.005f;
@@ -61,6 +70,7 @@ CNEOPlayerAnimState::CNEOPlayerAnimState( CHL2MP_Player *pPlayer )
 	m_bJumping = false;
 	m_bFirstJumpFrame = false;
 	m_flJumpStartTime = 0.0f;
+	m_flLastGroundTime = gpGlobals->curtime;
 	m_iGestureSequence = 0;
 	m_flGestureCycle = 0.0f;
 
@@ -74,6 +84,7 @@ CNEOPlayerAnimState::CNEOPlayerAnimState( CHL2MP_Player *pPlayer )
 void CNEOPlayerAnimState::ClearAnimationState()
 {
 	m_bJumping = false;
+	m_flLastGroundTime = gpGlobals->curtime;
 	m_iGestureSequence = 0;
 	BaseClass::ClearAnimationState();
 }
@@ -169,6 +180,8 @@ void CNEOPlayerAnimState::ComputeGestureSequence( CStudioHdr *pStudioHdr )
 	pLayer->m_nOrder = GESTURE_LAYER;
 #ifndef CLIENT_DLL
 	pLayer->m_fFlags |= ANIM_LAYER_ACTIVE;
+	// the server layer's init leaves this unset, and its frame advance reads it to wrap or clamp the cycle
+	pLayer->m_bLooping = false;
 #endif
 }
 
@@ -177,6 +190,12 @@ Activity CNEOPlayerAnimState::CalcMainActivity()
 	if ( HandleJumping() )
 	{
 		return ACT_HOP;
+	}
+
+	// the models have no climb sequence, so a climber walks in place
+	if ( IsOnLadder() )
+	{
+		return ( fabsf( GetClimbSpeed() ) > MOVING_MINIMUM_SPEED ) ? ACT_WALK : ACT_IDLE;
 	}
 
 	if ( m_pPlayer->GetWaterLevel() >= WL_Waist )
@@ -198,8 +217,37 @@ Activity CNEOPlayerAnimState::CalcMainActivity()
 	return ( m_pPlayer->IsSprinting() && flSpeed > SPRINT_LEGS_MIN_SPEED ) ? ACT_RUN : ACT_WALK;
 }
 
+void CNEOPlayerAnimState::CheckFallPose()
+{
+	const bool bOnFoot = m_pPlayer->GetMoveType() == MOVETYPE_WALK && m_pPlayer->GetWaterLevel() < WL_Waist;
+	if ( !bOnFoot || ( m_pPlayer->GetFlags() & FL_ONGROUND ) )
+	{
+		m_flLastGroundTime = gpGlobals->curtime;
+		return;
+	}
+
+	if ( m_bJumping || gpGlobals->curtime - m_flLastGroundTime < FALL_POSE_DELAY )
+	{
+		return;
+	}
+
+	m_bJumping = true;
+	m_bFirstJumpFrame = false;
+	m_flJumpStartTime = gpGlobals->curtime - FALL_POSE_DELAY;
+
+	// start at the frame a jump shows after the same time in the air: the takeoff crouch would read as a squat mid-air
+	RestartMainSequence();
+	const int iJumpSequence = SelectWeightedSequence( ACT_HOP );
+	if ( iJumpSequence >= 0 )
+	{
+		m_pOuter->SetCycle( FALL_POSE_DELAY * m_pOuter->GetSequenceCycleRate( m_pOuter->GetModelPtr(), iJumpSequence ) );
+	}
+}
+
 bool CNEOPlayerAnimState::HandleJumping()
 {
+	CheckFallPose();
+
 	if ( !m_bJumping )
 	{
 		return false;
@@ -212,8 +260,18 @@ bool CNEOPlayerAnimState::HandleJumping()
 	}
 
 	const bool bInWater = m_pPlayer->GetWaterLevel() >= WL_Waist;
-	if ( bInWater || ( gpGlobals->curtime - m_flJumpStartTime > JUMP_MIN_TIME && (m_pPlayer->GetFlags() & FL_ONGROUND) ) )
+	const bool bLanded = ( m_pPlayer->GetFlags() & FL_ONGROUND ) || IsOnLadder();
+	if ( bInWater || ( gpGlobals->curtime - m_flJumpStartTime > JUMP_MIN_TIME && bLanded ) )
 	{
+#ifdef CLIENT_DLL
+		constexpr float JUMP_LANDING_Z_TOLERANCE = 1.0f;
+		if ( !bInWater && !m_pPlayer->IsLocalPlayer() &&
+			m_pPlayer->GetLocalOrigin().z > m_pPlayer->GetNetworkOrigin().z + JUMP_LANDING_Z_TOLERANCE )
+		{
+			// The ground flag arrives before the remote origin finishes interpolating.
+			return true;
+		}
+#endif
 		m_bJumping = false;
 		RestartMainSequence();
 	}
@@ -235,6 +293,61 @@ float CNEOPlayerAnimState::GetCurrentMaxGroundSpeed()
 	default:
 		return 0.0f;
 	}
+}
+
+bool CNEOPlayerAnimState::IsOnLadder() const
+{
+	return m_pPlayer->GetMoveType() == MOVETYPE_LADDER;
+}
+
+float CNEOPlayerAnimState::GetClimbSpeed() const
+{
+	Vector vecVelocity;
+	GetOuterAbsVelocity( vecVelocity );
+	return vecVelocity.z;
+}
+
+float CNEOPlayerAnimState::CalcMovementPlaybackRate( bool *bIsMoving )
+{
+	if ( !IsOnLadder() )
+	{
+		return BaseClass::CalcMovementPlaybackRate( bIsMoving );
+	}
+
+	// a climb has almost no horizontal speed, so the climb speed drives the legs and the walking torso
+	const float flClimbSpeed = fabsf( GetClimbSpeed() );
+	*bIsMoving = flClimbSpeed > MOVING_MINIMUM_SPEED;
+	return ( *bIsMoving ) ? flClimbSpeed / ANIM_TOPSPEED_WALK : 1.0f;
+}
+
+void CNEOPlayerAnimState::ComputePoseParam_MoveYaw( CStudioHdr *pStudioHdr )
+{
+	BaseClass::ComputePoseParam_MoveYaw( pStudioHdr );
+
+	if ( !IsOnLadder() )
+	{
+		return;
+	}
+
+	const int iMoveX = m_pOuter->LookupPoseParameter( pStudioHdr, POSE_MOVE_X );
+	const int iMoveY = m_pOuter->LookupPoseParameter( pStudioHdr, POSE_MOVE_Y );
+	if ( iMoveX < 0 || iMoveY < 0 )
+	{
+		return;
+	}
+
+	// the base aims the stride along a horizontal direction a climb does not have:
+	// the legs step forward going up and backward going down
+	bool bClimbing;
+	const float flRate = CalcMovementPlaybackRate( &bClimbing );
+	float flMoveX = 0.0f;
+	if ( bClimbing )
+	{
+		flMoveX = ( GetClimbSpeed() < 0.0f ) ? -flRate : flRate;
+	}
+
+	m_pOuter->SetPoseParameter( pStudioHdr, iMoveX, flMoveX );
+	m_pOuter->SetPoseParameter( pStudioHdr, iMoveY, 0.0f );
 }
 
 void CNEOPlayerAnimState::ComputePoseParam_BodyYaw()
@@ -331,7 +444,9 @@ int CNEOPlayerAnimState::CalcAimLayerSequence( float *flCycle, float *flAimSeque
 	const Activity act = GetCurrentMainSequenceActivity();
 	if ( bForceIdle )
 	{
-		return CalcSequenceIndex( "%s%s", ( act == ACT_CROUCHIDLE ) ? AIM_CROUCH_IDLE_NAME : AIM_IDLE_NAME, pSuffix );
+		// Keep the idle layer crouched while the crouch-walk layer starts or stops.
+		const bool bIsCrouching = act == ACT_CROUCHIDLE || act == ACT_RUN_CROUCH;
+		return CalcSequenceIndex( "%s%s", bIsCrouching ? AIM_CROUCH_IDLE_NAME : AIM_IDLE_NAME, pSuffix );
 	}
 
 	switch ( act )
