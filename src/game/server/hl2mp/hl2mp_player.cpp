@@ -1913,6 +1913,15 @@ void CHL2MP_Player::SetupBones( matrix3x4_t *pBoneToWorld, int boneMask )
 		GetSkeleton( pStudioHdr, pos, q, boneMask );
 	}
 
+#ifdef NEO
+	QAngle angBones = m_PlayerAnimState->GetRenderAngles();
+	if ( lagcompensation->IsCurrentlyDoingLagCompensation() )
+	{
+		// A rewind restores the body yaw into the local angles but not into the anim state.
+		angBones = QAngle( 0, GetAbsAngles()[YAW], 0 );
+	}
+#endif
+
 	CBaseAnimating *pParent = dynamic_cast< CBaseAnimating* >( GetMoveParent() );
 	if ( pParent )
 	{
@@ -1923,7 +1932,7 @@ void CHL2MP_Player::SetupBones( matrix3x4_t *pBoneToWorld, int boneMask )
 			BuildMatricesWithBoneMerge( 
 				pStudioHdr, 
 #ifdef NEO
-				m_PlayerAnimState->GetRenderAngles(),
+				angBones,
 #else
 				m_PlayerAnimState.GetRenderAngles(),
 #endif
@@ -1941,7 +1950,7 @@ void CHL2MP_Player::SetupBones( matrix3x4_t *pBoneToWorld, int boneMask )
 	Studio_BuildMatrices( 
 		pStudioHdr, 
 #ifdef NEO
-		m_PlayerAnimState->GetRenderAngles(),
+		angBones,
 #else
 		m_PlayerAnimState.GetRenderAngles(),
 #endif
