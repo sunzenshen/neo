@@ -210,6 +210,10 @@ public:
 		m_pLabel->SetMouseInputEnabled(false);
 		m_pLabel->SetKeyBoardInputEnabled(false);
 		m_pLabel->SetTextInset(TEXT_INSET, TEXT_INSET);
+
+		// Paint adds the top inset on top of the vertical alignment, so a centered
+		// label leaves no room below the text
+		m_pLabel->SetContentAlignment(vgui::Label::a_northwest);
 		m_pLabel->SetVisible(false);
 	}
 
@@ -234,16 +238,42 @@ public:
 
 		_isDirty = false;
 
-		// The content size holds the inset on the leading side only
-		int iWide, iTall;
-		m_pLabel->GetContentSize(iWide, iTall);
-		m_pLabel->SetSize(iWide + TEXT_INSET, iTall + TEXT_INSET);
+		SizeToText();
 		PositionWindow(m_pLabel);
 		m_pLabel->SetVisible(true);
 		m_pLabel->MoveToFront();
 	}
 
 private:
+	// Label::GetContentSize adds the inset only through the text image's previous
+	// size, and TextImage counts the newline glyph in a line's width, so measure
+	// each line here
+	void SizeToText()
+	{
+		wchar_t wszText[512];
+		m_pLabel->GetText(wszText, sizeof(wszText));
+		const HFont hFont = m_pLabel->GetFont();
+
+		int iWide = 0;
+		int iLines = 0;
+		for (wchar_t *pLine = wszText; pLine; ++iLines)
+		{
+			wchar_t *pLineEnd = wcschr(pLine, L'\n');
+			if (pLineEnd)
+			{
+				*pLineEnd = L'\0';
+			}
+
+			int iLineWide, iLineTall;
+			surface()->GetTextSize(hFont, pLine, iLineWide, iLineTall);
+			iWide = Max(iWide, iLineWide);
+			pLine = pLineEnd ? pLineEnd + 1 : nullptr;
+		}
+
+		const int iTall = iLines * surface()->GetFontTall(hFont);
+		m_pLabel->SetSize(iWide + 2 * TEXT_INSET, iTall + 2 * TEXT_INSET);
+	}
+
 	static constexpr int TEXT_INSET = 4;
 
 	CNeoTooltipLabel *m_pLabel;
