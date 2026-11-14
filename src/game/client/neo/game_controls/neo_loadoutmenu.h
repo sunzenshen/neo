@@ -88,5 +88,6 @@ protected:
 
 private:
 	int m_iLoadoutNone;
+	vgui::BaseTooltip *m_pWeaponTooltip;
 };
 #endif // NEO_LOADOUT_MENU_H
