@@ -86,6 +86,7 @@ protected:
 	void UpdateSkinImages(int classNumber = -1, int overrideTeamNumber = -1);
 	void UpdateTimer() { }
 	void UpdateClassButtons();
+	void UpdatePickStatus(const C_NEO_Player *pPlayer);
 
     // vgui overrides
 	virtual void PerformLayout() { }
@@ -108,8 +109,7 @@ protected:
     vgui::Label *m_pRecon_Label = nullptr;
     vgui::Label *m_pAssault_Label = nullptr;
     vgui::Label *m_pSupport_Label = nullptr;
-	vgui::Label *m_pClassLock_Label = nullptr;
-	vgui::Label *m_pTimer_Label = nullptr;
+	vgui::Label *m_pPickStatus_Label = nullptr;
 
     bool m_bClassMenu;
 

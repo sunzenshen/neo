@@ -58,6 +58,7 @@ SendPropInt(SENDINFO(m_iLoadoutWepChoice), NumBitsForCount(MAX_WEAPON_LOADOUTS),
 SendPropInt(SENDINFO(m_iNextSpawnClassChoice)),
 SendPropTime(SENDINFO(m_flSpawnTime)),
 SendPropVector(SENDINFO(m_vecSpawnOrigin), -1, SPROP_COORD),
+SendPropBool(SENDINFO(m_bLeftSpawnArea)),
 SendPropInt(SENDINFO(m_bInLean), NumBitsForCount(NEO_LEAN_ENUM_COUNT), SPROP_UNSIGNED),
 SendPropEHandle(SENDINFO(m_hServerRagdoll)),
 SendPropEHandle(SENDINFO(m_hCommandingPlayer)),
@@ -111,6 +112,7 @@ DEFINE_FIELD(m_bInAim, FIELD_BOOLEAN),
 DEFINE_FIELD(m_flCamoAuxLastTime, FIELD_TIME),
 DEFINE_FIELD(m_flSpawnTime, FIELD_TIME),
 DEFINE_FIELD(m_vecSpawnOrigin, FIELD_POSITION_VECTOR),
+DEFINE_FIELD(m_bLeftSpawnArea, FIELD_BOOLEAN),
 DEFINE_FIELD(m_flVisionLastTime, FIELD_TIME),
 DEFINE_FIELD(m_flJumpLastTime, FIELD_TIME),
 DEFINE_FIELD(m_flNextPingTime, FIELD_TIME),
@@ -238,6 +240,14 @@ void CNEO_Player::RequestSetClass(int newClass)
 	}
 
 	if (newClass == m_iNeoClass) {
+		// Picking the current class again cancels a class queued for the next spawn
+		m_iNextSpawnClassChoice = m_iNeoClass.Get();
+		return;
+	}
+
+	if (GetPickState() == NeoPickState::LoadoutWindow)
+	{
+		Msg("Class locked until your loadout is final.\n");
 		return;
 	}
 
@@ -608,6 +618,7 @@ CNEO_Player::CNEO_Player()
 
 	m_flSpawnTime = 0;
 	m_vecSpawnOrigin = vec3_origin;
+	m_bLeftSpawnArea = false;
 	m_flCamoAuxLastTime = 0;
 	m_flVisionLastTime = 0;
 	m_botThermOpticCamoDisruptedTimer.Invalidate();
@@ -739,6 +750,7 @@ void CNEO_Player::Spawn(void)
 	FixupOnGroundFlag();
 	m_flSpawnTime = gpGlobals->curtime;
 	m_vecSpawnOrigin = GetAbsOrigin();
+	m_bLeftSpawnArea = false;
 
 	SetMaxHealth(MAX_HEALTH_FOR_CLASS[m_iNeoClass]);
 	SetHealth(GetMaxHealth());
@@ -1577,6 +1589,11 @@ float CNEO_Player::GetCloakObscuredRatio(CNEO_Player* target) const
 void CNEO_Player::PostThink(void)
 {
 	BaseClass::PostThink();
+
+	if (!m_bLeftSpawnArea && IsAlive() && GetLoadoutChangeTimeLeft() > 0.0f && IsFarFromSpawnForLoadout())
+	{
+		m_bLeftSpawnArea = true;
+	}
 
 	if (!IsAlive())
 	{
@@ -4245,6 +4262,7 @@ void CNEO_Player::SpectatorTakeoverPlayerPreThink()
 				pPlayerTakeoverTarget->m_bIneligibleForLoadoutPick
 				: true;
 			m_vecSpawnOrigin = pPlayerTakeoverTarget->m_vecSpawnOrigin.Get();
+			m_bLeftSpawnArea = pPlayerTakeoverTarget->m_bLeftSpawnArea.Get();
 
 			// Teleport the takeover target's location and velocity.
 			SetAbsOrigin(pPlayerTakeoverTarget->GetAbsOrigin());

@@ -190,32 +190,68 @@ void CNeoLoadoutMenu::OnThink()
 		return;
 	}
 
-	// A pick the server refuses now is stored and granted on the next spawn
-	const bool bCanChange = pLocalPlayer->CanChangeLoadoutNow();
-	if (m_pLock_Label)
+	UpdatePickStatus(pLocalPlayer);
+	UpdateRepickHint();
+}
+
+// A pick the server refuses now is stored and granted on the next spawn
+void CNeoLoadoutMenu::UpdatePickStatus(const C_NEO_Player *pPlayer)
+{
+	if (!m_pPickStatus_Label)
 	{
-		m_pLock_Label->SetVisible(!bCanChange);
+		return;
 	}
 
-	if (m_pTimer_Label)
+	char szStatus[64] = "";
+	char szTime[8];
+	switch (pPlayer->GetPickState())
 	{
-		const float flTimeLeft = pLocalPlayer->GetLoadoutChangeTimeLeft();
-		char szTimer[16];
-		V_sprintf_safe(szTimer, "%ds", GetPickSecondsLeft(flTimeLeft));
-		m_pTimer_Label->SetVisible(bCanChange && flTimeLeft != NEO_PICK_NO_DEADLINE);
-		m_pTimer_Label->SetText(szTimer);
+	case NeoPickState::SpawnWindow:
+	case NeoPickState::LoadoutWindow:
+		FormatPickTime(szTime, sizeof(szTime), pPlayer->GetLoadoutChangeTimeLeft());
+		V_sprintf_safe(szStatus, "Time until your loadout is final: %s", szTime);
+		break;
+	case NeoPickState::FinalTime:
+		V_sprintf_safe(szStatus, "Your loadout is final. New picks apply next spawn");
+		break;
+	case NeoPickState::FinalLeftSpawn:
+		V_sprintf_safe(szStatus, "You left the spawn area. New picks apply next spawn");
+		break;
+	case NeoPickState::AtSpawn:
+		V_sprintf_safe(szStatus, "Your picks apply when you spawn");
+		break;
+	case NeoPickState::Anytime:
+		break;
 	}
+
+	m_pPickStatus_Label->SetText(szStatus);
+}
+
+// Read every frame so a rebind shows while the menu is open
+void CNeoLoadoutMenu::UpdateRepickHint()
+{
+	if (!m_pRepickHint_Label)
+	{
+		return;
+	}
+
+	char szHint[64] = "";
+	const char *pszKey = engine->Key_LookupBinding("loadoutmenu");
+	if (pszKey && pszKey[0] != '\0')
+	{
+		char szKey[16];
+		V_strcpy_safe(szKey, pszKey);
+		V_strupr(szKey);
+		V_sprintf_safe(szHint, "Use %s to repick your weapon", szKey);
+	}
+
+	m_pRepickHint_Label->SetText(szHint);
 }
 
 void CNeoLoadoutMenu::FindLabels()
 {
-	m_pTimer_Label = FindControl<Label>("Timer_Label");
-	m_pLock_Label = FindControl<Label>("WeaponLock_Label");
-	if (m_pLock_Label)
-	{
-		// Set here because a .res string cannot hold a line break
-		m_pLock_Label->SetText("WEAPON CHANGES CLOSED\nUNTIL NEXT SPAWN");
-	}
+	m_pPickStatus_Label = FindControl<Label>("PickStatus_Label");
+	m_pRepickHint_Label = FindControl<Label>("RepickHint_Label");
 }
 
 void CNeoLoadoutMenu::OnMousePressed(vgui::MouseCode code)

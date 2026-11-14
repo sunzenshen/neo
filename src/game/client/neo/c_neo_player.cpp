@@ -95,6 +95,7 @@ IMPLEMENT_CLIENTCLASS_DT(C_NEO_Player, DT_NEO_Player, CNEO_Player)
 	RecvPropTime(RECVINFO(m_flCamoAuxLastTime)),
 	RecvPropTime(RECVINFO(m_flSpawnTime)),
 	RecvPropVector(RECVINFO(m_vecSpawnOrigin)),
+	RecvPropBool(RECVINFO(m_bLeftSpawnArea)),
 	RecvPropTime(RECVINFO(m_flVisionLastTime)),
 	RecvPropTime(RECVINFO(m_flJumpLastTime)),
 	RecvPropTime(RECVINFO(m_flNextPingTime)),
@@ -473,6 +474,7 @@ C_NEO_Player::C_NEO_Player()
 	m_bIneligibleForLoadoutPick = false;
 	m_flSpawnTime = 0;
 	m_vecSpawnOrigin = vec3_origin;
+	m_bLeftSpawnArea = false;
 	m_bInLean = NEO_LEAN_NONE;
 
 	m_flCamoAuxLastTime = 0;

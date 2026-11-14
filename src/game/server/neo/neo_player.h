@@ -173,6 +173,8 @@ public:
 	// Seconds until loadout picks stop being granted now; NEO_PICK_NO_DEADLINE if never, 0 once closed
 	float GetLoadoutChangeTimeLeft() const;
 	bool IsFarFromSpawnForLoadout() const;
+	bool HasLeftSpawnArea() const;
+	NeoPickState GetPickState() const;
 	bool CanChangeLoadoutNow() const;
 	void RequestSetSkin(int newSkin);
 	bool RequestSetLoadout(int loadoutNumber);
@@ -321,6 +323,7 @@ public:
 	CNetworkVar(float, m_flSpawnTime);
 	// Where this life started, for the loadout change distance limit
 	CNetworkVector(m_vecSpawnOrigin);
+	CNetworkVar(bool, m_bLeftSpawnArea);
 	CNetworkHandle(CBaseEntity, m_hServerRagdoll);
 
 	CNetworkVar(float, m_flCamoAuxLastTime);

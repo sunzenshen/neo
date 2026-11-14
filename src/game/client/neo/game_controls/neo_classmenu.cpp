@@ -116,13 +116,9 @@ CNeoClassMenu::~CNeoClassMenu()
 	m_pRecon_Label->SetAutoDelete(true);
 	m_pAssault_Label->SetAutoDelete(true);
 	m_pSupport_Label->SetAutoDelete(true);
-	if (m_pClassLock_Label)
+	if (m_pPickStatus_Label)
 	{
-		m_pClassLock_Label->SetAutoDelete(true);
-	}
-	if (m_pTimer_Label)
-	{
-		m_pTimer_Label->SetAutoDelete(true);
+		m_pPickStatus_Label->SetAutoDelete(true);
 	}
 	m_pRecon_Button->SetAutoDelete(true);
 	m_pAssault_Button->SetAutoDelete(true);
@@ -171,13 +167,7 @@ void CNeoClassMenu::FindControls()
 	m_pRecon_Label = FindControl<Label>("Recon_Label");
 	m_pAssault_Label = FindControl<Label>("Assault_Label");
 	m_pSupport_Label = FindControl<Label>("Support_Label");
-	m_pClassLock_Label = FindControl<Label>("ClassLock_Label");
-	if (m_pClassLock_Label)
-	{
-		// Set here because a .res string cannot hold a line break
-		m_pClassLock_Label->SetText("CLASS CHANGES CLOSED\nUNTIL NEXT SPAWN");
-	}
-	m_pTimer_Label = FindControl<Label>("Timer_Label");
+	m_pPickStatus_Label = FindControl<Label>("PickStatus_Label");
 
 	m_pRecon_Button = FindControl<CNeoButton>("Scout_Button");
 	m_pAssault_Button = FindControl<CNeoButton>("Assault_Button");
@@ -272,7 +262,7 @@ bool CNeoClassMenu::IsClassSelectable(const C_NEO_Player *pPlayer, const C_Team 
 		return false;
 	}
 
-	return pPlayer->CanChangeClassNow() || pPlayer->GetClass() == neoClass;
+	return pPlayer->GetPickState() != NeoPickState::LoadoutWindow || pPlayer->GetClass() == neoClass;
 }
 
 void CNeoClassMenu::ChangeMenu(const char* menuName = NULL)
@@ -502,7 +492,7 @@ void CNeoClassMenu::OnThink()
 		return;
 	}
 
-	const bool bClassLocked = !pLocalPlayer->CanChangeClassNow();
+	const bool bClassLocked = pLocalPlayer->GetPickState() == NeoPickState::LoadoutWindow;
 
 	auto updateClassButtonAndLabel = [&pLocalPlayer, &localPlayerTeam, bClassLocked](vgui::Label *pClassLabel, vgui::Button *pClassButton, int neoClass, ConVar *classLimit)
 		{
@@ -531,7 +521,7 @@ void CNeoClassMenu::OnThink()
 				pClassButton->SetEnabled(true);
 			}
 
-			// The server would only queue this class for the next life, so offer the current class alone
+			// The server refuses a class change until the loadout is final, so offer the current class alone
 			const bool bLockedOut = bClassLocked && pLocalPlayer->GetClass() != neoClass;
 			if (bLockedOut)
 			{
@@ -561,17 +551,48 @@ void CNeoClassMenu::OnThink()
 	updateClassButtonAndLabel(m_pAssault_Label, m_pAssault_Button, NEO_CLASS_ASSAULT, &sv_neo_class_limit_assault);
 	updateClassButtonAndLabel(m_pSupport_Label, m_pSupport_Button, NEO_CLASS_SUPPORT, &sv_neo_class_limit_support);
 
-	if (m_pClassLock_Label)
+	UpdatePickStatus(pLocalPlayer);
+}
+
+void CNeoClassMenu::UpdatePickStatus(const C_NEO_Player *pPlayer)
+{
+	if (!m_pPickStatus_Label)
 	{
-		m_pClassLock_Label->SetVisible(bClassLocked);
+		return;
 	}
 
-	if (m_pTimer_Label)
+	char szStatus[64] = "";
+	char szTime[8];
+	switch (pPlayer->GetPickState())
 	{
-		const int iSecondsLeft = GetPickSecondsLeft(pLocalPlayer->GetClassChangeTimeLeft());
-		char szTimer[16];
-		V_sprintf_safe(szTimer, "%ds", iSecondsLeft);
-		m_pTimer_Label->SetVisible(iSecondsLeft > 0);
-		m_pTimer_Label->SetText(szTimer);
+	case NeoPickState::SpawnWindow:
+		FormatPickTime(szTime, sizeof(szTime), pPlayer->GetClassChangeTimeLeft());
+		V_sprintf_safe(szStatus, "Time until your class is final: %s", szTime);
+		break;
+	case NeoPickState::LoadoutWindow:
+		FormatPickTime(szTime, sizeof(szTime), pPlayer->GetLoadoutChangeTimeLeft());
+		V_sprintf_safe(szStatus, "Class locked until your loadout is final: %s", szTime);
+		break;
+	case NeoPickState::FinalTime:
+	case NeoPickState::FinalLeftSpawn:
+	{
+		const int iNextClass = pPlayer->m_iNextSpawnClassChoice.Get();
+		if (iNextClass != NEO_CLASS_RANDOM && iNextClass != pPlayer->GetClass())
+		{
+			V_sprintf_safe(szStatus, "You will spawn as %s", GetNeoClassName(iNextClass));
+		}
+		else
+		{
+			V_sprintf_safe(szStatus, "New class picks apply next spawn");
+		}
+		break;
 	}
+	case NeoPickState::AtSpawn:
+		V_sprintf_safe(szStatus, "Your class applies when you spawn");
+		break;
+	case NeoPickState::Anytime:
+		break;
+	}
+
+	m_pPickStatus_Label->SetText(szStatus);
 }

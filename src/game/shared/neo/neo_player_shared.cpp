@@ -451,8 +451,8 @@ bool CNEO_Player::IsMakingFootstepSounds(float* pVelRun, float* pSpeed, int* pLa
 // Shared so the class menu offers only the class changes the server applies at once
 bool CNEO_Player::CanChangeClassNow() const
 {
-	const float flTimeLeft = GetClassChangeTimeLeft();
-	return flTimeLeft == NEO_PICK_NO_DEADLINE || flTimeLeft > 0.0f;
+	const NeoPickState state = GetPickState();
+	return state == NeoPickState::Anytime || state == NeoPickState::AtSpawn || state == NeoPickState::SpawnWindow;
 }
 
 float CNEO_Player::GetClassChangeTimeLeft() const
@@ -488,6 +488,7 @@ float CNEO_Player::GetClassChangeTimeLeft() const
 	return Max(0.0f, sv_neo_dm_max_class_dur.GetFloat() - (gpGlobals->curtime - m_flSpawnTime));
 }
 
+// A class change grants a fresh loadout, so the weapon window stays open while the class window is
 float CNEO_Player::GetLoadoutChangeTimeLeft() const
 {
 	const NeoRoundStatus status = NEORules()->GetRoundStatus();
@@ -501,7 +502,8 @@ float CNEO_Player::GetLoadoutChangeTimeLeft() const
 		return 0.0f;
 	}
 
-	return Max(0.0f, sv_neo_time_alive_until_cant_change_loadout.GetFloat() - (gpGlobals->curtime - m_flSpawnTime));
+	const float flWindowLeft = sv_neo_time_alive_until_cant_change_loadout.GetFloat() - (gpGlobals->curtime - m_flSpawnTime);
+	return Max(0.0f, Max(flWindowLeft, NEORules()->GetRemainingPreRoundFreezeTime(false)));
 }
 
 // Horizontal only: spawn areas are flat, and a lane is a horizontal move away from them
@@ -511,16 +513,55 @@ bool CNEO_Player::IsFarFromSpawnForLoadout() const
 	return GetAbsOrigin().AsVector2D().DistToSqr(m_vecSpawnOrigin.Get().AsVector2D()) > Square(flMaxDist);
 }
 
+// The server latches leaving the spawn area; the client also checks the distance so the menu
+// does not wait for the networked latch
+bool CNEO_Player::HasLeftSpawnArea() const
+{
+	return m_bLeftSpawnArea || (GetLoadoutChangeTimeLeft() > 0.0f && IsFarFromSpawnForLoadout());
+}
+
+NeoPickState CNEO_Player::GetPickState() const
+{
+	const NeoRoundStatus status = NEORules()->GetRoundStatus();
+	if (status == NeoRoundStatus::Idle || status == NeoRoundStatus::Warmup || status == NeoRoundStatus::Countdown
+		|| sv_neo_can_change_classes_anytime.GetBool())
+	{
+		return NeoPickState::Anytime;
+	}
+
+	if (IsObserver() || m_lifeState == LIFE_DEAD)
+	{
+		return NeoPickState::AtSpawn;
+	}
+
+	if (m_bIneligibleForLoadoutPick)
+	{
+		return NeoPickState::FinalTime;
+	}
+
+	if (HasLeftSpawnArea())
+	{
+		return NeoPickState::FinalLeftSpawn;
+	}
+
+	if (GetLoadoutChangeTimeLeft() <= 0.0f)
+	{
+		return NeoPickState::FinalTime;
+	}
+
+	if (GetClassChangeTimeLeft() > 0.0f)
+	{
+		return NeoPickState::SpawnWindow;
+	}
+
+	return NeoPickState::LoadoutWindow;
+}
+
 // Shared so the loadout menu says when the server would refuse a weapon now
 bool CNEO_Player::CanChangeLoadoutNow() const
 {
-	const float flTimeLeft = GetLoadoutChangeTimeLeft();
-	if (flTimeLeft == NEO_PICK_NO_DEADLINE)
-	{
-		return true;
-	}
-
-	return flTimeLeft > 0.0f && !IsFarFromSpawnForLoadout();
+	const NeoPickState state = GetPickState();
+	return state == NeoPickState::Anytime || state == NeoPickState::SpawnWindow || state == NeoPickState::LoadoutWindow;
 }
 
 // Crouching speed and walking speed are the same, so crouching, walking and aiming share one silent limit.
