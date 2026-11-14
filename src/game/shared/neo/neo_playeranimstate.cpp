@@ -331,7 +331,9 @@ int CNEOPlayerAnimState::CalcAimLayerSequence( float *flCycle, float *flAimSeque
 	const Activity act = GetCurrentMainSequenceActivity();
 	if ( bForceIdle )
 	{
-		return CalcSequenceIndex( "%s%s", ( act == ACT_CROUCHIDLE ) ? AIM_CROUCH_IDLE_NAME : AIM_IDLE_NAME, pSuffix );
+		// Keep the idle layer crouched while the crouch-walk layer starts or stops.
+		const bool bIsCrouching = act == ACT_CROUCHIDLE || act == ACT_RUN_CROUCH;
+		return CalcSequenceIndex( "%s%s", bIsCrouching ? AIM_CROUCH_IDLE_NAME : AIM_IDLE_NAME, pSuffix );
 	}
 
 	switch ( act )
