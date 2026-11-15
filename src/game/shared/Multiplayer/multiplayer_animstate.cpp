@@ -1099,8 +1099,18 @@ float CMultiPlayerAnimState::GetCurrentMaxGroundSpeed()
 	if ( pStudioHdr == NULL )
 		return 1.0f;
 
+#if defined( NEO ) && defined( GAME_DLL )
+	// The client's GetPoseParameter returns the fraction of the range, and players see its result.
+	// Read the same fraction here, or the two sides measure the ground speed at different blends.
+	const float *pflPoseFractions = GetBasePlayer()->GetPoseParameterArray();
+	const int iMoveX = m_PoseParameterData.m_iMoveX;
+	const int iMoveY = m_PoseParameterData.m_iMoveY;
+	float prevX = ( iMoveX >= 0 ) ? pflPoseFractions[iMoveX] : 0.0f;
+	float prevY = ( iMoveY >= 0 ) ? pflPoseFractions[iMoveY] : 0.0f;
+#else
 	float prevX = GetBasePlayer()->GetPoseParameter( m_PoseParameterData.m_iMoveX );
 	float prevY = GetBasePlayer()->GetPoseParameter( m_PoseParameterData.m_iMoveY );
+#endif // NEO && GAME_DLL
 
 	float d = MAX( fabs( prevX ), fabs( prevY ) );
 	float newX, newY;
