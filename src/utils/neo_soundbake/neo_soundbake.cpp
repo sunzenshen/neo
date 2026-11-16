@@ -39,6 +39,7 @@
 #include "filesystem.h"
 #include "filesystem_init.h"
 #include "KeyValues.h"
+#include "mathlib/mathlib.h"
 #include "tier0/dbg.h"
 #include "tier0/icommandline.h"
 #include "tier0/platform.h"
@@ -702,6 +703,7 @@ SpewRetval_t BakeSpew(SpewType_t spewType, const tchar *pszMessage)
 int main(int argc, char **argv)
 {
 	SpewOutputFunc(BakeSpew);
+	MathLib_Init(2.2f, 2.2f, 0.0f, 2.0f);
 	CommandLine()->CreateCmdLine(argc, argv);
 	if (argc < 2 || CommandLine()->FindParm("-help") || argv[argc - 1][0] == '-')
 	{
