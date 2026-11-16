@@ -2,6 +2,8 @@
 #include "neo_audio_geometry.h"
 
 #include <algorithm>
+#include <cctype>
+#include <cstdlib>
 
 #include "bspfile.h"
 #include "checksum_crc.h"
@@ -121,6 +123,121 @@ const NeoSpatial::AcousticMaterial kAcousticPresets[ACOUSTIC_PRESET_COUNT] = {
 	{ { 0.20f, 0.07f, 0.06f }, 0.05f, { 0.800f, 0.525f, 0.310f } }, // metal
 	{ { 0.00f, 0.00f, 0.00f }, 0.00f, { 1.000f, 1.000f, 1.000f } }, // grate
 };
+
+constexpr char kAcousticMaterialFile[] = "scripts/neo_acoustic_materials.txt";
+constexpr char kAcousticMaterialRoot[] = "AcousticMaterials";
+constexpr char kAcousticAbsorptionKey[] = "absorption";
+constexpr char kAcousticScatteringKey[] = "scattering";
+constexpr char kAcousticTransmissionKey[] = "transmission";
+constexpr int kAcousticMaxTokenLength = 4095; // KeyValues token buffer, excluding the terminator
+const char *const kAcousticPresetNames[ACOUSTIC_PRESET_COUNT] = {
+	"generic", "concrete", "ceramic", "gravel", "carpet", "glass", "plaster", "wood", "metal", "grate"
+};
+
+bool GeometryMaterialValues(const char *pszText, float *pValues, int count);
+
+// Preflight the narrow script grammar: KeyValues can accept a partial tree after a syntax error.
+bool GeometryMaterialSyntax(const char *pszText, int length, CUtlVector<int> &validBlocks)
+{
+	int depth = 0;
+	int strings = 0;
+	bool bRootSeen = false;
+	bool bValidBlock = true;
+	CUtlString key;
+	for (int i = 0; i < length; ++i)
+	{
+		const char ch = pszText[i];
+		if (std::isspace(static_cast<unsigned char>(ch)))
+		{
+			continue;
+		}
+		if (ch == '/' && i + 1 < length && pszText[i + 1] == '/')
+		{
+			while (i < length && pszText[i] != '\n')
+			{
+				++i;
+			}
+			continue;
+		}
+		if (ch == '"')
+		{
+			const int start = ++i;
+			while (i < length && pszText[i] != '"')
+			{
+				if (pszText[i] == '\\' || pszText[i] == '\0' || pszText[i] == '\n')
+				{
+					return false;
+				}
+				++i;
+			}
+			if (i == length || i - start > kAcousticMaxTokenLength
+				|| (i == start && (depth < 2 || strings % 2 == 0)) || (depth == 0 && (bRootSeen || strings != 0
+				|| i - start != sizeof(kAcousticMaterialRoot) - 1
+				|| V_strncmp(pszText + start, kAcousticMaterialRoot, i - start) != 0)))
+			{
+				return false;
+			}
+			if (depth == 2)
+			{
+				const CUtlString token(pszText + start, i - start);
+				if (strings % 2 == 0)
+				{
+					key = token;
+				}
+				else if (V_stricmp(key.Get(), kAcousticAbsorptionKey) == 0 || V_stricmp(key.Get(), kAcousticTransmissionKey) == 0
+					|| V_stricmp(key.Get(), kAcousticScatteringKey) == 0)
+				{
+					float values[NeoSpatial::NUM_ACOUSTIC_BANDS];
+					const int count = V_stricmp(key.Get(), kAcousticScatteringKey) == 0 ? 1 : NeoSpatial::NUM_ACOUSTIC_BANDS;
+					bValidBlock &= GeometryMaterialValues(token.Get(), values, count);
+				}
+			}
+			++strings;
+			continue;
+		}
+		if (ch == '{' && depth < 2 && strings == 1)
+		{
+			++depth;
+			strings = 0;
+			bRootSeen = true;
+			continue;
+		}
+		if (ch == '}' && depth > 0 && (depth == 2 ? strings % 2 == 0 : strings == 0))
+		{
+			if (depth == 2)
+			{
+				validBlocks.AddToTail(bValidBlock);
+				bValidBlock = true;
+			}
+			--depth;
+			strings = 0;
+			continue;
+		}
+		return false;
+	}
+	return bRootSeen && depth == 0 && strings == 0;
+}
+
+bool GeometryMaterialValues(const char *pszText, float *pValues, int count)
+{
+	for (int i = 0; i < count; ++i)
+	{
+		char *pEnd = nullptr;
+		const double value = std::strtod(pszText, &pEnd);
+		if (pEnd == pszText || !(value >= 0.0 && value <= 1.0)
+			|| (*pEnd && !std::isspace(static_cast<unsigned char>(*pEnd))))
+		{
+			return false;
+		}
+		pValues[i] = static_cast<float>(value);
+		pszText = pEnd;
+	}
+	while (std::isspace(static_cast<unsigned char>(*pszText)))
+	{
+		++pszText;
+	}
+	return *pszText == '\0';
+}
 
 // The surfaceprop's game material (CHAR_TEX_*) is the coarse class the game itself uses for
 // impact sounds and decals, which is about the resolution these presets have anyway.
@@ -999,9 +1116,76 @@ int GeometryAddModelFaces(const BspLumps &lumps, const dmodel_t &model, CUtlVect
 
 } // namespace
 
-bool CNeoAudioGeometry::LoadFromBsp(const Services &services, const char *pszBspPath, char *pszErrorOut, int errorLen)
+CNeoAcousticMaterials::CNeoAcousticMaterials()
+{
+	m_presets.AddMultipleToTail(ACOUSTIC_PRESET_COUNT, kAcousticPresets);
+}
+
+void CNeoAcousticMaterials::Load(IFileSystem *pFileSystem)
+{
+	m_presets.RemoveAll();
+	m_presets.AddMultipleToTail(ACOUSTIC_PRESET_COUNT, kAcousticPresets);
+	if (!pFileSystem->FileExists(kAcousticMaterialFile, "GAME"))
+	{
+		return;
+	}
+
+	CUtlBuffer source;
+	CUtlVector<int> validBlocks;
+	if (!pFileSystem->ReadFile(kAcousticMaterialFile, "GAME", source)
+		|| !GeometryMaterialSyntax(static_cast<const char *>(source.Base()), source.TellPut(), validBlocks))
+	{
+		Warning("NEO HRTF: invalid %s, using compiled materials\n", kAcousticMaterialFile);
+		return;
+	}
+
+	KeyValues::AutoDelete pRoot(kAcousticMaterialRoot);
+	if (!pRoot->LoadFromFile(pFileSystem, kAcousticMaterialFile, "GAME"))
+	{
+		Warning("NEO HRTF: cannot read %s, using compiled materials\n", kAcousticMaterialFile);
+		return;
+	}
+	int blockIndex = 0;
+	for (KeyValues *pBlock = pRoot->GetFirstSubKey(); pBlock; pBlock = pBlock->GetNextKey(), ++blockIndex)
+	{
+		int preset = 0;
+		while (preset < ACOUSTIC_PRESET_COUNT && V_stricmp(pBlock->GetName(), kAcousticPresetNames[preset]) != 0)
+		{
+			++preset;
+		}
+		NeoSpatial::AcousticMaterial material;
+		const float scattering = pBlock->GetFloat(kAcousticScatteringKey);
+		if (blockIndex >= validBlocks.Count() || !validBlocks[blockIndex] || preset == ACOUSTIC_PRESET_COUNT
+			|| !GeometryMaterialValues(pBlock->GetString(kAcousticAbsorptionKey), material.absorption, NeoSpatial::NUM_ACOUSTIC_BANDS)
+			|| !GeometryMaterialValues(pBlock->GetString(kAcousticScatteringKey), &material.scattering, 1)
+			|| !GeometryMaterialValues(pBlock->GetString(kAcousticTransmissionKey), material.transmission, NeoSpatial::NUM_ACOUSTIC_BANDS))
+		{
+			Warning("NEO HRTF: invalid acoustic material '%s', ignoring block\n", pBlock->GetName());
+			continue;
+		}
+		material.scattering = scattering;
+		m_presets[preset] = material;
+	}
+}
+
+uint32 CNeoAcousticMaterials::GetBakeCrc() const
+{
+	CRC32_t crc;
+	CRC32_Init(&crc);
+	for (const NeoSpatial::AcousticMaterial &material : m_presets)
+	{
+		CRC32_ProcessBuffer(&crc, material.absorption, sizeof(material.absorption));
+		CRC32_ProcessBuffer(&crc, &material.scattering, sizeof(material.scattering));
+	}
+	CRC32_Final(&crc);
+	return crc;
+}
+
+bool CNeoAudioGeometry::LoadFromBsp(const Services &services, const CNeoAcousticMaterials &materials,
+								 const char *pszBspPath, char *pszErrorOut, int errorLen)
 {
 	Clear();
+	m_presets = materials;
 	pszErrorOut[0] = '\0';
 	s_pFileSystem = services.pFileSystem;
 	s_pSurfaceProps = services.pSurfaceProps;
@@ -1073,7 +1257,7 @@ bool CNeoAudioGeometry::LoadFromBsp(const Services &services, const char *pszBsp
 	}
 
 	// Material indices are AcousticPreset values; unused presets cost nothing.
-	m_materials.AddMultipleToTail(ACOUSTIC_PRESET_COUNT, kAcousticPresets);
+	m_materials.AddVectorToTail(materials.GetPresets());
 
 	CUtlVector<int> vertexRemap;
 	vertexRemap.SetCount(lumps.vertices.Count());
@@ -1337,7 +1521,11 @@ uint32 CNeoAudioGeometry::GetGeometryCrc() const
 	CRC32_ProcessBuffer(&crc, m_vertices.Base(), m_vertices.Count() * sizeof(NeoSpatial::Vec3));
 	CRC32_ProcessBuffer(&crc, m_triangles.Base(), m_triangles.Count() * sizeof(int32));
 	CRC32_ProcessBuffer(&crc, m_materialIndices.Base(), m_materialIndices.Count() * sizeof(int32));
-	CRC32_ProcessBuffer(&crc, m_materials.Base(), m_materials.Count() * sizeof(NeoSpatial::AcousticMaterial));
+	for (const NeoSpatial::AcousticMaterial &material : m_materials)
+	{
+		CRC32_ProcessBuffer(&crc, material.absorption, sizeof(material.absorption));
+		CRC32_ProcessBuffer(&crc, &material.scattering, sizeof(material.scattering));
+	}
 	for (const NeoSpatial::BspTree::Leaf &leaf : m_tree.leaves)
 	{
 		const uint8 open = leaf.open ? 1 : 0;
@@ -1404,6 +1592,11 @@ bool CNeoAudioGeometry::ReadBakedProbes(NeoSpatial::ProbeLumpHeader &header, Neo
 		V_snprintf(pszErrorOut, errorLen, "the baked probes are out of date (map recompiled without neo_soundbake?)");
 		return false;
 	}
+	if (header.materialCrc != m_presets.GetBakeCrc())
+	{
+		V_snprintf(pszErrorOut, errorLen, "the baked probes use different acoustic materials");
+		return false;
+	}
 	return true;
 }
 
@@ -1455,7 +1648,7 @@ bool CNeoAudioGeometry::LoadModelCollision(const Services &services, const char 
 	return !out.materialIndices.IsEmpty();
 }
 
-NeoSpatial::SceneGeometry CNeoAudioGeometry::Mesh::Geometry() const
+NeoSpatial::SceneGeometry CNeoAudioGeometry::Mesh::Geometry(const CNeoAcousticMaterials &materials) const
 {
 	NeoSpatial::SceneGeometry geometry;
 	geometry.vertices = vertices.Base();
@@ -1463,8 +1656,8 @@ NeoSpatial::SceneGeometry CNeoAudioGeometry::Mesh::Geometry() const
 	geometry.triangles = triangles.Base();
 	geometry.materialIndices = materialIndices.Base();
 	geometry.numTriangles = materialIndices.Count();
-	geometry.materials = kAcousticPresets;
-	geometry.numMaterials = ACOUSTIC_PRESET_COUNT;
+	geometry.materials = materials.GetPresets().Base();
+	geometry.numMaterials = materials.GetPresets().Count();
 	return geometry;
 }
 

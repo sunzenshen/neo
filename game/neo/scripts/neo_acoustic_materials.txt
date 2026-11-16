@@ -1,0 +1,13 @@
+"AcousticMaterials"
+{
+	"generic" { "absorption" "0.10 0.20 0.30" "scattering" "0.05" "transmission" "0.700 0.550 0.330" }
+	"concrete" { "absorption" "0.05 0.07 0.08" "scattering" "0.05" "transmission" "0.615 0.502 0.301" }
+	"ceramic" { "absorption" "0.01 0.02 0.02" "scattering" "0.05" "transmission" "0.660 0.544 0.311" }
+	"gravel" { "absorption" "0.60 0.70 0.80" "scattering" "0.05" "transmission" "0.631 0.512 0.308" }
+	"carpet" { "absorption" "0.24 0.69 0.73" "scattering" "0.05" "transmission" "0.620 0.505 0.303" }
+	"glass" { "absorption" "0.06 0.03 0.02" "scattering" "0.05" "transmission" "0.660 0.544 0.311" }
+	"plaster" { "absorption" "0.12 0.06 0.04" "scattering" "0.05" "transmission" "0.656 0.556 0.304" }
+	"wood" { "absorption" "0.11 0.07 0.06" "scattering" "0.05" "transmission" "0.670 0.514 0.305" }
+	"metal" { "absorption" "0.20 0.07 0.06" "scattering" "0.05" "transmission" "0.800 0.525 0.310" }
+	"grate" { "absorption" "0.00 0.00 0.00" "scattering" "0.00" "transmission" "1.000 1.000 1.000" }
+}

@@ -33,16 +33,16 @@ struct ProbeLumpHeader
 	float radius;
 	int32_t numProbes;
 	int32_t numBatches;
-	int32_t reserved;
+	uint32_t materialCrc; // absorption and scattering of every preset
 	int64_t batchesSize;
 };
 
 static constexpr uint32_t PROBE_LUMP_MAGIC = 0x4c50534e; // "NSPL"
-static constexpr uint32_t PROBE_LUMP_FORMAT_VERSION = 1;
+static constexpr uint32_t PROBE_LUMP_FORMAT_VERSION = 2;
 
 // Appends the uncompressed payload for `probes` and their serialised batches to `out`.
 void WriteProbeLump(const ProbeSet &probes, const uint8_t *batches, int64_t batchesSize, uint32_t shapeCrc,
-					uint32_t libraryVersion, std::vector<uint8_t> &out);
+					uint32_t libraryVersion, uint32_t materialCrc, std::vector<uint8_t> &out);
 
 // Parses an uncompressed payload. On success `probes` holds the layout and `batches` points into
 // `data` (valid as long as it is). False, with the reason in errorOut, for anything malformed.
