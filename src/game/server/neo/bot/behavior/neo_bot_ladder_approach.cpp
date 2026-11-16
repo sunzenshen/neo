@@ -22,6 +22,12 @@ ActionResult<CNEOBot> CNEOBotLadderApproach::OnStart( CNEOBot *me, Action<CNEOBo
 		return Done( "No ladder specified" );
 	}
 
+	if ( me->IsLadderRecoveryBlocked( m_ladder, m_bGoingUp ) )
+	{
+		return Done( "Ladder excluded by bot recovery cooldown" );
+	}
+	CNEOBotLadderClimb::BeginRecoveryWatch( me, m_ladder, m_bGoingUp, this );
+
 	// Timeout for approach phase
 	m_timeoutTimer.Start( 3.0f );
 
@@ -80,6 +86,21 @@ ActionResult<CNEOBot> CNEOBotLadderApproach::Update( CNEOBot *me, float )
 		m_timeoutTimer.Reset();
 		m_progressTimer.Start();
 		return Continue();
+	}
+
+	if ( !me->m_ladderRecovery.owner )
+	{
+		CNEOBotLadderClimb::BeginRecoveryWatch( me, m_ladder, m_bGoingUp, this );
+	}
+	CNEOBotLadderClimb::UpdateRecoveryWatch( me, this, nullptr, CNEOBotLadderClimb::RECOVERY_APPROACH );
+	if ( me->m_ladderRecovery.ownsInputs )
+	{
+		return Continue();
+	}
+	if ( me->m_ladderRecovery.owner == this && ( me->m_ladderRecovery.phase == CNEOBot::LadderRecoveryState::COMPLETE
+		|| me->m_ladderRecovery.phase == CNEOBot::LadderRecoveryState::FAILED ) )
+	{
+		return Done( "Ladder recovery episode finished" );
 	}
 
 	if ( m_timeoutTimer.IsElapsed() )
@@ -385,6 +406,7 @@ bool CNEOBotLadderApproach::IsBarrierAhead( CNEOBot *me, const Vector &hangPos )
 //---------------------------------------------------------------------------------------------
 void CNEOBotLadderApproach::OnEnd( CNEOBot *me, Action<CNEOBot> *nextAction )
 {
+	CNEOBotLadderClimb::EndRecoveryWatch( me, this );
 	me->StartLookingAroundForEnemies();
 	me->ClearAttribute( CNEOBot::IGNORE_ENEMIES );
 	me->GetLocomotionInterface()->StopCatchingLadder();
@@ -398,6 +420,7 @@ void CNEOBotLadderApproach::OnEnd( CNEOBot *me, Action<CNEOBot> *nextAction )
 //---------------------------------------------------------------------------------------------
 ActionResult<CNEOBot> CNEOBotLadderApproach::OnSuspend( CNEOBot *me, Action<CNEOBot> *interruptingAction )
 {
+	CNEOBotLadderClimb::EndRecoveryWatch( me, this );
 	return Done( "OnSuspend: Cancel out of ladder approach, situation will likely become stale." );
 }
 

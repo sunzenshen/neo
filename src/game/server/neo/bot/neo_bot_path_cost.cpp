@@ -250,6 +250,10 @@ float CNEOBotPathCost::operator()(CNavArea* baseArea, CNavArea* fromArea, const 
 	{
 		return -1.0f;
 	}
+	if ( ladder && m_me->IsLadderRecoveryBlocked( ladder, fromArea == ladder->m_bottomArea ) )
+	{
+		return -1.0f;
+	}
 
 	// Support and Juggernaut duck too tall for some crouch gaps
 	if ( m_bDucksAboveCrouchHeight && !ladder && !elevator

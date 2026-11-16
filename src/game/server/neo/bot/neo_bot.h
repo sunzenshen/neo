@@ -20,6 +20,8 @@
 
 #define NEO_BOT_TYPE	1338
 
+class CNEOBotLadderClimb;
+class CNEOBotLadderApproach;
 class CNEOBotActionPoint;
 class CNEOBotGenerator;
 class CNEOBot;
@@ -196,6 +198,11 @@ public:
 
 	bool IsEnemy(const CBaseEntity* them) const OVERRIDE;
 
+	void ResetLadderRecovery();
+	void CancelLadderRecovery();
+	void FilterUserCommand( CUserCmd *cmd ) override;
+	bool OwnsLadderRecoveryInputs() const;
+	bool IsLadderRecoveryBlocked( const CNavLadder *ladder, bool goingUp ) const;
 	bool IsBotOnLadder( ) const;
 	bool IsOnPreciseArea() const;	// on a NAV_MESH_PRECISE or NAV_MESH_CLIFF area, where the path must be walked exactly
 
@@ -476,6 +483,105 @@ public:
 	CNEOBotSuppressiveFire *GetSuppressiveFire( void ) { return &m_suppressiveFire; }
 
 private:
+	friend class CNEOBotLadderClimb;
+	friend class CNEOBotLadderApproach;
+
+	// Traversal history belongs to the bot so replacing an action cannot renew a recovery budget.
+	struct LadderRecoveryState
+	{
+		const CNavLadder *ladder = nullptr;
+		const void *owner = nullptr;
+		unsigned int ladderID = 0;
+		bool goingUp = false;
+		Vector objective = vec3_origin;
+		CHandle<CBaseCombatCharacter> subject;
+		bool hasObjective = false;
+		bool hadSubject = false;
+		enum Phase
+		{
+			WATCHING,
+			AIMING,
+			POSITIONING,
+			VERIFYING_ATTACH,
+			FLYING,
+			SETTLING,
+			SLIDING,
+			WALKING_OUT,
+			COMPLETE,
+			FAILED
+		};
+		Phase phase = WATCHING;
+		bool intendedDismount = false;
+		bool mountCycle = false;
+		bool mountClosedOnSupport = false;
+		bool wasMounted = false;
+		bool commandedUp = false;
+		bool traversalClosed = false;
+		bool episodeUsed = false;
+		bool ownsInputs = false;
+		MoveType_t savedMoveType = MOVETYPE_WALK;
+		float deadline = -1.0f;
+		float contactSince = -1.0f;
+		float detachedSince = -1.0f;
+		float lostSince = -1.0f;
+		float dismountSince = -1.0f;
+		float windowSince = -1.0f;
+		float peakZ = 0.0f;
+		float windowPeakZ = 0.0f;
+		int stalledWindows = 0;
+		unsigned int conditions = 0;
+		bool stuckLatched = false;
+		Vector stuckPosition = vec3_origin;
+		enum
+		{
+			LANDING_SLOTS = 2
+		};
+		Vector landings[LANDING_SLOTS] = { vec3_origin, vec3_origin };
+		const CNavArea *landingArea = nullptr;
+		const CNavArea *landingNextArea = nullptr;
+		const CNavArea *landingUnionArea = nullptr;
+		int landingCount = 0;
+		bool searchDone = false;
+		bool placementSearchDone = false;
+		const char *searchGate = "no_exit";
+		int searchTested = 0;
+		int level = 0;
+		Vector episodeStart = vec3_origin;
+		Vector handoffTarget = vec3_origin;
+		float phaseDeadline = -1.0f;
+		float groundedSince = -1.0f;
+		int nextPlacement = 0;
+		int placements = 0;
+		int round = -1;
+		bool keepCrouch = false;
+		bool hasLastSupport = false;
+		Vector lastSupport = vec3_origin;
+		const CNavArea *lastSupportArea = nullptr;
+		bool returnedToSupport = false;
+		bool fellBack = false;
+		Vector launchPoint = vec3_origin;
+		Vector launchNormal = vec3_origin;
+		Vector launchVelocity = vec3_origin;
+		Vector flightLanding = vec3_origin;
+		float flightTime = 0.0f;
+		float flightGravity = 0.0f;
+		float flightStarted = -1.0f;
+		int attachTick = -1;
+		float slideStarted = -1.0f;
+		CHandle<CBaseEntity> launchEntity;
+		CHandle<CBaseEntity> landingEntity;
+	};
+	LadderRecoveryState m_ladderRecovery;
+	void ClearLadderMovementInputs();
+	struct LadderRecoveryBlock
+	{
+		unsigned int ladderID;
+		bool goingUp;
+		float until;
+	};
+	CUtlVector<LadderRecoveryBlock> m_ladderRecoveryBlocks;
+	int m_ladderNeutralThroughTick = -1;
+
 	void ToggleCloak(void);
 
 	CNEOBotSuppressiveFire m_suppressiveFire;
