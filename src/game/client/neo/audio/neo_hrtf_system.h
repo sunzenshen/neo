@@ -272,8 +272,8 @@ private:
 	soundlevel_t LookupScriptLevel(const char *pszNormalisedName);
 	void ResolveSoundLevel(Voice &voice, const SndInfo_t &info, const CachedSound &sound) const;
 
-	Vector SoundPosition(const SndInfo_t &info, NeoHrtfLocalSound localSound) const;
-	VoiceParams ComputeParams(const SndInfo_t &info, NeoHrtfLocalSound localSound, float sourceVolume, float distMult,
+	Vector SoundPosition(const Vector &enginePosition, NeoHrtfLocalSound localSound) const;
+	VoiceParams ComputeParams(const Vector &enginePosition, int pitch, NeoHrtfLocalSound localSound, float sourceVolume, float distMult,
 							  float outputScale) const;
 	NeoHrtfLocalSound TakeLocalSoundMark(int guid);
 	int FindVoice(int guid) const;
