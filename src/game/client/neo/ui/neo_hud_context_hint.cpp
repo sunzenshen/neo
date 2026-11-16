@@ -338,7 +338,7 @@ void CNEOHud_ContextHint::DrawNeoHudElement()
 			int x = 0;
 			int y = 0;
 
-			if (!GetVectorInScreenSpace(entity->CollisionProp()->WorldSpaceCenter(), x, y))
+			if (!GetVectorInScreenSpace(GetUseTargetPos(entity), x, y))
 			{
 				continue;
 			}
@@ -354,7 +354,7 @@ void CNEOHud_ContextHint::DrawNeoHudElement()
 	{
 		if (C_BaseEntity* useEntity = m_hUseEntity.Get())
 		{
-			GetVectorInScreenSpace(useEntity->CollisionProp()->WorldSpaceCenter(), textX, textY);
+			GetVectorInScreenSpace(GetUseTargetPos(useEntity), textX, textY);
 
 			// text position
 			textX += iTextTall / 2;
