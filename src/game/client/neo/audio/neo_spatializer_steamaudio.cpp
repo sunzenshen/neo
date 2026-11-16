@@ -144,8 +144,8 @@ constexpr IPLVector3 STEAMAUDIO_AHEAD = { 0.0f, 0.0f, -1.0f };
 // switching. The radius is roughly half a player's width.
 constexpr float OCCLUSION_RADIUS_METRES = 0.3f;
 constexpr int OCCLUSION_SAMPLES = 16;
-// Occluders beyond the first few between source and listener do not change what is heard.
-constexpr int TRANSMISSION_RAYS = 3;
+// Count both faces of a second wall before the transmission trace budget runs out.
+constexpr int TRANSMISSION_RAYS = 4;
 
 // Probe batches are baked with listener-centric parametric reverb: three decay times per probe,
 // a few bytes each, where convolution IRs would cost hundreds of KB per probe across a whole map.
