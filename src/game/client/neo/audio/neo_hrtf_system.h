@@ -20,6 +20,7 @@
 #include <atomic>
 #include <thread>
 
+#include "ehandle.h"
 #include "igamesystem.h"
 #include "mathlib/vector.h"
 #include "engine/SndInfo.h"
@@ -68,6 +69,8 @@ public:
 	// The local player's sound `guid`, just played, is to be re-rendered from `place`
 	// (CNeoHrtfLocalSoundScope).
 	void MarkLocalSound(int guid, NeoHrtfLocalSound place);
+	// The game stopped `pszWave` on `entIndex`'s `channel` (NeoHrtfStopSound).
+	void StopSound(int entIndex, int channel, const char *pszWave);
 
 private:
 	// Decoded once per file, by the loader thread when precached or by the game thread on first
@@ -104,6 +107,17 @@ private:
 	};
 
 	// Game thread only.
+	// Why a voice ended.
+	enum class EndReason
+	{
+		None,
+		Wav, // an owned voice reached the end of its file
+		Replaced, // a new sound on the owned voice's entity and channel
+		Stopped, // the client stopped it
+		Deadline, // an owned voice's end was never reported
+		Engine, // a followed voice's engine channel is gone
+	};
+
 	struct Voice
 	{
 		bool m_bInUse = false;
@@ -128,6 +142,15 @@ private:
 		bool m_bLevelFromEmitter = false; // from a networked ambient_generic rather than the scripts
 		NeoHrtfLocalSound m_localSound = NeoHrtfLocalSound::None; // the local player's own, and where from
 		int m_soundSource = 0; // the entity playing it (SndInfo_t::m_nSoundSource)
+		// Owned voices are short one-shots whose engine channel is stopped: we play them to the end.
+		// The others (loops, long sounds) are followed: muted in the engine and ended with it.
+		bool m_bOwned = false;
+		int m_channel = CHAN_AUTO; // SndInfo_t::m_nChannel
+		EHANDLE m_hSource; // set if the sound follows its entity
+		Vector m_origin = vec3_origin; // where an owned voice was last heard from
+		int m_pitch = PITCH_NORM;
+		double m_endDeadline = 0.0; // Plat_FloatTime by which an owned voice has ended
+		EndReason m_endRequest = EndReason::None;
 		// Where its paths start, for as long as it stays at m_pathQueryOrigin: most sounds never move.
 		bool m_bPathQueried = false;
 		NeoSpatial::Vec3 m_pathQueryOrigin = {};
@@ -277,7 +300,9 @@ private:
 							  float outputScale) const;
 	NeoHrtfLocalSound TakeLocalSoundMark(int guid);
 	int FindVoice(int guid) const;
-	void MuteEngineCopy(Voice &voice, const SndInfo_t &info, float spatializedTarget);
+	void MuteEngineCopy(Voice &voice, const SndInfo_t &info);
+	void EndReplacedVoices(const SndInfo_t &info);
+	void UpdateOwnedVoice(int slot, float outputScale);
 	void PrintDebug();
 
 	// Waits for the audio thread to finish its block, then stops it rendering anything and releases
@@ -319,6 +344,8 @@ private:
 	CUtlVector<SndInfo_t> m_activeSounds;
 	CUtlVector<int> m_ignoredGuids; // sounds deliberately left to the engine, rechecked by guid only
 	CUtlVector<int> m_ignoredGuidsNext;
+	CUtlVector<int> m_seenGuids; // every guid in the last poll's active list, to tell new sounds
+	CUtlVector<int> m_seenGuidsNext;
 	CUtlVector<LocalSoundMark> m_localSoundMarks; // marked but not yet seen in the engine's channel list
 	CUtlDict<CachedSound *, int> m_cache;
 	std::atomic<int64> m_cachedBytes{ 0 }; // samples of every decoded sound, for the debug overlay
@@ -397,6 +424,7 @@ private:
 	double m_cursors[kMaxVoices] = {}; // by slot
 	bool m_finished[kMaxVoices] = {};
 	uint32 m_renderGenerations[kMaxVoices] = {}; // the sound the cursor belongs to
+	std::atomic<uint32> m_finishedGeneration[kMaxVoices] = {}; // by slot: the last sound played to its end
 	float m_carry[kFrameSize * 2]; // interleaved stereo block not yet handed to miniaudio
 	int m_carryRead = 0;
 	int m_carryAvailable = 0;

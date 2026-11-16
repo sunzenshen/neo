@@ -30,3 +30,7 @@ private:
 	NeoHrtfLocalSound m_place;
 	int m_guidBefore;
 };
+
+// The client stops `pszWave` on the entity's channel. Short HRTF sounds have no engine channel left
+// for the engine's own stop to find, so they are ended here.
+void NeoHrtfStopSound(int entIndex, int channel, const char *pszWave);

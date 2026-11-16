@@ -10,6 +10,7 @@
 #include "engine/ivdebugoverlay.h"
 #include "filesystem.h"
 #include "soundchars.h"
+#include "soundinfo.h"
 #include "SoundEmitterSystem/isoundemittersystembase.h"
 #include "utlbuffer.h"
 #include "view.h"
@@ -89,9 +90,11 @@ constexpr float kHrtfVolumeReadbackTolerance = 1.0f / 255.0f;
 // up to a whole step to stay at least as loud as asked.
 constexpr float kHrtfEngineVolumeStep = 1.0f / 255.0f;
 
-// The engine copy's volume is raised as soon as its gain calls for it, but lowered only once the
-// target falls well below it, so it is not reset every poll while the gain drifts.
-constexpr float kHrtfMuteLowerRatio = 0.7f;
+// Non-looping sounds up to this long (reloads and explosions included) are played without an
+// engine copy. It also bounds how long one plays on after a stop the client never sees.
+constexpr float kHrtfOwnedMaxSeconds = 7.5f;
+// Ends an owned sound whose end the audio thread never reported, e.g. while the device stalls.
+constexpr double kHrtfOwnedGraceSeconds = 1.0;
 
 // Leave most cores to the game while a bake runs in the background.
 constexpr int kHrtfBakeCoresPerThread = 4;
@@ -282,11 +285,6 @@ ConVar cl_neo_hrtf_precache("cl_neo_hrtf_precache", "1", FCVAR_CLIENTDLL | FCVAR
 	"Decode the map's precached sounds for HRTF in the background, rather than each on its first play", true, 0.0f, true, 1.0f);
 ConVar cl_neo_hrtf_debug_probes("cl_neo_hrtf_debug_probes", "0", FCVAR_CLIENTDLL,
 	"Draw the acoustic probes near the view, coloured by batch (BSP area)", true, 0.0f, true, 1.0f);
-// The engine frees a one-shot channel once its spatialized volume falls below about 3/255 (measured
-// between 0.0082 and 0.0136), so the engine's copy of an HRTF sound is held just above that instead
-// of silenced, with some headroom for its gain dropping between polls.
-ConVar cl_neo_hrtf_engine_floor("cl_neo_hrtf_engine_floor", "0.016", FCVAR_CLIENTDLL,
-	"Spatialized level the engine's copy of an HRTF sound is held at so the engine does not cut it off early, 0 = silent", true, 0.0f, true, 0.1f);
 
 static CNeoHrtfSystem s_neoHrtfSystem;
 
@@ -445,8 +443,6 @@ void CNeoHrtfSystem::PollEngineSounds()
 	// Our device bypasses the engine mixer, so the master volume has to be applied here.
 	const float outputScale = cl_neo_hrtf_volume.GetFloat() * s_masterVolume.GetFloat();
 
-	const float engineFloor = cl_neo_hrtf_engine_floor.GetFloat();
-
 	m_listenerOrigin = MainViewOrigin();
 	AngleVectors(MainViewAngles(), &m_listenerForward, &m_listenerRight, &m_listenerUp);
 	m_listener = { HrtfToVec3(m_listenerOrigin, kHrtfMetresPerUnit), HrtfToVec3(m_listenerForward),
@@ -466,17 +462,29 @@ void CNeoHrtfSystem::PollEngineSounds()
 	// Existing voices are matched by guid and refreshed; new candidates are collected first so
 	// decoding happens once per guid.
 	m_ignoredGuidsNext.RemoveAll();
+	m_seenGuidsNext.RemoveAll();
 	int pendingCount = 0;
 	const int localPlayerIndex = engine->GetLocalPlayer();
 	for (int i = 0; i < m_activeSounds.Count(); ++i)
 	{
 		const SndInfo_t &info = m_activeSounds[i];
+		m_seenGuidsNext.AddToTail(info.m_nGuid);
+		if (!m_seenGuids.HasElement(info.m_nGuid))
+		{
+			EndReplacedVoices(info);
+		}
+
 		const int voiceIndex = FindVoice(info.m_nGuid);
 		if (voiceIndex >= 0)
 		{
 			Voice &voice = m_voices[voiceIndex];
 			voice.m_bSeenThisPoll = true;
-			MuteEngineCopy(voice, info, engineFloor);
+			// The engine may still list a stopped channel for a poll.
+			if (voice.m_bOwned)
+			{
+				continue;
+			}
+			MuteEngineCopy(voice, info);
 			// The engine refreshes the origin every frame for channels that follow their entity
 			// (GetSoundSpatialization), so it already tracks moving players.
 			voice.m_params = ComputeParams(*info.m_pOrigin, info.m_nPitch, voice.m_localSound, voice.m_sourceVolume, voice.m_distMult, outputScale);
@@ -507,12 +515,27 @@ void CNeoHrtfSystem::PollEngineSounds()
 		m_pending[pendingCount++] = { i, pSound, -1, localSound };
 	}
 
-	for (Voice &voice : m_voices)
+	for (int v = 0; v < kMaxVoices; ++v)
 	{
-		// The engine copy is held above its cull level, so a channel that is gone has finished or
-		// been stopped by the game. The audio thread may still be rendering it, so the backend voice
-		// is only retired here.
-		if (voice.m_bInUse && !voice.m_bSeenThisPoll)
+		Voice &voice = m_voices[v];
+		if (!voice.m_bInUse)
+		{
+			continue;
+		}
+
+		if (voice.m_bOwned)
+		{
+			UpdateOwnedVoice(v, outputScale);
+		}
+		else if (!voice.m_bSeenThisPoll)
+		{
+			// A silent loop keeps its channel, so a channel that is gone has finished or been
+			// stopped by the game.
+			voice.m_endRequest = EndReason::Engine;
+		}
+
+		// The audio thread may still be rendering it, so the backend voice is only retired here.
+		if (voice.m_endRequest != EndReason::None)
 		{
 			m_retiredVoices.AddToTail({ voice.m_hSpatial, m_renderNext.m_sequence + 1 });
 			voice = Voice();
@@ -548,6 +571,18 @@ void CNeoHrtfSystem::PollEngineSounds()
 		voice.m_hSpatial = hSpatial;
 		voice.m_localSound = pending.m_localSound;
 		voice.m_soundSource = info.m_nSoundSource;
+		voice.m_channel = info.m_nChannel;
+		voice.m_origin = *info.m_pOrigin;
+		voice.m_pitch = info.m_nPitch;
+		if (info.m_nSoundSource > 0 && info.m_bUpdatePositions)
+		{
+			voice.m_hSource = cl_entitylist->GetBaseEntity(info.m_nSoundSource);
+		}
+		const CachedSound &sound = *pending.m_pSound;
+		const double seconds = static_cast<double>(sound.m_samples.Count()) / sound.m_sampleRate
+			/ (static_cast<double>(Max(info.m_nPitch, 1)) / PITCH_NORM);
+		voice.m_bOwned = sound.m_loopStart < 0 && seconds <= kHrtfOwnedMaxSeconds;
+		voice.m_endDeadline = Plat_FloatTime() + seconds + kHrtfOwnedGraceSeconds;
 		ResolveSoundLevel(voice, info, *pending.m_pSound);
 		voice.m_params = ComputeParams(*info.m_pOrigin, info.m_nPitch, voice.m_localSound, info.m_flVolume, voice.m_distMult, outputScale);
 		pending.m_voiceIndex = freeSearch;
@@ -581,16 +616,25 @@ void CNeoHrtfSystem::PollEngineSounds()
 	{
 		const PendingVoice &pending = m_pending[p];
 		const SndInfo_t &info = m_activeSounds[pending.m_soundIndex];
-		if (pending.m_voiceIndex >= 0)
+		if (pending.m_voiceIndex < 0)
 		{
-			MuteEngineCopy(m_voices[pending.m_voiceIndex], info, engineFloor);
+			m_ignoredGuidsNext.AddToTail(info.m_nGuid);
+			continue;
+		}
+
+		Voice &voice = m_voices[pending.m_voiceIndex];
+		if (voice.m_bOwned)
+		{
+			// No engine copy is left to leak where the sound is, or to be cut off early.
+			enginesound->StopSoundByGuid(info.m_nGuid);
 		}
 		else
 		{
-			m_ignoredGuidsNext.AddToTail(info.m_nGuid);
+			MuteEngineCopy(voice, info);
 		}
 	}
 	m_ignoredGuids.Swap(m_ignoredGuidsNext);
+	m_seenGuids.Swap(m_seenGuidsNext);
 
 	PublishRenderFrame();
 	ReleaseRetiredVoices();
@@ -614,10 +658,8 @@ void CNeoHrtfSystem::PollEngineSounds()
 	}
 }
 
-// Our device bypasses the engine, so its copy of the sound has to be muted, but the engine frees a
-// one-shot channel that falls silent. The copy is held at spatializedTarget instead: the lowest
-// volume that, times the engine's own gain for the channel, stays at that level.
-void CNeoHrtfSystem::MuteEngineCopy(Voice &voice, const SndInfo_t &info, float spatializedTarget)
+// Our device bypasses the engine, so its copy of a followed sound has to be muted.
+void CNeoHrtfSystem::MuteEngineCopy(Voice &voice, const SndInfo_t &info)
 {
 	voice.m_lastReportedVolume = info.m_flVolume;
 	voice.m_lastSpatializedVolume = info.m_flLastSpatializedVolume;
@@ -640,26 +682,77 @@ void CNeoHrtfSystem::MuteEngineCopy(Voice &voice, const SndInfo_t &info, float s
 		voice.m_engineGain = info.m_flLastSpatializedVolume / info.m_flVolume;
 	}
 
-	// The lowest whole step that keeps the spatialized level at the target. A sound whose own
-	// volume cannot reach it is left as it is: the engine would cull it unmuted too.
-	float target = 0.0f;
-	if (spatializedTarget > 0.0f)
-	{
-		const float gain = (voice.m_engineGain > 0.0f) ? voice.m_engineGain : 1.0f;
-		const float steps = Max(ceilf(spatializedTarget / (gain * kHrtfEngineVolumeStep)), 1.0f);
-		target = Min(steps * kHrtfEngineVolumeStep, voice.m_sourceVolume);
-	}
-
-	const bool bRaise = target > voice.m_engineVolume;
-	const bool bLower = target < voice.m_engineVolume * kHrtfMuteLowerRatio || (target == 0.0f && voice.m_engineVolume > 0.0f);
-	voice.m_bEngineVolumeJustSet = bFirstSight || !bReadsBackOurs || bRaise || bLower;
+	voice.m_bEngineVolumeJustSet = bFirstSight || !bReadsBackOurs || voice.m_engineVolume > 0.0f;
 	if (voice.m_bEngineVolumeJustSet)
 	{
 		const double setStart = Plat_FloatTime();
-		enginesound->SetVolumeByGuid(info.m_nGuid, target);
+		enginesound->SetVolumeByGuid(info.m_nGuid, 0.0f);
 		m_gameTimingSums.m_setVolumeMs += static_cast<float>(Plat_FloatTime() - setStart);
 		m_gameTimingSums.m_setVolumes += 1.0f;
-		voice.m_engineVolume = target;
+		voice.m_engineVolume = 0.0f;
+	}
+}
+
+// The engine ends a sound when a new one starts on the same entity and channel, except on the
+// channels that never replace; owned voices have no engine channel, so the rule is applied here.
+void CNeoHrtfSystem::EndReplacedVoices(const SndInfo_t &info)
+{
+	if (info.m_nChannel == CHAN_AUTO || info.m_nChannel == CHAN_STATIC)
+	{
+		return;
+	}
+
+	for (Voice &voice : m_voices)
+	{
+		if (voice.m_bInUse && voice.m_bOwned && voice.m_guid != info.m_nGuid
+			&& voice.m_soundSource == info.m_nSoundSource && voice.m_channel == info.m_nChannel)
+		{
+			voice.m_endRequest = EndReason::Replaced;
+		}
+	}
+}
+
+// Owned voices are no longer in the engine's list, so they follow their entity and end themselves.
+void CNeoHrtfSystem::UpdateOwnedVoice(int slot, float outputScale)
+{
+	Voice &voice = m_voices[slot];
+
+	// The entity is asked for its sound origin as the engine would; a dormant or deleted one leaves
+	// the sound where it was last heard.
+	C_BaseEntity *pSource = voice.m_hSource.Get();
+	if (pSource && !pSource->IsDormant())
+	{
+		Vector origin = voice.m_origin;
+		SpatializationInfo_t spatialization = {};
+		spatialization.type = SpatializationInfo_t::SI_INSPATIALIZATION;
+		spatialization.info.nEntityIndex = voice.m_soundSource;
+		spatialization.info.nChannel = voice.m_channel;
+		spatialization.info.pszName = voice.m_pSound->m_name.Get();
+		spatialization.info.vOrigin = voice.m_origin;
+		spatialization.info.nPitch = voice.m_pitch;
+		spatialization.info.fVolume = voice.m_sourceVolume;
+		spatialization.info.Soundlevel = voice.m_soundLevel;
+		spatialization.info.vListenerOrigin = m_listenerOrigin;
+		spatialization.pOrigin = &origin;
+		if (pSource->GetSoundSpatialization(spatialization))
+		{
+			voice.m_origin = origin;
+		}
+	}
+	voice.m_params = ComputeParams(voice.m_origin, voice.m_pitch, voice.m_localSound, voice.m_sourceVolume, voice.m_distMult,
+								   outputScale);
+
+	if (voice.m_endRequest != EndReason::None)
+	{
+		return;
+	}
+	if (m_finishedGeneration[slot].load(std::memory_order_acquire) == voice.m_generation)
+	{
+		voice.m_endRequest = EndReason::Wav;
+	}
+	else if (Plat_FloatTime() > voice.m_endDeadline)
+	{
+		voice.m_endRequest = EndReason::Deadline;
 	}
 }
 
@@ -1327,6 +1420,7 @@ void CNeoHrtfSystem::SaveSceneObj()
 
 void CNeoHrtfSystem::ReleaseAllVoices()
 {
+	m_seenGuids.RemoveAll();
 	bool bAny = m_retiredVoices.Count() > 0;
 	for (Voice &voice : m_voices)
 	{
@@ -1334,8 +1428,9 @@ void CNeoHrtfSystem::ReleaseAllVoices()
 		{
 			continue;
 		}
-		// Hand still-playing sounds back to the engine; a no-op for guids that already ended.
-		if (enginesound->IsSoundStillPlaying(voice.m_guid))
+		// Hand still-playing followed sounds back to the engine; a no-op for guids that already
+		// ended. Owned sounds in progress are cut.
+		if (!voice.m_bOwned && enginesound->IsSoundStillPlaying(voice.m_guid))
 		{
 			enginesound->SetVolumeByGuid(voice.m_guid, voice.m_sourceVolume);
 		}
@@ -1642,6 +1737,29 @@ soundlevel_t CNeoHrtfSystem::LookupScriptLevel(const char *pszNormalisedName)
 	return (index != m_soundLevels.InvalidIndex()) ? m_soundLevels[index] : SNDLVL_NORM;
 }
 
+void NeoHrtfStopSound(int entIndex, int channel, const char *pszWave)
+{
+	s_neoHrtfSystem.StopSound(entIndex, channel, pszWave);
+}
+
+void CNeoHrtfSystem::StopSound(int entIndex, int channel, const char *pszWave)
+{
+	char name[MAX_PATH];
+	if (!pszWave || !HrtfCacheName(pszWave, name, sizeof(name)))
+	{
+		return;
+	}
+
+	for (Voice &voice : m_voices)
+	{
+		if (voice.m_bInUse && voice.m_bOwned && voice.m_soundSource == entIndex && voice.m_channel == channel
+			&& !V_stricmp(voice.m_pSound->m_name.Get(), name))
+		{
+			voice.m_endRequest = EndReason::Stopped;
+		}
+	}
+}
+
 void CNeoHrtfSystem::MarkLocalSound(int guid, NeoHrtfLocalSound place)
 {
 	const double now = Plat_FloatTime();
@@ -1880,6 +1998,10 @@ void CNeoHrtfSystem::RenderBlock()
 				continue;
 			}
 			m_finished[v] = !ReadVoiceSamples(v, voice);
+			if (m_finished[v])
+			{
+				m_finishedGeneration[v].store(voice.m_generation, std::memory_order_release);
+			}
 
 			// Process even inaudible voices: skipping would freeze the backend's filter
 			// history and click when the voice becomes audible again.
