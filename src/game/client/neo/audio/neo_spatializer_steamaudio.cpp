@@ -611,7 +611,7 @@ public:
 		IPLBinauralEffectParams binauralParams = {};
 		binauralParams.direction = ToSteamAudioDirection(m_listener, origin);
 		binauralParams.interpolation = IPL_HRTFINTERPOLATION_BILINEAR;
-		binauralParams.spatialBlend = 1.0f;
+		binauralParams.spatialBlend = DirectSpatialBlend(path);
 		binauralParams.hrtf = m_hrtf;
 
 		float *outChannels[] = { outLeft, outRight };
