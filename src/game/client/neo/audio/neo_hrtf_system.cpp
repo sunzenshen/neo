@@ -477,7 +477,9 @@ void CNeoHrtfSystem::PollEngineSounds()
 			Voice &voice = m_voices[voiceIndex];
 			voice.m_bSeenThisPoll = true;
 			MuteEngineCopy(voice, info, engineFloor);
-			voice.m_params = ComputeParams(info, voice.m_localSound, voice.m_sourceVolume, voice.m_distMult, outputScale);
+			// The engine refreshes the origin every frame for channels that follow their entity
+			// (GetSoundSpatialization), so it already tracks moving players.
+			voice.m_params = ComputeParams(*info.m_pOrigin, info.m_nPitch, voice.m_localSound, voice.m_sourceVolume, voice.m_distMult, outputScale);
 			continue;
 		}
 
@@ -547,7 +549,7 @@ void CNeoHrtfSystem::PollEngineSounds()
 		voice.m_localSound = pending.m_localSound;
 		voice.m_soundSource = info.m_nSoundSource;
 		ResolveSoundLevel(voice, info, *pending.m_pSound);
-		voice.m_params = ComputeParams(info, voice.m_localSound, info.m_flVolume, voice.m_distMult, outputScale);
+		voice.m_params = ComputeParams(*info.m_pOrigin, info.m_nPitch, voice.m_localSound, info.m_flVolume, voice.m_distMult, outputScale);
 		pending.m_voiceIndex = freeSearch;
 		m_gameTimingSums.m_newVoices += 1.0f;
 	}
@@ -1667,7 +1669,7 @@ NeoHrtfLocalSound CNeoHrtfSystem::TakeLocalSoundMark(int guid)
 	return NeoHrtfLocalSound::None;
 }
 
-Vector CNeoHrtfSystem::SoundPosition(const SndInfo_t &info, NeoHrtfLocalSound localSound) const
+Vector CNeoHrtfSystem::SoundPosition(const Vector &enginePosition, NeoHrtfLocalSound localSound) const
 {
 	// The engine plays all of the local player's sounds from their origin on the floor, whatever
 	// made them, so sounds made with the hands or the body are placed from the view instead.
@@ -1683,17 +1685,14 @@ Vector CNeoHrtfSystem::SoundPosition(const SndInfo_t &info, NeoHrtfLocalSound lo
 	case NeoHrtfLocalSound::Body:
 		return m_listenerOrigin - Vector(0.0f, 0.0f, kHrtfLocalBodyDownUnits);
 	default:
-		// The engine refreshes this every frame for channels that follow their entity
-		// (GetSoundSpatialization), so it already tracks moving players.
-		Assert(info.m_pOrigin);
-		return *info.m_pOrigin;
+		return enginePosition;
 	}
 }
 
-CNeoHrtfSystem::VoiceParams CNeoHrtfSystem::ComputeParams(const SndInfo_t &info, NeoHrtfLocalSound localSound,
+CNeoHrtfSystem::VoiceParams CNeoHrtfSystem::ComputeParams(const Vector &enginePosition, int pitch, NeoHrtfLocalSound localSound,
 														  float sourceVolume, float distMult, float outputScale) const
 {
-	const Vector position = SoundPosition(info, localSound);
+	const Vector position = SoundPosition(enginePosition, localSound);
 
 	// The engine's inverse-distance model (see kHrtfEngineRefDb), so audible ranges match
 	// the engine's own copy. Below snd_gain_min the engine stops mixing the channel.
@@ -1704,11 +1703,11 @@ CNeoHrtfSystem::VoiceParams CNeoHrtfSystem::ComputeParams(const SndInfo_t &info,
 		distanceGain = 0.0f;
 	}
 
-	Assert(info.m_nPitch > 0);
+	Assert(pitch > 0);
 	// The same law per metre, for the pathing simulation to evaluate along paths around obstacles.
 	const float falloffPerMetre = distMult / kHrtfMetresPerUnit;
 	return { HrtfToVec3(position, kHrtfMetresPerUnit), sourceVolume * distanceGain * outputScale,
-			 static_cast<float>(Max(info.m_nPitch, 1)) / PITCH_NORM, distanceGain, falloffPerMetre };
+			 static_cast<float>(Max(pitch, 1)) / PITCH_NORM, distanceGain, falloffPerMetre };
 }
 
 int CNeoHrtfSystem::FindVoice(int guid) const
