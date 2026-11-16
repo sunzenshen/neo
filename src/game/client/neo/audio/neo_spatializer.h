@@ -126,6 +126,18 @@ struct DirectPath
 	float transmission[NUM_ACOUSTIC_BANDS] = { 1.0f, 1.0f, 1.0f }; // fraction passing through the occluders
 };
 
+static constexpr float DIRECT_BLEND_SNAP = 0.999f;
+
+inline float DirectSpatialBlend(const DirectPath &path)
+{
+	const float visible = path.occlusion < 0.0f ? 0.0f : (path.occlusion > 1.0f ? 1.0f : path.occlusion);
+	const float transmitted = (1.0f - visible) * path.transmission[0];
+	const float total = visible + transmitted;
+	const float blend = total > 0.0f ? visible / total : 0.0f;
+	// Keep the fully visible case identical to the unoccluded HRTF.
+	return blend > DIRECT_BLEND_SNAP ? 1.0f : blend;
+}
+
 static constexpr int PATHING_AMBISONIC_COEFFS = 4; // first order: enough to place a path's direction
 
 // The sound reaching the listener around obstacles, along paths through baked probes, as a
