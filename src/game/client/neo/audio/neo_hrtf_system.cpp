@@ -574,6 +574,7 @@ void CNeoHrtfSystem::PollEngineSounds()
 	}
 	m_simWake.Set();
 
+	// Muting is an engine call, so it stays out of the audio thread's lock.
 	for (int p = 0; p < pendingCount; ++p)
 	{
 		const PendingVoice &pending = m_pending[p];
