@@ -25,6 +25,21 @@ class IFileSystem;
 class IPhysicsSurfaceProps;
 class IPhysicsCollision;
 
+class CNeoAcousticMaterials
+{
+public:
+	CNeoAcousticMaterials();
+	void Load(IFileSystem *pFileSystem);
+	const CUtlVector<NeoSpatial::AcousticMaterial> &GetPresets() const
+	{
+		return m_presets;
+	}
+	uint32 GetBakeCrc() const;
+
+private:
+	CUtlVector<NeoSpatial::AcousticMaterial> m_presets;
+};
+
 class CNeoAudioGeometry
 {
 public:
@@ -44,8 +59,8 @@ public:
 		NeoSpatial::Vec3 mins = { 0.0f, 0.0f, 0.0f }; // bounds of the vertices
 		NeoSpatial::Vec3 maxs = { 0.0f, 0.0f, 0.0f };
 
-		// Valid until the mesh changes; the materials are the shared AcousticPreset table.
-		NeoSpatial::SceneGeometry Geometry() const;
+		// Valid until the mesh or material table changes.
+		NeoSpatial::SceneGeometry Geometry(const CNeoAcousticMaterials &materials) const;
 	};
 
 	// A brush entity's model (*1, *2...), in the entity's own frame: brush entity vertices are stored
@@ -59,7 +74,8 @@ public:
 
 	// pszBspPath is relative to the GAME search path, e.g. "maps/nt_rise_ctg.bsp", or absolute. On
 	// failure the geometry is empty and pszErrorOut says why.
-	bool LoadFromBsp(const Services &services, const char *pszBspPath, char *pszErrorOut, int errorLen);
+	bool LoadFromBsp(const Services &services, const CNeoAcousticMaterials &materials, const char *pszBspPath,
+					 char *pszErrorOut, int errorLen);
 
 	// The collision model of a studio model (its .phy, solid 0), in model space: what a dynamic prop
 	// collides with, as static props do. False (and an empty mesh) if it has none.
@@ -73,6 +89,10 @@ public:
 	const std::vector<NeoSpatial::ConvexVolume> &GetBlockerVolumes() const { return m_blockerVolumes; }
 	int NumTriangles() const { return m_materialIndices.Count(); }
 	int NumMaterials() const { return m_materials.Count(); }
+	const CNeoAcousticMaterials &GetMaterials() const
+	{
+		return m_presets;
+	}
 	int NumAudioBlockerBrushes() const { return static_cast<int>(m_blockerVolumes.size()); }
 
 	// Indexed by model number; model 0 (the world) is in the static scene instead, so it is empty here.
@@ -84,7 +104,7 @@ public:
 	// The map's BSP tree. Leaves in the 3D skybox's area are not open: nobody listens from there.
 	const NeoSpatial::BspTree &GetBspTree() const { return m_tree; }
 
-	// Changes whenever the geometry would, so baked data can be matched to the map it came from.
+	// Excludes transmission, which does not affect baked reflections or paths.
 	uint32 GetGeometryCrc() const;
 
 	// The shape alone: positions (to the millimetre), triangles and BSP leaves, but not materials.
@@ -110,6 +130,7 @@ private:
 	CUtlVector<int32> m_triangles;
 	CUtlVector<int32> m_materialIndices;
 	CUtlVector<NeoSpatial::AcousticMaterial> m_materials;
+	CNeoAcousticMaterials m_presets;
 	int m_numProbeTriangles = 0; // the triangles before the audio blockers'
 	std::vector<NeoSpatial::ConvexVolume> m_blockerVolumes; // in metres
 

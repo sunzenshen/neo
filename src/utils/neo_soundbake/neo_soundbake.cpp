@@ -531,11 +531,11 @@ bool WriteProbeGameLump(const char *pszBspPath, const uint8_t *pLump, uint32_t l
 // Reloads the written map the way the game does (CNeoHrtfSystem::LoadBakedProbeLump), so a bake
 // that would not load in game fails here rather than silently falling back at runtime.
 bool VerifyBakedMap(const char *pszBspPath, const CNeoAudioGeometry::Services &services, NeoSpatial::ISpatializer &spatializer,
-					const NeoSpatial::ProbeSet &baked)
+					const NeoSpatial::ProbeSet &baked, const CNeoAcousticMaterials &materials)
 {
 	char error[512];
 	CNeoAudioGeometry geometry;
-	if (!geometry.LoadFromBsp(services, pszBspPath, error, sizeof(error)))
+	if (!geometry.LoadFromBsp(services, materials, pszBspPath, error, sizeof(error)))
 	{
 		return Fail("the written map does not load: %s", error);
 	}
@@ -578,7 +578,9 @@ int Run(const char *pszBspArg)
 	char error[512];
 	CNeoAudioGeometry geometry;
 	const CNeoAudioGeometry::Services services = { g_pBakeFileSystem, pSurfaceProps, pCollision };
-	if (!geometry.LoadFromBsp(services, bspPath, error, sizeof(error)))
+	CNeoAcousticMaterials materials;
+	materials.Load(g_pBakeFileSystem);
+	if (!geometry.LoadFromBsp(services, materials, bspPath, error, sizeof(error)))
 	{
 		Fail("%s", error);
 		return 1;
@@ -661,7 +663,7 @@ int Run(const char *pszBspArg)
 			{
 				std::vector<uint8_t> payload;
 				NeoSpatial::WriteProbeLump(probes, pBatches, batchesSize, geometry.GetShapeCrc(), pSpatializer->GetLibraryVersion(),
-										   payload);
+										   materials.GetBakeCrc(), payload);
 				unsigned int compressedSize = 0;
 				unsigned char *pCompressed = (payload.size() < UINT32_MAX)
 					? LZMA_Compress(payload.data(), static_cast<unsigned int>(payload.size()), &compressedSize) : nullptr;
@@ -671,7 +673,8 @@ int Run(const char *pszBspArg)
 				}
 				else
 				{
-					if (WriteProbeGameLump(bspPath, pCompressed, compressedSize) && VerifyBakedMap(bspPath, services, *pSpatializer, probes))
+					if (WriteProbeGameLump(bspPath, pCompressed, compressedSize)
+						&& VerifyBakedMap(bspPath, services, *pSpatializer, probes, materials))
 					{
 						Msg("neo_soundbake: wrote %.1f MB of baked probes (%.1f MB uncompressed) into %s in %.0f s\n",
 							compressedSize / 1048576.0, payload.size() / 1048576.0, bspPath, Plat_FloatTime() - startTime);

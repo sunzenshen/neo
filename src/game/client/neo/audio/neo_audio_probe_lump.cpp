@@ -32,13 +32,14 @@ bool ReadArray(const uint8_t *data, int64_t size, int64_t &offset, std::vector<T
 } // namespace
 
 void WriteProbeLump(const ProbeSet &probes, const uint8_t *batches, int64_t batchesSize, uint32_t shapeCrc,
-					uint32_t libraryVersion, std::vector<uint8_t> &out)
+					uint32_t libraryVersion, uint32_t materialCrc, std::vector<uint8_t> &out)
 {
 	ProbeLumpHeader header = {};
 	header.magic = PROBE_LUMP_MAGIC;
 	header.formatVersion = PROBE_LUMP_FORMAT_VERSION;
 	header.shapeCrc = shapeCrc;
 	header.libraryVersion = libraryVersion;
+	header.materialCrc = materialCrc;
 	header.radius = probes.radius;
 	header.numProbes = static_cast<int32_t>(probes.centres.size());
 	header.numBatches = probes.NumBatches();

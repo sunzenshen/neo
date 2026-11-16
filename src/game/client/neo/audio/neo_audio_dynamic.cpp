@@ -63,6 +63,7 @@ void CNeoAudioDynamicGeometry::Init(CNeoAudioGeometry &geometry, const CNeoAudio
 {
 	Clear();
 	m_services = services;
+	m_materials = geometry.GetMaterials();
 	geometry.TakeBrushModels(m_brushModels);
 	m_brushes.SetCount(m_brushModels.Count());
 	for (int m = 0; m < m_brushModels.Count(); ++m)
@@ -118,7 +119,7 @@ void CNeoAudioDynamicGeometry::Apply(NeoSpatial::ISpatializer *pSpatializer, con
 		unsigned short modelIndex = m_models.Find(placement.pMesh);
 		if (modelIndex == m_models.InvalidIndex())
 		{
-			modelIndex = m_models.Insert(placement.pMesh, pSpatializer->CreateDynamicModel(placement.pMesh->Geometry()));
+			modelIndex = m_models.Insert(placement.pMesh, pSpatializer->CreateDynamicModel(placement.pMesh->Geometry(m_materials)));
 		}
 		const NeoSpatial::DynamicModel model = m_models[modelIndex];
 		if (model == NeoSpatial::INVALID_DYNAMIC_MODEL)

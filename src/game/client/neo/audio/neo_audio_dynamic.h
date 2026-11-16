@@ -81,6 +81,7 @@ private:
 	int BrushModelIndex(C_BaseEntity *pEntity) const; // -1 if it has no brush model of this map
 
 	CNeoAudioGeometry::Services m_services = {};
+	CNeoAcousticMaterials m_materials;
 	CUtlVectorAutoPurge<CNeoAudioGeometry::BrushModel *> m_brushModels; // by model number
 	CUtlVector<BrushEntry> m_brushes; // by model number
 	CUtlMap<const model_t *, CNeoAudioGeometry::Mesh *> m_props; // null = no usable collision

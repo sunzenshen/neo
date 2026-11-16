@@ -1033,7 +1033,9 @@ void CNeoHrtfSystem::BuildScene()
 	char error[kMaxErrorLen];
 	CNeoAudioGeometry geometry;
 	const CNeoAudioGeometry::Services services = { filesystem, physprops, physcollision };
-	const bool bLoaded = geometry.LoadFromBsp(services, path, error, sizeof(error));
+	CNeoAcousticMaterials materials;
+	materials.Load(filesystem);
+	const bool bLoaded = geometry.LoadFromBsp(services, materials, path, error, sizeof(error));
 
 	AUTO_LOCK(m_simRunMutex);
 	ResetSimulation(); // the backend drops every source with the old scene
