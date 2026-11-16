@@ -365,10 +365,28 @@ void CNEOHud_ContextHint::DrawNeoHudElement()
 	vgui::surface()->DrawSetColor(m_BoxColor);
 	vgui::surface()->DrawFilledRect(iBoxX, iBoxY, iBoxX + iBoxWide, iBoxY + iBoxTall);
 
+	const int iTextLen = static_cast<int>(wcslen(m_wszHintText));
 	vgui::surface()->DrawSetTextFont(m_hHintFont);
+
+	// The hint is drawn over the world, so outline it to stay readable on bright surfaces
+	vgui::surface()->DrawSetTextColor(m_OutlineColor);
+	for (int iOffsetX = -1; iOffsetX <= 1; iOffsetX++)
+	{
+		for (int iOffsetY = -1; iOffsetY <= 1; iOffsetY++)
+		{
+			if (iOffsetX == 0 && iOffsetY == 0)
+			{
+				continue;
+			}
+
+			vgui::surface()->DrawSetTextPos(textX + iOffsetX, textY + iOffsetY);
+			vgui::surface()->DrawPrintText(m_wszHintText, iTextLen);
+		}
+	}
+
 	vgui::surface()->DrawSetTextColor(m_TextColor);
 	vgui::surface()->DrawSetTextPos(textX, textY);
-	vgui::surface()->DrawPrintText(m_wszHintText, static_cast<int>(wcslen(m_wszHintText)));
+	vgui::surface()->DrawPrintText(m_wszHintText, iTextLen);
 }
 
 void CNEOHud_ContextHint::Paint()
