@@ -6,7 +6,7 @@
 //   ProbeLumpHeader
 //   Vec3    centres[numProbes]          probe layout, so the client never has to regenerate it
 //   int32_t batchStarts[numBatches + 1]
-//   int32_t batchAreas[numBatches]
+//   int32_t batchIds[numBatches]
 //   uint8_t batches[batchesSize]        ISpatializer::SerializeProbeBatches
 // The baker LZMA-compresses the whole payload in Valve's lzma_header_t format (the client's
 // CLZMA reads it); ReadProbeLump expects it already decompressed.
@@ -38,7 +38,7 @@ struct ProbeLumpHeader
 };
 
 static constexpr uint32_t PROBE_LUMP_MAGIC = 0x4c50534e; // "NSPL"
-static constexpr uint32_t PROBE_LUMP_FORMAT_VERSION = 3;
+static constexpr uint32_t PROBE_LUMP_FORMAT_VERSION = 4;
 // The largest uncompressed payload the game reads; the baker refuses to write a larger one.
 static constexpr int64_t PROBE_LUMP_MAX_BYTES = 256 * 1024 * 1024;
 

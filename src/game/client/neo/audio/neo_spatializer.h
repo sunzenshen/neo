@@ -234,8 +234,7 @@ public:
 	// complete (finished or loaded); until then the result stays invalid.
 	virtual void SimulateReverb(const Listener &listener, ReverbParams *out) = 0;
 
-	// Finds the paths from each source to the listener through the baked batch with id batchId (the
-	// one covering the listener). Writes one result per source; all invalid until that batch's bake
+	// Finds the paths from each source to the listener through the baked batch with id batchId. Writes one result per source; all invalid until that batch's bake
 	// is complete. A source the listener can see gets its direct line as its path. Paths are used as
 	// baked: dynamic geometry does not block them.
 	virtual void SimulatePathing(const Listener &listener, int32_t batchId, float minGain, const PathingVoice *sources,

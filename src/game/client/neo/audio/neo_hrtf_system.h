@@ -222,8 +222,7 @@ private:
 		uint32 m_sceneEpoch = 0; // m_sceneEpoch when built; a frame from an older scene is dropped
 		NeoSpatial::Listener m_listener = {};
 		bool m_bOcclusion = false;
-		bool m_bPathing = false; // the listener is within reach of a probe and its batch is known
-		int32 m_pathBatch = 0;
+		bool m_bPathing = false; // the listener is within reach of a probe
 		NeoSpatial::Listener m_pathListener = {}; // pulled inside the nearest probe
 		bool m_bReverb = false;
 		int m_count = 0;

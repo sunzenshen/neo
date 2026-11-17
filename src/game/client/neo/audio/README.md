@@ -242,10 +242,10 @@ tree only filters and batches.
 - **Validity:** every probe must be in an open BSP leaf (lump 10: not solid, inside the map, not in
   the 3D skybox's area). Any probe within 1 m (half the spacing) of one already kept is dropped,
   with crest probes kept first.
-- One `IPLProbeBatch` per BSP area that ends up with probes: a region sealed off by
-  areaportals, so usually one or two per map. Steam Audio indexes the probes inside a batch, so
-  large batches cost nothing at lookup. Leaves and vis clusters were tried first, but on NT;RE
-  maps every open leaf is its own cluster, which meant 200–450 tiny batches. Placement takes
+- One `IPLProbeBatch` for the whole map. Steam Audio indexes the probes inside a batch, so
+  large batches cost nothing at lookup. Batches per BSP area cut every path at an areaportal,
+  and the areaportals on NT;RE maps are open (`func_areaportalwindow`, or always open with no
+  door); shut doors block paths through the dynamic geometry instead. Placement takes
   10–150 ms.
 
 Batches are baked with listener-centric parametric reverb (`IPL_BAKEDDATAVARIATION_REVERB`,
@@ -259,11 +259,10 @@ the map mid-bake starts it over next time.
 The result is saved to `hrtf/<map>.probes` under the mod directory. Its key covers the
 geometry, materials, BSP leaves and probe layout, so a changed map rebakes; bump
 `kHrtfProbeCacheVersion` whenever the bake parameters change. `cl_neo_hrtf_bake` rebakes,
-`cl_neo_hrtf_bake_cancel` stops a bake, `cl_neo_hrtf_debug_probes 1` draws nearby probes
-coloured by batch, and `cl_neo_hrtf_debug 1` shows the probe count and bake progress.
+`cl_neo_hrtf_bake_cancel` stops a bake, `cl_neo_hrtf_debug_probes 1` draws nearby probes, and `cl_neo_hrtf_debug 1` shows the probe count and bake progress.
 
 The same batches carry pathing: Steam Audio only finds paths between probes in the same batch,
-and an area batch spans everything connected short of an areaportal.
+so the map's one batch lets paths pass through its open areaportals.
 
 ## Baking at compile time
 
@@ -354,9 +353,8 @@ wall instead, from the doorway it actually reaches the listener through.
   pairs that see each other (more than 10% of 4×4 rays between 0.5 m spheres get through), at most
   20 m apart, with shortest paths through them up to 100 m long.
 - **Simulation (simulation thread, ~0.05 ms for 32 voices, 0.17 ms for 128):** each voice's source also runs pathing
-  against the batch of the listener's BSP area. A voice in another area, behind an areaportal, has
-  no path. Paths aren't re-validated per frame: they are used as baked, against the static world
-  (dynamic geometry only occludes, see below).
+  against the map's probe batch. Paths aren't re-validated per frame: they are used as baked,
+  against the static world (dynamic geometry only occludes, see below).
   Each voice's distance law is passed in as a callback, so a path is attenuated by the engine-matching
   law at its own length: around a corner is quieter than in view at the same straight-line distance.
 - **Render (audio thread):** only the share the direct path does not carry, `1 - occlusion`, goes
@@ -473,7 +471,7 @@ then `cmake --build ... --target install`) and configure neo with
   (raw filenames use `SNDLVL_NORM`); engine DSP, ducking and room reverb do not apply.
 - Reverb is one listener-centric room, not per-source reflections. A sound in another room
   reverberates in the listener's room only as much as reaches it, through the wall or along paths.
-  Paths stop at areaportals and at 100 m. By default, the only brush entities and props in the scene
+  Paths stop at 100 m. By default, the only brush entities and props in the scene
   are doors, lifts, trains and what rides on them (`cl_neo_hrtf_dynamic_geometry 2` adds the rest).
   The bake ignores all of them, so the baked reverb never has a door shut.
 - With `cl_neo_hrtf_precache 0`, or for a sound played before the loader reaches it, the first
