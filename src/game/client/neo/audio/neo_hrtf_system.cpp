@@ -71,6 +71,22 @@ constexpr float kHrtfFirstOrderOmniGain = 0.28209479f;
 // ledge-standing listener; beyond it the nearest probe likely describes another space.
 constexpr float kHrtfPathReachMetres = 8.0f;
 
+// The baked reverb has one loudness everywhere, so open spaces echo like a closet. The wet level is
+// faded out by the size of the listener's room, read from rays cast around the listener: full in
+// rooms up to the first size, none from the second, linear between. A ray that escapes to the sky
+// or reaches its cap scores the cap.
+constexpr float kHrtfRoomRayMetres = 20.0f;
+constexpr float kHrtfRoomFullMetres = 4.0f;
+constexpr float kHrtfRoomNoneMetres = 8.0f;
+// Long enough not to click on a teleport, short enough to follow a walk through a doorway.
+constexpr float kHrtfRoomFadeSeconds = 0.5f;
+constexpr double kHrtfRoomProbeSeconds = 0.1;
+// Rays in world space, so turning the head changes nothing: a ring at each elevation, plus one
+// straight up. None point down: the floor is always near.
+constexpr int kHrtfRoomAzimuths = 8;
+constexpr float kHrtfRoomElevationsDeg[] = { 0.0f, 30.0f, 60.0f };
+constexpr int kHrtfRoomRays = kHrtfRoomAzimuths * ARRAYSIZE(kHrtfRoomElevationsDeg) + 1;
+
 
 // Baked probes are cached per map under the mod directory, keyed by geometry and probe layout.
 // Bump the version whenever the bake parameters in the backend or the file layout change.
@@ -370,6 +386,11 @@ void CNeoHrtfSystem::LevelInitPostEntity()
 {
 	// Maps can add level_sounds scripts, so the level map is rebuilt against this map's scripts.
 	m_soundLevels.Purge();
+	// Each map starts dry, probes at once and fades in if the spawn is a small room.
+	m_roomReverbGain = 0.0f;
+	m_roomReverbTarget = 0.0f;
+	m_roomProbeTime = 0.0;
+	m_roomUpdateTime = 0.0;
 	if (m_pDevice)
 	{
 		// Both during the load rather than on the first sounds: the level map walks every script.
@@ -436,6 +457,7 @@ void CNeoHrtfSystem::Update(float)
 			}
 			PrecacheNewSounds();
 			PollEngineSounds();
+			UpdateRoomSize();
 			UpdateBake();
 			if (cl_neo_hrtf_debug_probes.GetBool())
 			{
@@ -927,11 +949,86 @@ void CNeoHrtfSystem::FindDoorOnPaths(Voice &voice, const Vector &arrival, float 
 	}
 }
 
+namespace
+{
+
+struct HrtfRoomRays
+{
+	Vector m_dirs[kHrtfRoomRays];
+
+	HrtfRoomRays()
+	{
+		int ray = 0;
+		for (const float elevationDeg : kHrtfRoomElevationsDeg)
+		{
+			for (int a = 0; a < kHrtfRoomAzimuths; ++a)
+			{
+				AngleVectors(QAngle(-elevationDeg, a * 360.0f / kHrtfRoomAzimuths, 0.0f), &m_dirs[ray++]);
+			}
+		}
+		m_dirs[ray] = Vector(0.0f, 0.0f, 1.0f);
+	}
+};
+
+} // namespace
+
+// Mean distance to the nearest surface around `origin`, in metres; negative when `origin` is inside
+// a wall. Doors and props count as walls, so a shut door makes the room smaller.
+float CNeoHrtfSystem::ProbeRoomMetres(const Vector &origin, float *pSkyShare) const
+{
+	static const HrtfRoomRays s_rays;
+	CTraceFilterNoNPCsOrPlayer filter(nullptr, COLLISION_GROUP_NONE);
+	const float reach = kHrtfRoomRayMetres / kHrtfMetresPerUnit;
+	float totalMetres = 0.0f;
+	int skyRays = 0;
+	for (const Vector &dir : s_rays.m_dirs)
+	{
+		trace_t trace;
+		UTIL_TraceLine(origin, origin + dir * reach, MASK_SOLID, &filter, &trace);
+		if (trace.startsolid)
+		{
+			return -1.0f;
+		}
+
+		// The sky is far whatever its brush's distance.
+		const bool bSky = (trace.surface.flags & (SURF_SKY | SURF_SKY2D)) != 0;
+		skyRays += bSky ? 1 : 0;
+		totalMetres += bSky ? kHrtfRoomRayMetres : trace.fraction * kHrtfRoomRayMetres;
+	}
+
+	*pSkyShare = static_cast<float>(skyRays) / kHrtfRoomRays;
+	return totalMetres / kHrtfRoomRays;
+}
+
+void CNeoHrtfSystem::UpdateRoomSize()
+{
+	const double now = Plat_FloatTime();
+	if (now >= m_roomProbeTime)
+	{
+		m_roomProbeTime = now + kHrtfRoomProbeSeconds;
+		float skyShare = 0.0f;
+		const float roomMetres = ProbeRoomMetres(m_listenerOrigin, &skyShare);
+		// A spectator camera inside a wall says nothing about the room: keep the last reading.
+		if (roomMetres >= 0.0f)
+		{
+			m_roomMetres = roomMetres;
+			m_roomSkyShare = skyShare;
+			m_roomReverbTarget = RemapValClamped(roomMetres, kHrtfRoomFullMetres, kHrtfRoomNoneMetres, 1.0f, 0.0f);
+		}
+	}
+
+	// Eased, so a teleport or a step through a doorway fades the tail rather than cutting it.
+	const double last = (m_roomUpdateTime > 0.0) ? m_roomUpdateTime : now;
+	m_roomUpdateTime = now;
+	const float maxStep = static_cast<float>(now - last) / kHrtfRoomFadeSeconds;
+	m_roomReverbGain = Approach(m_roomReverbTarget, m_roomReverbGain, maxStep);
+}
+
 void CNeoHrtfSystem::PublishRenderFrame()
 {
 	RenderFrame &frame = m_renderNext;
 	frame.m_listener = m_listener;
-	frame.m_reverbGain = cl_neo_hrtf_reverb.GetFloat();
+	frame.m_reverbGain = cl_neo_hrtf_reverb.GetFloat() * m_roomReverbGain;
 	frame.m_bReverbDecorrelate = !cl_neo_hrtf_reverb_inhead.GetBool();
 	for (int v = 0; v < kMaxVoices; ++v)
 	{
@@ -2085,8 +2182,9 @@ void CNeoHrtfSystem::PrintDebug()
 	const NeoSpatial::ReverbParams &reverb = m_debugResults.m_reverb;
 	if (reverb.valid)
 	{
-		engine->Con_NPrintf(2, "hrtf reverb: RT60 %.2f / %.2f / %.2f s (low / mid / high), level %.2f",
-			reverb.reverbTimes[0], reverb.reverbTimes[1], reverb.reverbTimes[2], cl_neo_hrtf_reverb.GetFloat());
+		engine->Con_NPrintf(2, "hrtf reverb: RT60 %.2f / %.2f / %.2f s (low / mid / high), level %.2f, room %.1f m, echo %.2f",
+			reverb.reverbTimes[0], reverb.reverbTimes[1], reverb.reverbTimes[2], cl_neo_hrtf_reverb.GetFloat(), m_roomMetres,
+			m_roomReverbGain);
 	}
 	else
 	{
@@ -2205,12 +2303,17 @@ void CNeoHrtfSystem::RenderBlock()
 
 		// Every block, voices or not, so tails ring out after the sounds that started them.
 		const NeoSpatial::ReverbParams &reverb = m_renderSim.m_reverb;
-		const float reverbGain = m_render.m_reverbGain;
+		// The level is ramped across the block: the game thread moves it in frame-sized steps.
+		const float startGain = m_lastBlockReverbGain;
+		const float endGain = m_render.m_reverbGain;
+		m_lastBlockReverbGain = endGain;
 		m_pSpatializer->ProcessReverb(reverb, m_render.m_bReverbDecorrelate, m_scratchLeft, m_scratchRight);
-		if (reverb.valid && reverbGain > 0.0f)
+		if (reverb.valid && (startGain > 0.0f || endGain > 0.0f))
 		{
+			const float gainStep = (endGain - startGain) / kFrameSize;
 			for (int f = 0; f < kFrameSize; ++f)
 			{
+				const float reverbGain = startGain + gainStep * (f + 1);
 				m_carry[f * kHrtfOutputChannels] += reverbGain * m_scratchLeft[f];
 				m_carry[f * kHrtfOutputChannels + 1] += reverbGain * m_scratchRight[f];
 			}

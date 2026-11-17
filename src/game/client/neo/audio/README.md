@@ -339,10 +339,16 @@ The baked probes drive one room reverb around the listener:
   chain of three Schroeder all-pass filters: flat in magnitude, different in phase. In testing the
   ears came out decorrelated (correlation 0.02) at equal energy, so the room surrounds the listener
   instead of sitting inside the head.
+- **Room size (game thread):** the bake holds decay times only, no level, so a street echoed as loudly
+  as a closet. Every 0.1 s, 25 rays are traced from the listener (rings at 0, 30 and 60 degrees up,
+  plus straight up), each capped at 20 m; a ray that ends on sky scores the cap. Their mean length
+  is the room size. The wet level is full up to 4 m, none from 8 m, linear between. It moves at most
+  a full step in 0.5 s, and the audio thread ramps it across each block, so walking out of a room
+  fades the tail. Doors and props count as walls. Only the listener's room counts.
 
 `cl_neo_hrtf_reverb` sets the level (default 1, 0 turns it off). `cl_neo_hrtf_reverb_inhead 1`
 skips the all-passes and sends the same tail to both ears, inside the head, at the same level. Until a map's bake finishes
-there is no reverb, and the debug overlay says so. `cl_neo_hrtf_debug 1` shows the current RT60s.
+there is no reverb, and the debug overlay says so. `cl_neo_hrtf_debug 1` shows the current RT60s, room size and echo level.
 
 ## Pathing
 
