@@ -559,12 +559,7 @@ void BuildProbes(const SceneGeometry &geometry, const BspTree &tree, const Probe
 
 	const CMeshColumns columns(geometry, settings.spacing);
 
-	struct Placed
-	{
-		int32_t area;
-		Vec3 centre;
-	};
-	std::vector<Placed> placed;
+	std::vector<Vec3> placed;
 	CProbeSpacing spacing(settings.spacing * PROBE_MIN_SEPARATION);
 	const auto openLeaf = [&](const Vec3 &point) {
 		const int leaf = tree.FindLeaf(point);
@@ -576,7 +571,7 @@ void BuildProbes(const SceneGeometry &geometry, const BspTree &tree, const Probe
 			&& std::none_of(excluded.begin(), excluded.end(), [&](const ConvexVolume &volume) { return volume.Contains(centre); })
 			&& spacing.TryAdd(centre))
 		{
-			placed.push_back({ tree.leaves[leaf].area, centre });
+			placed.push_back(centre);
 		}
 	};
 
@@ -657,6 +652,30 @@ void BuildProbes(const SceneGeometry &geometry, const BspTree &tree, const Probe
 		}
 	}
 
+	GroupProbesByArea(placed, tree, settings.spacing, out);
+}
+
+int GroupProbesByArea(const std::vector<Vec3> &centres, const BspTree &tree, float radius, ProbeSet &out)
+{
+	out = ProbeSet();
+	out.radius = radius;
+
+	struct Placed
+	{
+		int32_t area;
+		Vec3 centre;
+	};
+	std::vector<Placed> placed;
+	placed.reserve(centres.size());
+	for (const Vec3 &centre : centres)
+	{
+		const int leaf = tree.FindLeaf(centre);
+		if (leaf >= 0 && tree.leaves[leaf].open)
+		{
+			placed.push_back({ tree.leaves[leaf].area, centre });
+		}
+	}
+
 	std::stable_sort(placed.begin(), placed.end(), [](const Placed &a, const Placed &b) { return a.area < b.area; });
 	out.centres.reserve(placed.size());
 	for (size_t i = 0; i < placed.size(); ++i)
@@ -669,6 +688,7 @@ void BuildProbes(const SceneGeometry &geometry, const BspTree &tree, const Probe
 		out.centres.push_back(placed[i].centre);
 	}
 	out.batchStarts.push_back(static_cast<int32_t>(placed.size()));
+	return static_cast<int>(centres.size() - placed.size());
 }
 
 } // namespace NeoSpatial

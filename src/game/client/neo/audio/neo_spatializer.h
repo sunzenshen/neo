@@ -256,6 +256,8 @@ public:
 	// Starts baking every batch on a background thread, using up to numThreads threads: first
 	// listener-centric reverb, then the paths between its probes. False if there are no batches.
 	virtual bool StartBake(int numThreads) = 0;
+	// Paths longer than this are not baked; takes effect at the next StartBake. Zero restores the default.
+	virtual void SetBakePathRange(float metres) = 0;
 	virtual void CancelBake() = 0;
 	// progressOut, if not null, gets the overall fraction done.
 	virtual BakeState GetBakeState(float *progressOut) = 0;
