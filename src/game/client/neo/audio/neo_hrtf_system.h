@@ -87,7 +87,7 @@ private:
 
 		// Set by the game thread before anyone can decode it.
 		CUtlString m_name;
-		soundlevel_t m_scriptLevel = SNDLVL_NORM; // loudest scripted level of the file, the voice default
+		soundlevel_t m_scriptLevel = SNDLVL_NORM; // scripted level of the file, the voice default
 		std::atomic<int> m_state{ Queued };
 		// Written while Loading. Stored at the file's own rate as 16-bit: a quarter of the memory of
 		// 48 kHz float for the common 22 kHz files.
@@ -364,7 +364,7 @@ private:
 	INetworkStringTable *m_pSoundPrecacheTable = nullptr; // this map's, once found
 	int m_precacheTableCount = 0; // its entries queued so far
 	bool m_bPrecaching = false; // cl_neo_hrtf_precache when last checked
-	CUtlDict<soundlevel_t, int> m_soundLevels; // normalised wave name → loudest scripted level
+	CUtlDict<soundlevel_t, int> m_soundLevels; // normalised wave name → scripted level
 	Voice m_voices[kMaxVoices];
 	uint32 m_nextGeneration = 1;
 	PendingVoice m_pending[kMaxVoices];
