@@ -5,14 +5,15 @@
 //
 // Run after VRAD, on the BSP it wrote:
 //     neo_soundbake -game <mod dir> [-threads <n>] [-phonon <library>] [-obj] [-dumpprobes <file>]
-//                   [-probes <file>] [-pathrange <m>] [-appid_dir_<appid> <dir>] <map.bsp>
+//                   [-probes <file>] [-navmask [<m>]] [-pathrange <m>] [-appid_dir_<appid> <dir>] <map.bsp>
 // In Hammer++'s expert compile configuration: $bindir\neo_soundbake.exe, parameters
 //     -game $gamedir $path\$file.bsp
 // after the VRAD step and before the copy into the game's maps directory.
 //
 // -dumpprobes writes the probe centres the bake would use to a file ("x y z" in metres per line) and
-// stops; -probes bakes the centres listed in such a file instead, e.g. a filtered copy; -pathrange
-// sets the longest baked path in metres.
+// stops; -probes bakes the centres listed in such a file instead, e.g. a filtered copy; -navmask
+// keeps only the probes within a margin (default 2 m) of an area in the map's maps/nav/<map>.nav;
+// -pathrange sets the longest baked path in metres.
 //
 // It places probes and builds the acoustic scene with the very code the client uses
 // (game/client/neo/audio), against the same content: the engine file system with the mod's
@@ -24,6 +25,7 @@
 
 #include <stdint.h>
 #include <stdio.h>
+#include <algorithm>
 #include <vector>
 
 #ifdef _WIN32
@@ -58,6 +60,7 @@
 #include "neo_audio_probe_lump.h"
 #include "neo_audio_probes.h"
 #include "neo_spatializer.h"
+#include "neo/nav_shared.h"
 
 // memdbgon must be the last include file in a .cpp file!!!
 #include "tier0/memdbgon.h"
@@ -92,6 +95,20 @@ const char *const kSteamRootsUnderHome[] = {
 constexpr char kGameInfoPathToken[] = "|gameinfo_path|";
 constexpr char kAppIdToken[] = "|appid_";
 constexpr char kSurfacePropManifest[] = "scripts/surfaceproperties_manifest.txt";
+
+// -navmask keeps a probe only where a player can hear: within this distance of a nav area and
+// within this height window over the area's floor.
+constexpr float kNavMaskMarginMetres = 2.0f;
+constexpr float kNavMaskMinHeightMetres = -0.5f;
+constexpr float kNavMaskMaxHeightMetres = 3.0f;
+constexpr float kNavMetresPerUnit = 0.0254f; // as the acoustic code: 1 Source unit = 1 inch
+
+// Record sizes in a nav file the mask skips over (CNavArea::Load, game/server/nav_file.cpp).
+constexpr int kNavLadderDirections = 2;
+constexpr int kNavHidingSpotBytes = 17; // id, position, flags
+constexpr int kNavEncounterBytes = 10; // from id and direction, to id and direction
+constexpr int kNavEncounterSpotBytes = 5; // spot id, position along the path
+constexpr int kNavVisibleAreaBytes = 5; // area id, attributes
 
 IFileSystem *g_pBakeFileSystem = nullptr;
 
@@ -598,11 +615,147 @@ bool ReadProbeCentres(const char *pszPath, std::vector<NeoSpatial::Vec3> &out)
 	return bComplete || Fail("%s: expected three numbers per line after probe %d", pszPath, static_cast<int>(out.size()));
 }
 
-// The generated probes, or with -probes the listed ones.
-bool PlaceProbes(const CNeoAudioGeometry &geometry, NeoSpatial::ProbeSet &probes)
+// A nav area's floor in metres: its extent and the heights of its four corners.
+struct NavFloor
+{
+	float x0, y0, x1, y1;
+	float zNw, zNe, zSw, zSe;
+};
+
+// The floors of every area in the map's nav file, read as CNavMesh::Load and CNavArea::Load
+// (game/server/nav_file.cpp) read the current version; everything else in the file is skipped.
+bool ReadNavFloors(const char *pszMapName, std::vector<NavFloor> &out)
+{
+	char navPath[MAX_PATH];
+	V_snprintf(navPath, sizeof(navPath), FORMAT_NAVFILE, pszMapName);
+	V_FixSlashes(navPath);
+	CUtlBuffer file;
+	if (!g_pBakeFileSystem->ReadFile(navPath, "GAME", file))
+	{
+		return Fail("-navmask: cannot read %s (generate the map's nav first)", navPath);
+	}
+
+	const unsigned int magic = file.GetUnsignedInt();
+	const unsigned int version = file.GetUnsignedInt();
+	const unsigned int subVersion = file.GetUnsignedInt();
+	if (magic != NAV_MAGIC_NUMBER || version != NavCurrentVersion || subVersion != 0)
+	{
+		return Fail("-navmask: %s is not a version %d nav file without custom data", navPath, NavCurrentVersion);
+	}
+
+	// A record count that runs past the end of the file marks it as truncated instead of seeking.
+	bool bTruncated = false;
+	auto skip = [&](unsigned int count, int recordBytes)
+	{
+		const int64 bytes = static_cast<int64>(count) * recordBytes;
+		bTruncated = bTruncated || !file.IsValid() || bytes > file.GetBytesRemaining();
+		if (!bTruncated)
+		{
+			file.SeekGet(CUtlBuffer::SEEK_CURRENT, static_cast<int>(bytes));
+		}
+	};
+
+	skip(1, sizeof(uint32) + sizeof(uint8)); // BSP size, analyzed
+	const unsigned int numPlaces = file.GetUnsignedShort();
+	for (unsigned int i = 0; i < numPlaces && !bTruncated; ++i)
+	{
+		skip(file.GetUnsignedShort(), 1);
+	}
+	skip(1, sizeof(uint8)); // has unnamed areas
+
+	const unsigned int numAreas = file.GetUnsignedInt();
+	for (unsigned int a = 0; a < numAreas && !bTruncated; ++a)
+	{
+		skip(1, sizeof(uint32) + sizeof(int32)); // id, attributes
+		Vector nw, se;
+		file.Get(&nw, sizeof(nw));
+		file.Get(&se, sizeof(se));
+		const float neZ = file.GetFloat();
+		const float swZ = file.GetFloat();
+		out.push_back({ Min(nw.x, se.x) * kNavMetresPerUnit, Min(nw.y, se.y) * kNavMetresPerUnit,
+						Max(nw.x, se.x) * kNavMetresPerUnit, Max(nw.y, se.y) * kNavMetresPerUnit,
+						nw.z * kNavMetresPerUnit, neZ * kNavMetresPerUnit, swZ * kNavMetresPerUnit, se.z * kNavMetresPerUnit });
+
+		for (int d = 0; d < NUM_DIRECTIONS; ++d)
+		{
+			skip(file.GetUnsignedInt(), sizeof(uint32));
+		}
+		skip(file.GetUnsignedChar(), kNavHidingSpotBytes);
+		const unsigned int numEncounters = file.GetUnsignedInt();
+		for (unsigned int e = 0; e < numEncounters && !bTruncated; ++e)
+		{
+			skip(1, kNavEncounterBytes);
+			skip(file.GetUnsignedChar(), kNavEncounterSpotBytes);
+		}
+		skip(1, sizeof(uint16)); // place
+		for (int d = 0; d < kNavLadderDirections; ++d)
+		{
+			skip(file.GetUnsignedInt(), sizeof(uint32));
+		}
+		skip(MAX_NAV_TEAMS, sizeof(float)); // earliest occupy times
+		skip(NUM_CORNERS, sizeof(float)); // light intensity
+		skip(file.GetUnsignedInt(), kNavVisibleAreaBytes);
+		skip(1, sizeof(uint32)); // area to inherit visibility from
+	}
+	return (!bTruncated && file.IsValid() && !out.empty()) || Fail("-navmask: %s is truncated or has no areas", navPath);
+}
+
+// Whether a nav floor lies within `margin` of the point horizontally, with the point inside the
+// height window over the floor at the floor's nearest point.
+bool IsOverNavFloor(const NavFloor &floor, const NeoSpatial::Vec3 &point, float margin)
+{
+	const float x = Clamp(point.x, floor.x0, floor.x1);
+	const float y = Clamp(point.y, floor.y0, floor.y1);
+	if (Square(x - point.x) + Square(y - point.y) > Square(margin))
+	{
+		return false;
+	}
+
+	// Bilinear over the corners, as CNavArea::GetZ.
+	const float tx = (x - floor.x0) / Max(floor.x1 - floor.x0, FLT_EPSILON);
+	const float ty = (y - floor.y0) / Max(floor.y1 - floor.y0, FLT_EPSILON);
+	const float z = Lerp(ty, Lerp(tx, floor.zNw, floor.zNe), Lerp(tx, floor.zSw, floor.zSe));
+	const float height = point.z - z;
+	return height >= kNavMaskMinHeightMetres && height <= kNavMaskMaxHeightMetres;
+}
+
+// Drops the probes no player can stand near. Most of a map's open space is sky and
+// out-of-bounds volume, and baked paths between those probes are most of the lump.
+bool MaskProbesByNav(const char *pszMapName, std::vector<NeoSpatial::Vec3> &centres)
+{
+	std::vector<NavFloor> floors;
+	if (!ReadNavFloors(pszMapName, floors))
+	{
+		return false;
+	}
+
+	// A bare -navmask before the map path reads as margin 0.
+	const float requested = CommandLine()->ParmValue("-navmask", kNavMaskMarginMetres);
+	const float margin = (requested > 0.0f) ? requested : kNavMaskMarginMetres;
+	const size_t before = centres.size();
+	auto isOffNav = [&](const NeoSpatial::Vec3 &centre)
+	{
+		for (const NavFloor &floor : floors)
+		{
+			if (IsOverNavFloor(floor, centre, margin))
+			{
+				return false;
+			}
+		}
+		return true;
+	};
+	centres.erase(std::remove_if(centres.begin(), centres.end(), isOffNav), centres.end());
+	Msg("neo_soundbake: nav mask (%d areas, margin %g m) keeps %d of %d probes\n", static_cast<int>(floors.size()), margin,
+		static_cast<int>(centres.size()), static_cast<int>(before));
+	return true;
+}
+
+// The generated probes, or with -probes the listed ones; with -navmask only those near the nav.
+bool PlaceProbes(const CNeoAudioGeometry &geometry, const char *pszMapName, NeoSpatial::ProbeSet &probes)
 {
 	const char *pszList = CommandLine()->ParmValue("-probes");
-	if (!pszList)
+	const bool bNavMask = CommandLine()->FindParm("-navmask") != 0;
+	if (!pszList && !bNavMask)
 	{
 		NeoSpatial::BuildProbes(geometry.GetProbeGeometry(), geometry.GetBspTree(), NeoSpatial::DEFAULT_PROBE_SETTINGS, probes,
 								geometry.GetBlockerVolumes());
@@ -610,13 +763,24 @@ bool PlaceProbes(const CNeoAudioGeometry &geometry, NeoSpatial::ProbeSet &probes
 	}
 
 	std::vector<NeoSpatial::Vec3> centres;
-	if (!ReadProbeCentres(pszList, centres))
+	if (pszList && !ReadProbeCentres(pszList, centres))
+	{
+		return false;
+	}
+	if (!pszList)
+	{
+		NeoSpatial::ProbeSet generated;
+		NeoSpatial::BuildProbes(geometry.GetProbeGeometry(), geometry.GetBspTree(), NeoSpatial::DEFAULT_PROBE_SETTINGS, generated,
+								geometry.GetBlockerVolumes());
+		centres = std::move(generated.centres);
+	}
+	if (bNavMask && !MaskProbesByNav(pszMapName, centres))
 	{
 		return false;
 	}
 	const int dropped = NeoSpatial::GroupProbesByArea(centres, geometry.GetBspTree(),
 														NeoSpatial::DEFAULT_PROBE_SETTINGS.spacing, probes);
-	Msg("neo_soundbake: %d probes from %s\n", static_cast<int>(probes.centres.size()), pszList);
+	Msg("neo_soundbake: %d probes from %s\n", static_cast<int>(probes.centres.size()), pszList ? pszList : "the nav mask");
 	if (dropped > 0)
 	{
 		Warning("neo_soundbake: dropped %d listed probes outside the map's open space\n", dropped);
@@ -652,8 +816,10 @@ int Run(const char *pszBspArg)
 	Msg("neo_soundbake: %s: %d triangles, %d audio blocker brushes\n", bspPath, geometry.NumTriangles(),
 		geometry.NumAudioBlockerBrushes());
 
+	char mapName[MAX_PATH];
+	V_FileBase(bspPath, mapName, sizeof(mapName));
 	NeoSpatial::ProbeSet probes;
-	if (!PlaceProbes(geometry, probes))
+	if (!PlaceProbes(geometry, mapName, probes))
 	{
 		return 1;
 	}
@@ -792,7 +958,7 @@ int main(int argc, char **argv)
 	if (argc < 2 || CommandLine()->FindParm("-help") || argv[argc - 1][0] == '-')
 	{
 		Msg("usage: neo_soundbake -game <mod dir> [-threads <n>] [-phonon <library>] [-obj] [-dumpprobes <file>] "
-			"[-probes <file>] [-pathrange <m>] [-appid_dir_<appid> <dir>] <map.bsp>\n");
+			"[-probes <file>] [-navmask [<m>]] [-pathrange <m>] [-appid_dir_<appid> <dir>] <map.bsp>\n");
 		return 1;
 	}
 	const int result = Run(argv[argc - 1]);
