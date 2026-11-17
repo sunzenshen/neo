@@ -76,7 +76,7 @@ constexpr float kHrtfPathReachMetres = 8.0f;
 // Bump the version whenever the bake parameters in the backend or the file layout change.
 constexpr char kHrtfProbeCacheDir[] = "hrtf";
 constexpr uint32 kHrtfProbeCacheMagic = 0x4350484e; // "NHPC"
-constexpr uint32 kHrtfProbeCacheVersion = 2; // 2: pathing baked alongside reverb
+constexpr uint32 kHrtfProbeCacheVersion = 3; // 2: pathing baked alongside reverb; 3: one batch
 
 struct HrtfProbeCacheHeader
 {
@@ -303,7 +303,7 @@ ConVar cl_neo_hrtf_bake_threads("cl_neo_hrtf_bake_threads", "0", FCVAR_CLIENTDLL
 ConVar cl_neo_hrtf_precache("cl_neo_hrtf_precache", "1", FCVAR_CLIENTDLL | FCVAR_ARCHIVE,
 	"Decode the map's precached sounds for HRTF in the background, rather than each on its first play", true, 0.0f, true, 1.0f);
 ConVar cl_neo_hrtf_debug_probes("cl_neo_hrtf_debug_probes", "0", FCVAR_CLIENTDLL,
-	"Draw the acoustic probes near the view, coloured by batch (BSP area)", true, 0.0f, true, 1.0f);
+	"Draw the acoustic probes near the view", true, 0.0f, true, 1.0f);
 
 static CNeoHrtfSystem s_neoHrtfSystem;
 
@@ -851,8 +851,6 @@ void CNeoHrtfSystem::BuildSimFrame()
 											kHrtfFirstOrderOmniGain * voice.m_params.m_distanceGain };
 	}
 
-	// Paths run through the probe batch of the listener's BSP area; a sound in another area (behind
-	// an areaportal) has no path to the listener.
 	// Steam Audio only recomputes a voice's paths while both it and the listener are inside some
 	// probe's sphere of influence; otherwise it hands back the last ones unchanged (measured on
 	// ntre_oilstain_ctg: two of its three skylines.wav emitters hang 2-4.5 m from the nearest probe,
@@ -867,7 +865,6 @@ void CNeoHrtfSystem::BuildSimFrame()
 		&& m_probeCoverage.PullInside(m_listener.origin, kHrtfPathReachMetres, frame.m_pathListener.origin);
 	if (frame.m_bPathing)
 	{
-		frame.m_pathBatch = m_bspTree.leaves[listenerLeaf].area;
 		const bool bDoors = cl_neo_hrtf_dynamic_geometry.GetInt() != static_cast<int>(CNeoAudioDynamicGeometry::Scope::Off)
 			&& m_dynamicGeometry.HasMovers();
 		if (bDoors)
@@ -1120,7 +1117,7 @@ void CNeoHrtfSystem::RunSimulation(const SimInput &input, SimResults &results)
 			m_simPathingVoices[i] = { voice.m_bPathReachable ? m_simHandles[i] : NeoSpatial::INVALID_SOURCE, voice.m_pathOrigin,
 									  voice.m_falloffPerMetre };
 		}
-		m_pSpatializer->SimulatePathing(frame.m_pathListener, frame.m_pathBatch, kHrtfEngineGainMin, m_simPathingVoices,
+		m_pSpatializer->SimulatePathing(frame.m_pathListener, NeoSpatial::PROBE_BATCH_ID, kHrtfEngineGainMin, m_simPathingVoices,
 										m_simPathing, count);
 		for (int i = 0; i < count; ++i)
 		{

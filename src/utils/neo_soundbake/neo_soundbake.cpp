@@ -778,8 +778,8 @@ bool PlaceProbes(const CNeoAudioGeometry &geometry, const char *pszMapName, NeoS
 	{
 		return false;
 	}
-	const int dropped = NeoSpatial::GroupProbesByArea(centres, geometry.GetBspTree(),
-														NeoSpatial::DEFAULT_PROBE_SETTINGS.spacing, probes);
+	const int dropped = NeoSpatial::BatchOpenProbes(centres, geometry.GetBspTree(),
+													  NeoSpatial::DEFAULT_PROBE_SETTINGS.spacing, probes);
 	Msg("neo_soundbake: %d probes from %s\n", static_cast<int>(probes.centres.size()), pszList ? pszList : "the nav mask");
 	if (dropped > 0)
 	{

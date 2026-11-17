@@ -62,11 +62,16 @@ struct ProbeSettings
 // are ~1.6 m up). Shared by the game and the compile-time baker, so both place the same probes.
 static constexpr ProbeSettings DEFAULT_PROBE_SETTINGS = { 2.0f, 1.5f };
 
+// One batch holds every probe: Steam Audio only finds paths between probes in the same batch, and
+// the areaportals on NT;RE maps are open, so paths have to cross them. Shut doors block paths
+// through the dynamic geometry instead.
+static constexpr int32_t PROBE_BATCH_ID = 0;
+
 struct ProbeSet
 {
 	std::vector<Vec3> centres; // grouped by batch
 	std::vector<int32_t> batchStarts; // numBatches + 1
-	std::vector<int32_t> batchAreas; // the BSP area each batch covers, used as its batch id
+	std::vector<int32_t> batchAreas; // each batch's id: PROBE_BATCH_ID
 	float radius = 0.0f;
 
 	int NumBatches() const { return static_cast<int>(batchAreas.size()); }
@@ -112,8 +117,8 @@ private:
 void BuildProbes(const SceneGeometry &geometry, const BspTree &tree, const ProbeSettings &settings, ProbeSet &out,
 				 const std::vector<ConvexVolume> &excluded = {});
 
-// Fills `out` with the given centres, one batch per BSP area, as BuildProbes does. Centres outside
-// open space are dropped; returns how many.
-int GroupProbesByArea(const std::vector<Vec3> &centres, const BspTree &tree, float radius, ProbeSet &out);
+// Fills `out` with the given centres in one batch, as BuildProbes does. Centres outside open space
+// are dropped; returns how many.
+int BatchOpenProbes(const std::vector<Vec3> &centres, const BspTree &tree, float radius, ProbeSet &out);
 
 } // namespace NeoSpatial
