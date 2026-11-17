@@ -665,6 +665,13 @@ int Run(const char *pszBspArg)
 				std::vector<uint8_t> payload;
 				NeoSpatial::WriteProbeLump(probes, pBatches, batchesSize, geometry.GetShapeCrc(), pSpatializer->GetLibraryVersion(),
 										   materials.GetBakeCrc(), payload);
+				if (static_cast<int64_t>(payload.size()) > NeoSpatial::PROBE_LUMP_MAX_BYTES)
+				{
+					Fail("the baked probes are %.1f MB, over the %.0f MB the game reads; the map has too many probes",
+						 payload.size() / 1048576.0, NeoSpatial::PROBE_LUMP_MAX_BYTES / 1048576.0);
+					delete pSpatializer;
+					return result;
+				}
 				unsigned int compressedSize = 0;
 				unsigned char *pCompressed = (payload.size() < UINT32_MAX)
 					? LZMA_Compress(payload.data(), static_cast<unsigned int>(payload.size()), &compressedSize) : nullptr;
