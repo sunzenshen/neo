@@ -474,6 +474,7 @@ void CNeoHrtfSystem::PollEngineSounds()
 	m_ignoredGuidsNext.RemoveAll();
 	m_seenGuidsNext.RemoveAll();
 	int pendingCount = 0;
+	int culledVoices = 0;
 	const int localPlayerIndex = engine->GetLocalPlayer();
 	for (int i = 0; i < m_activeSounds.Count(); ++i)
 	{
@@ -513,7 +514,13 @@ void CNeoHrtfSystem::PollEngineSounds()
 			continue;
 		}
 
-		const bool bHasFreeVoice = liveVoices + pendingCount < kMaxVoices;
+		// A sound left to the engine would play unoccluded, so make room instead where possible.
+		bool bHasFreeVoice = liveVoices - culledVoices + pendingCount < kMaxVoices;
+		if (!bHasFreeVoice && CullQuietestOwnedVoice())
+		{
+			++culledVoices;
+			bHasFreeVoice = true;
+		}
 		const double loadStart = Plat_FloatTime();
 		const CachedSound *pSound = bHasFreeVoice ? FindOrLoadSound(info) : nullptr;
 		m_gameTimingSums.m_newVoicesMs += static_cast<float>(Plat_FloatTime() - loadStart);
@@ -720,6 +727,34 @@ void CNeoHrtfSystem::EndReplacedVoices(const SndInfo_t &info)
 			voice.m_endRequest = EndReason::Replaced;
 		}
 	}
+}
+
+// Owned voices play to the end of their file, so they are the ones that can be ended early.
+// Gain leaves out occlusion, so a loud sound behind a wall may go before a quiet one in view.
+bool CNeoHrtfSystem::CullQuietestOwnedVoice()
+{
+	Voice *pQuietest = nullptr;
+	for (Voice &voice : m_voices)
+	{
+		if (!voice.m_bInUse || !voice.m_bOwned || voice.m_endRequest != EndReason::None
+			|| voice.m_localSound != NeoHrtfLocalSound::None)
+		{
+			continue;
+		}
+
+		if (!pQuietest || voice.m_params.m_gain < pQuietest->m_params.m_gain)
+		{
+			pQuietest = &voice;
+		}
+	}
+
+	if (!pQuietest)
+	{
+		return false;
+	}
+
+	pQuietest->m_endRequest = EndReason::Culled;
+	return true;
 }
 
 // Owned voices are no longer in the engine's list, so they follow their entity and end themselves.
