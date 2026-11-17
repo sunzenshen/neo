@@ -116,6 +116,7 @@ private:
 		Stopped, // the client stopped it
 		Deadline, // an owned voice's end was never reported
 		Engine, // a followed voice's engine channel is gone
+		Culled, // the quietest owned voice, ended to make room for a new sound
 	};
 
 	struct Voice
@@ -302,6 +303,7 @@ private:
 	int FindVoice(int guid) const;
 	void MuteEngineCopy(Voice &voice, const SndInfo_t &info);
 	void EndReplacedVoices(const SndInfo_t &info);
+	bool CullQuietestOwnedVoice();
 	void UpdateOwnedVoice(int slot, float outputScale);
 	void PrintDebug();
 
