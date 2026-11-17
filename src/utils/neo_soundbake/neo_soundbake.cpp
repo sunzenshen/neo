@@ -4,10 +4,15 @@
 // and stores them in the BSP as a game lump, so the game loads them instead of baking at runtime.
 //
 // Run after VRAD, on the BSP it wrote:
-//     neo_soundbake -game <mod dir> [-threads <n>] [-phonon <library>] [-obj] [-appid_dir_<appid> <dir>] <map.bsp>
+//     neo_soundbake -game <mod dir> [-threads <n>] [-phonon <library>] [-obj] [-dumpprobes <file>]
+//                   [-probes <file>] [-pathrange <m>] [-appid_dir_<appid> <dir>] <map.bsp>
 // In Hammer++'s expert compile configuration: $bindir\neo_soundbake.exe, parameters
 //     -game $gamedir $path\$file.bsp
 // after the VRAD step and before the copy into the game's maps directory.
+//
+// -dumpprobes writes the probe centres the bake would use to a file ("x y z" in metres per line) and
+// stops; -probes bakes the centres listed in such a file instead, e.g. a filtered copy; -pathrange
+// sets the longest baked path in metres.
 //
 // It places probes and builds the acoustic scene with the very code the client uses
 // (game/client/neo/audio), against the same content: the engine file system with the mod's
@@ -561,6 +566,64 @@ bool VerifyBakedMap(const char *pszBspPath, const CNeoAudioGeometry::Services &s
 	return true;
 }
 
+// Probe centres as text, "x y z" in metres per line: what -dumpprobes writes and -probes reads.
+bool WriteProbeCentres(const char *pszPath, const std::vector<NeoSpatial::Vec3> &centres)
+{
+	FILE *pFile = fopen(pszPath, "w");
+	if (!pFile)
+	{
+		return Fail("cannot write %s", pszPath);
+	}
+	for (const NeoSpatial::Vec3 &centre : centres)
+	{
+		fprintf(pFile, "%.9g %.9g %.9g\n", centre.x, centre.y, centre.z);
+	}
+	return (fclose(pFile) == 0) || Fail("cannot write %s", pszPath);
+}
+
+bool ReadProbeCentres(const char *pszPath, std::vector<NeoSpatial::Vec3> &out)
+{
+	FILE *pFile = fopen(pszPath, "r");
+	if (!pFile)
+	{
+		return Fail("cannot read %s", pszPath);
+	}
+	NeoSpatial::Vec3 centre;
+	while (fscanf(pFile, "%f %f %f", &centre.x, &centre.y, &centre.z) == 3)
+	{
+		out.push_back(centre);
+	}
+	const bool bComplete = feof(pFile) != 0;
+	fclose(pFile);
+	return bComplete || Fail("%s: expected three numbers per line after probe %d", pszPath, static_cast<int>(out.size()));
+}
+
+// The generated probes, or with -probes the listed ones.
+bool PlaceProbes(const CNeoAudioGeometry &geometry, NeoSpatial::ProbeSet &probes)
+{
+	const char *pszList = CommandLine()->ParmValue("-probes");
+	if (!pszList)
+	{
+		NeoSpatial::BuildProbes(geometry.GetProbeGeometry(), geometry.GetBspTree(), NeoSpatial::DEFAULT_PROBE_SETTINGS, probes,
+								geometry.GetBlockerVolumes());
+		return true;
+	}
+
+	std::vector<NeoSpatial::Vec3> centres;
+	if (!ReadProbeCentres(pszList, centres))
+	{
+		return false;
+	}
+	const int dropped = NeoSpatial::GroupProbesByArea(centres, geometry.GetBspTree(),
+														NeoSpatial::DEFAULT_PROBE_SETTINGS.spacing, probes);
+	Msg("neo_soundbake: %d probes from %s\n", static_cast<int>(probes.centres.size()), pszList);
+	if (dropped > 0)
+	{
+		Warning("neo_soundbake: dropped %d listed probes outside the map's open space\n", dropped);
+	}
+	return true;
+}
+
 int Run(const char *pszBspArg)
 {
 	char bspPath[MAX_PATH];
@@ -589,6 +652,21 @@ int Run(const char *pszBspArg)
 	Msg("neo_soundbake: %s: %d triangles, %d audio blocker brushes\n", bspPath, geometry.NumTriangles(),
 		geometry.NumAudioBlockerBrushes());
 
+	NeoSpatial::ProbeSet probes;
+	if (!PlaceProbes(geometry, probes))
+	{
+		return 1;
+	}
+	if (const char *pszDump = CommandLine()->ParmValue("-dumpprobes"))
+	{
+		if (!WriteProbeCentres(pszDump, probes.centres))
+		{
+			return 1;
+		}
+		Msg("neo_soundbake: wrote %d probe centres to %s\n", static_cast<int>(probes.centres.size()), pszDump);
+		return 0;
+	}
+
 	// The phonon the game ships, unless told otherwise.
 	char phononPath[MAX_PATH];
 	if (const char *pszPhonon = CommandLine()->ParmValue("-phonon"))
@@ -608,8 +686,9 @@ int Run(const char *pszBspArg)
 		return 1;
 	}
 
+	pSpatializer->SetBakePathRange(CommandLine()->ParmValue("-pathrange", 0.0f));
+
 	int result = 1;
-	NeoSpatial::ProbeSet probes;
 	if (!pSpatializer->SetSceneGeometry(geometry.GetSceneGeometry(), error, sizeof(error)))
 	{
 		Fail("%s", error);
@@ -625,8 +704,6 @@ int Run(const char *pszBspArg)
 			pSpatializer->SaveSceneObj(objBase);
 			Msg("neo_soundbake: wrote %s.obj\n", objBase);
 		}
-		NeoSpatial::BuildProbes(geometry.GetProbeGeometry(), geometry.GetBspTree(), NeoSpatial::DEFAULT_PROBE_SETTINGS, probes,
-								geometry.GetBlockerVolumes());
 		if (probes.centres.empty())
 		{
 			Fail("the map has no open space to place probes in");
@@ -714,7 +791,8 @@ int main(int argc, char **argv)
 	CommandLine()->CreateCmdLine(argc, argv);
 	if (argc < 2 || CommandLine()->FindParm("-help") || argv[argc - 1][0] == '-')
 	{
-		Msg("usage: neo_soundbake -game <mod dir> [-threads <n>] [-phonon <library>] [-obj] [-appid_dir_<appid> <dir>] <map.bsp>\n");
+		Msg("usage: neo_soundbake -game <mod dir> [-threads <n>] [-phonon <library>] [-obj] [-dumpprobes <file>] "
+			"[-probes <file>] [-pathrange <m>] [-appid_dir_<appid> <dir>] <map.bsp>\n");
 		return 1;
 	}
 	const int result = Run(argv[argc - 1]);

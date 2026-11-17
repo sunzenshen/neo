@@ -1133,6 +1133,11 @@ public:
 		return true;
 	}
 
+	void SetBakePathRange(float metres) override
+	{
+		m_bakePathRange = (metres > 0.0f) ? metres : PATH_RANGE_METRES;
+	}
+
 	bool StartBake(int numThreads) override
 	{
 		StopBake();
@@ -1303,7 +1308,7 @@ private:
 		pathParams.radius = PATH_VIS_RADIUS_METRES;
 		pathParams.threshold = PATH_VIS_THRESHOLD;
 		pathParams.visRange = PATH_VIS_RANGE_METRES;
-		pathParams.pathRange = PATH_RANGE_METRES;
+		pathParams.pathRange = m_bakePathRange;
 		pathParams.numThreads = numThreads;
 
 		const int count = static_cast<int>(m_batches.size());
@@ -1844,6 +1849,7 @@ private:
 	// other change to either stops the bake first.
 	std::vector<Batch> m_batches;
 	int m_numProbes = 0;
+	float m_bakePathRange = PATH_RANGE_METRES;
 	std::vector<uint8_t> m_serialized;
 	std::thread m_bakeThread;
 	std::atomic<BakeState> m_bakeState{ BakeState::Idle };

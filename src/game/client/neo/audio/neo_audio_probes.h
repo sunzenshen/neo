@@ -112,4 +112,8 @@ private:
 void BuildProbes(const SceneGeometry &geometry, const BspTree &tree, const ProbeSettings &settings, ProbeSet &out,
 				 const std::vector<ConvexVolume> &excluded = {});
 
+// Fills `out` with the given centres, one batch per BSP area, as BuildProbes does. Centres outside
+// open space are dropped; returns how many.
+int GroupProbesByArea(const std::vector<Vec3> &centres, const BspTree &tree, float radius, ProbeSet &out);
+
 } // namespace NeoSpatial
