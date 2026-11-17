@@ -42,6 +42,10 @@ constexpr float kHrtfEngineRefDistUnits = 36.0f;
 constexpr float kHrtfEngineGainMax = 1.0f;
 constexpr float kHrtfEngineGainMin = 0.01f;
 
+// Soundscripts with CompatibilityAttenuation store their level offset by this (soundflags.h:
+// 256-511 are GoldSrc-compatible levels). The distance law needs the level without the offset.
+constexpr int kHrtfCompatSoundLevelOffset = 256;
+
 // Entity sounds play from the entity origin, which for players is on the floor; occlusion is
 // traced from slightly above it so the floor itself does not hide half the source.
 constexpr float kHrtfOcclusionLiftUnits = 8.0f;
@@ -188,6 +192,12 @@ void HrtfParseWavLoop(const uint8 *pData, int size, int &loopStart, int &loopEnd
 	{
 		loopEnd = static_cast<int>(loopEndSampleOffset);
 	}
+}
+
+// A sound level without the CompatibilityAttenuation offset.
+soundlevel_t HrtfPlainSoundLevel(int level)
+{
+	return static_cast<soundlevel_t>(level % kHrtfCompatSoundLevelOffset);
 }
 
 // Soundscripts and engine channels both reduce to this form: sound chars stripped,
@@ -1692,7 +1702,7 @@ void CNeoHrtfSystem::ResolveSoundLevel(Voice &voice, const SndInfo_t &info, cons
 		HrtfNormaliseSoundName(pAmbient->GetSoundFile(), name, sizeof(name));
 		if (V_strcmp(name, sound.m_name.Get()) == 0)
 		{
-			voice.m_soundLevel = static_cast<soundlevel_t>(pAmbient->GetNetSoundLevel());
+			voice.m_soundLevel = HrtfPlainSoundLevel(pAmbient->GetNetSoundLevel());
 			voice.m_bLevelFromEmitter = true;
 			break;
 		}
@@ -1715,7 +1725,7 @@ soundlevel_t CNeoHrtfSystem::LookupScriptLevel(const char *pszNormalisedName)
 			{
 				continue;
 			}
-			const soundlevel_t level = static_cast<soundlevel_t>(pParams->GetSoundLevel().start);
+			const soundlevel_t level = HrtfPlainSoundLevel(static_cast<int>(pParams->GetSoundLevel().start));
 			for (int w = 0; w < pParams->NumSoundNames(); ++w)
 			{
 				CUtlSymbol waveSymbol = pParams->GetSoundNames()[w].symbol; // GetWaveName takes a non-const ref
