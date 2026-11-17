@@ -57,6 +57,13 @@ if(NOT COMPILER_MSVC)
         PROPERTIES
             COMPILE_OPTIONS -w
     )
+    # Valve's file system init ignores the results of getcwd and fread, which glibc declares
+    # warn_unused_result in fortified (optimized) builds; nothing else in the build compiles it.
+    set_source_files_properties(
+        ${CMAKE_SOURCE_DIR}/public/filesystem_init.cpp
+        PROPERTIES
+            COMPILE_OPTIONS -Wno-unused-result
+    )
 endif()
 if(COMPILER_MSVC)
     set_source_files_properties(
