@@ -105,6 +105,9 @@ constexpr int kHrtfBakeCoresPerThread = 4;
 // The most probes the game bakes itself. Bake memory grows with the probe pairs within path range,
 // so a large open map would need many gigabytes; such a map has to be baked with neo_soundbake.
 constexpr int kHrtfRuntimeBakeMaxProbes = 5000;
+// Occlusion and paths change slowly next to a fast client's frame rate, and every run costs the
+// simulation thread the same, so it runs at most this often.
+constexpr double kHrtfSimMinIntervalSeconds = 1.0 / 60.0;
 
 constexpr float kHrtfProbeDrawRangeUnits = 1024.0f;
 constexpr float kHrtfProbeDrawSizeUnits = 4.0f;
@@ -955,6 +958,7 @@ void CNeoHrtfSystem::ResetSimulation()
 
 void CNeoHrtfSystem::SimulationThreadMain()
 {
+	double lastRunStart = 0.0;
 	for (;;)
 	{
 		m_simWake.Wait();
@@ -962,6 +966,18 @@ void CNeoHrtfSystem::SimulationThreadMain()
 		{
 			return;
 		}
+
+		// Waiting first means the run takes the newest frame.
+		const double wait = lastRunStart + kHrtfSimMinIntervalSeconds - Plat_FloatTime();
+		if (wait > 0.0)
+		{
+			ThreadSleep(static_cast<unsigned>(wait * 1000.0));
+			if (m_bSimQuit)
+			{
+				return;
+			}
+		}
+		lastRunStart = Plat_FloatTime();
 		{
 			AUTO_LOCK(m_simInputMutex);
 			if (!m_bSimInputFresh)
