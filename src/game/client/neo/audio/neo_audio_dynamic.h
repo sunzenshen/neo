@@ -68,6 +68,9 @@ public:
 	// the entity is not a brush mover in the scene. Game thread.
 	bool MoverTransmission(C_BaseEntity *pEntity, float (&transmissionOut)[NeoSpatial::NUM_ACOUSTIC_BANDS]) const;
 
+	// Whether the map has a mover large enough to stand in a doorway. Game thread.
+	bool HasMovers() const { return m_bHasMovers; }
+
 private:
 	static uint32 HierarchyGroup(C_BaseEntity *pEntity);
 
@@ -88,6 +91,7 @@ private:
 	CNeoAcousticMaterials m_materials;
 	CUtlVectorAutoPurge<CNeoAudioGeometry::BrushModel *> m_brushModels; // by model number
 	CUtlVector<BrushEntry> m_brushes; // by model number
+	bool m_bHasMovers = false;
 	CUtlMap<const model_t *, CNeoAudioGeometry::Mesh *> m_props; // null = no usable collision
 	CUtlVectorAutoPurge<CNeoAudioGeometry::Mesh *> m_propMeshes; // what m_props points to
 
