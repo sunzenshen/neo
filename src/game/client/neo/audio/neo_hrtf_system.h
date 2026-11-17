@@ -157,6 +157,9 @@ private:
 		NeoSpatial::Vec3 m_pathQueryOrigin = {};
 		bool m_bPathReachable = false;
 		NeoSpatial::Vec3 m_pathOrigin = {};
+		// A shut door stands where its last paths arrive from: they pass through it as through a wall.
+		bool m_bPathThroughDoor = false;
+		float m_pathDoorTransmission[NeoSpatial::NUM_ACOUSTIC_BANDS] = {};
 	};
 
 	struct PendingVoice
@@ -210,6 +213,8 @@ private:
 		bool m_bPathReachable; // within reach of a probe, from m_pathOrigin
 		NeoSpatial::Vec3 m_pathOrigin;
 		float m_maxPathLevel; // what its paths are capped at: its level in plain view
+		bool m_bPathThroughDoor; // its paths lose their direction and pass through the door
+		float m_pathDoorTransmission[NeoSpatial::NUM_ACOUSTIC_BANDS];
 	};
 	struct SimFrame
 	{
@@ -235,6 +240,7 @@ private:
 		uint32 m_generation = 0; // the sound these are for, 0 = none
 		NeoSpatial::DirectPath m_path;
 		NeoSpatial::PathParams m_paths; // around obstacles, through baked probes
+		Vector m_pathArrival = vec3_origin; // where the paths come from before any door, unit or zero
 	};
 	struct SimTimings
 	{
@@ -273,6 +279,7 @@ private:
 	void ReleaseAllVoices();
 	void PollEngineSounds();
 	void BuildSimFrame();
+	void FindDoorOnPaths(Voice &voice, const Vector &arrival, float reachMetres);
 	void PublishRenderFrame();
 	void ReleaseRetiredVoices();
 	void BuildScene();
@@ -373,6 +380,7 @@ private:
 	GameTimings m_gameTimingSums; // this second so far: seconds and counts
 	int m_gameTimingFrames = 0;
 	double m_gameTimingStart = 0.0;
+	SimVoiceResult m_lastPaths[kMaxVoices]; // the latest simulation results, by sim frame entry
 
 	// Shared, each under its own mutex.
 	CThreadMutex m_renderMutex;
@@ -406,6 +414,7 @@ private:
 	NeoSpatial::DirectPath m_simPaths[kMaxVoices];
 	NeoSpatial::PathingVoice m_simPathingVoices[kMaxVoices];
 	NeoSpatial::PathParams m_simPathing[kMaxVoices];
+	Vector m_simArrivals[kMaxVoices];
 	double m_simRateWindowStart = 0.0;
 	int m_simRateRuns = 0;
 	float m_simRunsPerSecond = 0.0f;

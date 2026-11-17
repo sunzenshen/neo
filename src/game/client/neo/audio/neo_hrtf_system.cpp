@@ -868,6 +868,15 @@ void CNeoHrtfSystem::BuildSimFrame()
 	if (frame.m_bPathing)
 	{
 		frame.m_pathBatch = m_bspTree.leaves[listenerLeaf].area;
+		const bool bDoors = cl_neo_hrtf_dynamic_geometry.GetInt() != static_cast<int>(CNeoAudioDynamicGeometry::Scope::Off);
+		if (bDoors)
+		{
+			AUTO_LOCK(m_simResultsMutex);
+			for (int i = 0; i < frame.m_count; ++i)
+			{
+				m_lastPaths[i] = m_simResultsShared.m_voices[frame.m_voices[i].m_slot];
+			}
+		}
 		for (int i = 0; i < frame.m_count; ++i)
 		{
 			// Traced from the same raised origin as occlusion, which also keeps floor-level entity
@@ -882,9 +891,39 @@ void CNeoHrtfSystem::BuildSimFrame()
 			}
 			input.m_bPathReachable = voice.m_bPathReachable;
 			input.m_pathOrigin = voice.m_pathOrigin;
+
+			voice.m_bPathThroughDoor = false;
+			if (bDoors && m_lastPaths[i].m_generation == input.m_generation)
+			{
+				const NeoSpatial::Vec3 &from = m_listener.origin;
+				const Vector toSound(input.m_origin.x - from.x, input.m_origin.y - from.y, input.m_origin.z - from.z);
+				FindDoorOnPaths(voice, m_lastPaths[i].m_pathArrival, toSound.Length());
+			}
+			input.m_bPathThroughDoor = voice.m_bPathThroughDoor;
+			V_memcpy(input.m_pathDoorTransmission, voice.m_pathDoorTransmission, sizeof(input.m_pathDoorTransmission));
 		}
 	}
 	m_gameTimingSums.m_pathReachMs += static_cast<float>(Plat_FloatTime() - reachStart);
+}
+
+// The baked paths ignore doors, so a path can come through a shut one. Its last leg arrives from
+// the paths' mean direction: a door met first along that line, before any wall and nearer than the
+// sound, stands in the doorway the paths use.
+void CNeoHrtfSystem::FindDoorOnPaths(Voice &voice, const Vector &arrival, float reachMetres)
+{
+	if (arrival.IsZero())
+	{
+		return;
+	}
+
+	trace_t trace;
+	CTraceFilterNoNPCsOrPlayer filter(nullptr, COLLISION_GROUP_NONE);
+	const float reach = reachMetres / kHrtfMetresPerUnit;
+	UTIL_TraceLine(m_listenerOrigin, m_listenerOrigin + arrival * reach, MASK_SOLID, &filter, &trace);
+	if (trace.m_pEnt && !trace.m_pEnt->IsWorld())
+	{
+		voice.m_bPathThroughDoor = m_dynamicGeometry.MoverTransmission(trace.m_pEnt, voice.m_pathDoorTransmission);
+	}
 }
 
 void CNeoHrtfSystem::PublishRenderFrame()
@@ -1093,6 +1132,20 @@ void CNeoHrtfSystem::RunSimulation(const SimInput &input, SimResults &results)
 					coeff *= scale;
 				}
 			}
+
+			// The first-order field's direction in game axes (fitted on sources in plain view).
+			m_simArrivals[i] = paths.valid ? Vector(-paths.sh[1], paths.sh[3], paths.sh[2]) : vec3_origin;
+			VectorNormalize(m_simArrivals[i]);
+
+			// Through a shut door the paths are heard as through any wall: muffled, from no direction.
+			if (paths.valid && frame.m_voices[i].m_bPathThroughDoor)
+			{
+				std::fill(paths.sh + 1, paths.sh + NeoSpatial::PATHING_AMBISONIC_COEFFS, 0.0f);
+				for (int b = 0; b < NeoSpatial::NUM_ACOUSTIC_BANDS; ++b)
+				{
+					paths.eq[b] *= frame.m_voices[i].m_pathDoorTransmission[b];
+				}
+			}
 		}
 	}
 	const double pathingTime = Plat_FloatTime();
@@ -1111,7 +1164,8 @@ void CNeoHrtfSystem::RunSimulation(const SimInput &input, SimResults &results)
 	}
 	for (int i = 0; i < count; ++i)
 	{
-		results.m_voices[frame.m_voices[i].m_slot] = { frame.m_voices[i].m_generation, m_simPaths[i], m_simPathing[i] };
+		results.m_voices[frame.m_voices[i].m_slot] = { frame.m_voices[i].m_generation, m_simPaths[i], m_simPathing[i],
+														frame.m_bPathing ? m_simArrivals[i] : vec3_origin };
 	}
 	results.m_dynamicInstances = m_dynamicGeometry.NumInstances();
 
