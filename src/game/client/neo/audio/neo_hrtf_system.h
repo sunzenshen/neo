@@ -391,6 +391,7 @@ private:
 	std::atomic<uint32> m_renderAcquired{ 0 }; // the sequence of the render frame the audio thread has
 	CThreadEvent m_simWake; // a new SimInput, or time to quit
 	std::atomic<bool> m_bSimQuit{ false };
+	std::atomic<bool> m_bSimNewVoices{ false }; // a voice started that the simulation has not run for
 	std::thread m_simThread;
 
 	// Simulation thread only.
