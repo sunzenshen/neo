@@ -36,8 +36,8 @@ IFileSystem *s_pFileSystem = nullptr;
 IPhysicsSurfaceProps *s_pSurfaceProps = nullptr;
 IPhysicsCollision *s_pCollision = nullptr;
 
-// GetShapeCrc's resolution: coarse enough that two builds' float rounding cannot differ by a step.
-constexpr float kGeometryShapeStepsPerMetre = 1000.0f;
+// The checksum of the files the static mesh is built from, while LoadFromBsp runs.
+CRC32_t *s_pSourceCrc = nullptr;
 
 constexpr float kGeometryMetresPerUnit = 0.0254f; // 1 Source unit = 1 inch
 
@@ -839,6 +839,18 @@ void GeometryModelPath(const char *pszModel, const char *pszExtension, char *psz
 	V_strlower(pszOut);
 }
 
+// Adds a file the static mesh is built from to the source checksum, with its length so that
+// neighboring files cannot trade bytes.
+void GeometryHashSource(const void *pData, int size)
+{
+	if (!s_pSourceCrc)
+	{
+		return;
+	}
+	CRC32_ProcessBuffer(s_pSourceCrc, &size, sizeof(size));
+	CRC32_ProcessBuffer(s_pSourceCrc, pData, size);
+}
+
 // The .phy next to the .mdl, which the engine collides SOLID_VPHYSICS static props with. Only
 // solid 0 is used, as the engine does for static props: $staticprop models compile to one solid.
 void GeometryLoadPropVPhysics(const char *pszModel, PropCollisionMesh &mesh)
@@ -851,6 +863,7 @@ void GeometryLoadPropVPhysics(const char *pszModel, PropCollisionMesh &mesh)
 	{
 		return;
 	}
+	GeometryHashSource(file.Base(), file.TellPut());
 	V_memcpy(&header, file.Base(), sizeof(header));
 	if (header.size != sizeof(header) || header.solidCount <= 0 || header.solidCount > MAXSTUDIOBONES)
 	{
@@ -919,6 +932,7 @@ void GeometryLoadPropBBox(const char *pszModel, PropCollisionMesh &mesh)
 	{
 		return;
 	}
+	GeometryHashSource(file.Base(), file.TellPut());
 	const studiohdr_t *pStudio = static_cast<const studiohdr_t *>(file.Base());
 	const Vector &mins = pStudio->hull_min;
 	const Vector &maxs = pStudio->hull_max;
@@ -1241,6 +1255,34 @@ bool CNeoAudioGeometry::LoadFromBsp(const Services &services, const CNeoAcoustic
 		DevWarning("NEO HRTF: %s has a malformed baked probe lump, ignoring it\n", pszBspPath);
 	}
 	s_pFileSystem->Close(file);
+
+	// The stored bytes, not the floats built from them: those differ between compilers and
+	// optimization levels, and a map baked by one build has to load in every other.
+	CRC32_Init(&m_sourceCrc);
+	s_pSourceCrc = &m_sourceCrc;
+	auto hashLump = [](const auto &lump) { GeometryHashSource(lump.Base(), lump.Count() * static_cast<int>(sizeof(*lump.Base()))); };
+	hashLump(lumps.models);
+	hashLump(lumps.faces);
+	hashLump(lumps.surfEdges);
+	hashLump(lumps.edges);
+	hashLump(lumps.vertices);
+	hashLump(lumps.texInfos);
+	hashLump(lumps.texData);
+	hashLump(lumps.texDataStringTable);
+	hashLump(lumps.texDataStringData);
+	hashLump(lumps.dispInfos);
+	hashLump(lumps.dispVerts);
+	hashLump(lumps.planes);
+	hashLump(lumps.nodes);
+	hashLump(lumps.leafBytes);
+	hashLump(lumps.entities);
+	hashLump(lumps.leafBrushes);
+	hashLump(lumps.brushes);
+	hashLump(lumps.brushSides);
+	hashLump(lumps.staticProps);
+	GeometryHashSource(&lumps.staticPropsVersion, sizeof(lumps.staticPropsVersion));
+	s_pSourceCrc = nullptr;
+
 	if (!bRead || lumps.models.Count() <= kGeometryWorldModel)
 	{
 		V_snprintf(pszErrorOut, errorLen, "%s has a malformed lump", pszBspPath);
@@ -1301,7 +1343,10 @@ bool CNeoAudioGeometry::LoadFromBsp(const Services &services, const CNeoAcoustic
 
 	if (bPropsRead)
 	{
+		// The prop models' collision files are part of the source too.
+		s_pSourceCrc = &m_sourceCrc;
 		LoadStaticProps(pszBspPath, lumps.staticProps, lumps.staticPropsVersion);
+		s_pSourceCrc = nullptr;
 	}
 	else
 	{
@@ -1334,6 +1379,8 @@ bool CNeoAudioGeometry::LoadFromBsp(const Services &services, const CNeoAcoustic
 	{
 		m_tree = NeoSpatial::BspTree();
 	}
+
+	CRC32_Final(&m_sourceCrc);
 	return true;
 }
 
@@ -1587,7 +1634,7 @@ bool CNeoAudioGeometry::ReadBakedProbes(NeoSpatial::ProbeLumpHeader &header, Neo
 	}
 
 	// Baked against other geometry: the map was recompiled without running the baker again.
-	if (header.shapeCrc != GetShapeCrc())
+	if (header.sourceCrc != m_sourceCrc)
 	{
 		V_snprintf(pszErrorOut, errorLen, "the baked probes are out of date (map recompiled without neo_soundbake?)");
 		return false;
@@ -1598,33 +1645,6 @@ bool CNeoAudioGeometry::ReadBakedProbes(NeoSpatial::ProbeLumpHeader &header, Neo
 		return false;
 	}
 	return true;
-}
-
-uint32 CNeoAudioGeometry::GetShapeCrc() const
-{
-	CRC32_t crc;
-	CRC32_Init(&crc);
-	auto processQuantised = [&crc](const NeoSpatial::Vec3 &v)
-	{
-		const int32 steps[3] = { static_cast<int32>(roundf(v.x * kGeometryShapeStepsPerMetre)),
-								 static_cast<int32>(roundf(v.y * kGeometryShapeStepsPerMetre)),
-								 static_cast<int32>(roundf(v.z * kGeometryShapeStepsPerMetre)) };
-		CRC32_ProcessBuffer(&crc, steps, sizeof(steps));
-	};
-	for (const NeoSpatial::Vec3 &vertex : m_vertices)
-	{
-		processQuantised(vertex);
-	}
-	CRC32_ProcessBuffer(&crc, m_triangles.Base(), m_triangles.Count() * sizeof(int32));
-	for (const NeoSpatial::BspTree::Leaf &leaf : m_tree.leaves)
-	{
-		const int32 areaAndOpen[2] = { leaf.area, leaf.open ? 1 : 0 };
-		processQuantised(leaf.mins);
-		processQuantised(leaf.maxs);
-		CRC32_ProcessBuffer(&crc, areaAndOpen, sizeof(areaAndOpen));
-	}
-	CRC32_Final(&crc);
-	return crc;
 }
 
 bool CNeoAudioGeometry::LoadModelCollision(const Services &services, const char *pszModel, Mesh &out)
@@ -1693,4 +1713,5 @@ void CNeoAudioGeometry::Clear()
 	m_tree = NeoSpatial::BspTree();
 	m_probeLump.Purge();
 	m_probeLumpVersion = 0;
+	m_sourceCrc = 0;
 }

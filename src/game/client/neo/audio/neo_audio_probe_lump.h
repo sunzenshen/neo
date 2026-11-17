@@ -28,7 +28,7 @@ struct ProbeLumpHeader
 {
 	uint32_t magic;
 	uint32_t formatVersion;
-	uint32_t shapeCrc; // CNeoAudioGeometry::GetShapeCrc of the map that was baked
+	uint32_t sourceCrc; // CNeoAudioGeometry::GetSourceCrc of the map that was baked
 	uint32_t libraryVersion; // ISpatializer::GetLibraryVersion that baked it, for diagnostics
 	float radius;
 	int32_t numProbes;
@@ -38,12 +38,12 @@ struct ProbeLumpHeader
 };
 
 static constexpr uint32_t PROBE_LUMP_MAGIC = 0x4c50534e; // "NSPL"
-static constexpr uint32_t PROBE_LUMP_FORMAT_VERSION = 2;
+static constexpr uint32_t PROBE_LUMP_FORMAT_VERSION = 3;
 // The largest uncompressed payload the game reads; the baker refuses to write a larger one.
 static constexpr int64_t PROBE_LUMP_MAX_BYTES = 256 * 1024 * 1024;
 
 // Appends the uncompressed payload for `probes` and their serialised batches to `out`.
-void WriteProbeLump(const ProbeSet &probes, const uint8_t *batches, int64_t batchesSize, uint32_t shapeCrc,
+void WriteProbeLump(const ProbeSet &probes, const uint8_t *batches, int64_t batchesSize, uint32_t sourceCrc,
 					uint32_t libraryVersion, uint32_t materialCrc, std::vector<uint8_t> &out);
 
 // Parses an uncompressed payload. On success `probes` holds the layout and `batches` points into

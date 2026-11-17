@@ -740,7 +740,7 @@ int Run(const char *pszBspArg)
 			else
 			{
 				std::vector<uint8_t> payload;
-				NeoSpatial::WriteProbeLump(probes, pBatches, batchesSize, geometry.GetShapeCrc(), pSpatializer->GetLibraryVersion(),
+				NeoSpatial::WriteProbeLump(probes, pBatches, batchesSize, geometry.GetSourceCrc(), pSpatializer->GetLibraryVersion(),
 										   materials.GetBakeCrc(), payload);
 				if (static_cast<int64_t>(payload.size()) > NeoSpatial::PROBE_LUMP_MAX_BYTES)
 				{
