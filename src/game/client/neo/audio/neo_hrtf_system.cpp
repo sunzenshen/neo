@@ -608,6 +608,15 @@ void CNeoHrtfSystem::PollEngineSounds()
 		pending.m_voiceIndex = freeSearch;
 		m_gameTimingSums.m_newVoices += 1.0f;
 	}
+	// A sound and the one replacing it can both be new in this poll, as when a dying player's
+	// last shot is cut by a silent sound on the same channel.
+	for (int p = 0; p < pendingCount; ++p)
+	{
+		if (m_pending[p].m_voiceIndex >= 0)
+		{
+			EndReplacedVoices(m_activeSounds[m_pending[p].m_soundIndex]);
+		}
+	}
 	const double gatherStart = Plat_FloatTime();
 	m_gameTimingSums.m_newVoicesMs += static_cast<float>(gatherStart - startVoicesStart);
 
@@ -724,7 +733,9 @@ void CNeoHrtfSystem::EndReplacedVoices(const SndInfo_t &info)
 
 	for (Voice &voice : m_voices)
 	{
-		if (voice.m_bInUse && voice.m_bOwned && voice.m_guid != info.m_nGuid
+		// Guids count up, so only an older sound is replaced: sounds that start in the same poll
+		// can be listed in either order.
+		if (voice.m_bInUse && voice.m_bOwned && voice.m_guid < info.m_nGuid
 			&& voice.m_soundSource == info.m_nSoundSource && voice.m_channel == info.m_nChannel)
 		{
 			voice.m_endRequest = EndReason::Replaced;
