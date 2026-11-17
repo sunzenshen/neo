@@ -868,7 +868,8 @@ void CNeoHrtfSystem::BuildSimFrame()
 	if (frame.m_bPathing)
 	{
 		frame.m_pathBatch = m_bspTree.leaves[listenerLeaf].area;
-		const bool bDoors = cl_neo_hrtf_dynamic_geometry.GetInt() != static_cast<int>(CNeoAudioDynamicGeometry::Scope::Off);
+		const bool bDoors = cl_neo_hrtf_dynamic_geometry.GetInt() != static_cast<int>(CNeoAudioDynamicGeometry::Scope::Off)
+			&& m_dynamicGeometry.HasMovers();
 		if (bDoors)
 		{
 			AUTO_LOCK(m_simResultsMutex);
@@ -1139,7 +1140,7 @@ void CNeoHrtfSystem::RunSimulation(const SimInput &input, SimResults &results)
 			VectorNormalize(m_simArrivals[i]);
 
 			// A new sound's first paths would play through a shut door before the check that needs them.
-			if (!frame.m_voices[i].m_bDoorChecked && !input.m_placements.IsEmpty())
+			if (!frame.m_voices[i].m_bDoorChecked)
 			{
 				paths.valid = false;
 			}

@@ -73,6 +73,7 @@ void CNeoAudioDynamicGeometry::Init(CNeoAudioGeometry &geometry, const CNeoAudio
 		{
 			m_brushes[m].bMover |= V_stricmp(m_brushModels[m]->classname.Get(), pszClassname) == 0;
 		}
+		m_bHasMovers |= m_brushes[m].bMover && m_brushes[m].bUsable;
 	}
 }
 
@@ -80,6 +81,7 @@ void CNeoAudioDynamicGeometry::Clear()
 {
 	m_brushModels.PurgeAndDeleteElements();
 	m_brushes.Purge();
+	m_bHasMovers = false;
 	m_props.Purge();
 	m_propMeshes.PurgeAndDeleteElements();
 	m_models.Purge();
