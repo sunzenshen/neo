@@ -71,6 +71,11 @@ constexpr float kHrtfFirstOrderOmniGain = 0.28209479f;
 // ledge-standing listener; beyond it the nearest probe likely describes another space.
 constexpr float kHrtfPathReachMetres = 8.0f;
 
+// The baked paths carry every out-of-sight sound around the walls, including the long tails of
+// distant gunfire and the map's ambient loops. At full level they bury the quiet between shots, so
+// they are played well under the direct sound: enough to place a sound behind a corner.
+constexpr float kHrtfPathLevel = 0.25f;
+
 // The baked reverb has one loudness everywhere, so open spaces echo like a closet. The wet level is
 // faded out by the size of the listener's room, read from rays cast around the listener: full in
 // rooms up to the first size, none from the second, linear between. A ray that escapes to the sky
@@ -78,6 +83,9 @@ constexpr float kHrtfPathReachMetres = 8.0f;
 constexpr float kHrtfRoomRayMetres = 20.0f;
 constexpr float kHrtfRoomFullMetres = 4.0f;
 constexpr float kHrtfRoomNoneMetres = 8.0f;
+// Wet level at full room size, so a small room still sounds apart from open ground once the paths
+// are quieter.
+constexpr float kHrtfRoomReverbLevel = 2.0f;
 // Long enough not to click on a teleport, short enough to follow a walk through a doorway.
 constexpr float kHrtfRoomFadeSeconds = 0.5f;
 constexpr double kHrtfRoomProbeSeconds = 0.1;
@@ -1028,7 +1036,7 @@ void CNeoHrtfSystem::PublishRenderFrame()
 {
 	RenderFrame &frame = m_renderNext;
 	frame.m_listener = m_listener;
-	frame.m_reverbGain = cl_neo_hrtf_reverb.GetFloat() * m_roomReverbGain;
+	frame.m_reverbGain = kHrtfRoomReverbLevel * cl_neo_hrtf_reverb.GetFloat() * m_roomReverbGain;
 	frame.m_bReverbDecorrelate = !cl_neo_hrtf_reverb_inhead.GetBool();
 	for (int v = 0; v < kMaxVoices; ++v)
 	{
@@ -2287,7 +2295,7 @@ void CNeoHrtfSystem::RenderBlock()
 			// Paths carry the distance law along their own length, so the straight-line part of
 			// gain (applied to the whole output below) is divided back out of them.
 			const float distanceGain = voice.m_params.m_distanceGain;
-			render.pathGain = (distanceGain > 0.0f) ? 1.0f / distanceGain : 0.0f;
+			render.pathGain = (distanceGain > 0.0f) ? kHrtfPathLevel / distanceGain : 0.0f;
 			m_pSpatializer->Process(voice.m_hSpatial, voice.m_params.m_origin, render, m_scratchMono, m_scratchLeft,
 									m_scratchRight);
 			if (gain <= 0.0f)
