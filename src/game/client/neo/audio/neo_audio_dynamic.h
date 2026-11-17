@@ -64,6 +64,10 @@ public:
 	// NO_DYNAMIC_GROUP for a sound with no entity. Game thread.
 	static uint32 SoundGroup(int entIndex);
 
+	// What a mover in the way lets through, per band, from the material of its geometry. False if
+	// the entity is not a brush mover in the scene. Game thread.
+	bool MoverTransmission(C_BaseEntity *pEntity, float (&transmissionOut)[NeoSpatial::NUM_ACOUSTIC_BANDS]) const;
+
 private:
 	static uint32 HierarchyGroup(C_BaseEntity *pEntity);
 

@@ -249,6 +249,24 @@ bool CNeoAudioDynamicGeometry::IsMover(C_BaseEntity *pEntity) const
 	return (brush >= 0) ? m_brushes[brush].bMover : DynamicIsNetworkClass(pEntity, kDynamicPropDoorNetworkClass);
 }
 
+bool CNeoAudioDynamicGeometry::MoverTransmission(C_BaseEntity *pEntity, float (&transmissionOut)[NeoSpatial::NUM_ACOUSTIC_BANDS]) const
+{
+	const int brush = BrushModelIndex(pEntity);
+	if (brush < 0 || !m_brushes[brush].bMover || !m_brushes[brush].bUsable)
+	{
+		return false;
+	}
+
+	// A door is one material in practice, so its first triangle stands for all of it.
+	const CNeoAudioGeometry::Mesh &mesh = m_brushModels[brush]->mesh;
+	const NeoSpatial::AcousticMaterial &material = m_materials.GetPresets()[mesh.materialIndices[0]];
+	for (int b = 0; b < NeoSpatial::NUM_ACOUSTIC_BANDS; ++b)
+	{
+		transmissionOut[b] = material.transmission[b];
+	}
+	return true;
+}
+
 int CNeoAudioDynamicGeometry::BrushModelIndex(C_BaseEntity *pEntity) const
 {
 	const model_t *pModel = pEntity->GetModel();
