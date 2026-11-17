@@ -213,6 +213,7 @@ private:
 		bool m_bPathReachable; // within reach of a probe, from m_pathOrigin
 		NeoSpatial::Vec3 m_pathOrigin;
 		float m_maxPathLevel; // what its paths are capped at: its level in plain view
+		bool m_bDoorChecked; // the game thread has looked for a door on its paths, or need not
 		bool m_bPathThroughDoor; // its paths lose their direction and pass through the door
 		float m_pathDoorTransmission[NeoSpatial::NUM_ACOUSTIC_BANDS];
 	};

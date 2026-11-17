@@ -893,6 +893,7 @@ void CNeoHrtfSystem::BuildSimFrame()
 			input.m_pathOrigin = voice.m_pathOrigin;
 
 			voice.m_bPathThroughDoor = false;
+			input.m_bDoorChecked = !bDoors || m_lastPaths[i].m_generation == input.m_generation;
 			if (bDoors && m_lastPaths[i].m_generation == input.m_generation)
 			{
 				const NeoSpatial::Vec3 &from = m_listener.origin;
@@ -1136,6 +1137,12 @@ void CNeoHrtfSystem::RunSimulation(const SimInput &input, SimResults &results)
 			// The first-order field's direction in game axes (fitted on sources in plain view).
 			m_simArrivals[i] = paths.valid ? Vector(-paths.sh[1], paths.sh[3], paths.sh[2]) : vec3_origin;
 			VectorNormalize(m_simArrivals[i]);
+
+			// A new sound's first paths would play through a shut door before the check that needs them.
+			if (!frame.m_voices[i].m_bDoorChecked && !input.m_placements.IsEmpty())
+			{
+				paths.valid = false;
+			}
 
 			// Through a shut door the paths are heard as through any wall: muffled, from no direction.
 			if (paths.valid && frame.m_voices[i].m_bPathThroughDoor)
