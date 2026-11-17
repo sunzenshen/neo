@@ -1969,13 +1969,21 @@ void CNeoHrtfSystem::ResolveSoundLevel(Voice &voice, const SndInfo_t &info, cons
 			break;
 		}
 	}
+
+	// Other long or looping sounds are mostly doors and trains, which play their raw files at the
+	// engine's default level; a script naming the same file may be far louder.
+	if (!voice.m_bLevelFromEmitter && !voice.m_bOwned)
+	{
+		voice.m_soundLevel = Min(voice.m_soundLevel, SNDLVL_NORM);
+	}
 	voice.m_distMult = HrtfDistMultForLevel(voice.m_soundLevel);
 }
 
 soundlevel_t CNeoHrtfSystem::LookupScriptLevel(const char *pszNormalisedName)
 {
 	// Built on first use rather than at level load, so players without HRTF never pay for it.
-	// Channels only carry the wave file, so map every scripted wave back to its loudest level.
+	// Channels only carry the wave file. When scripts disagree on a file's level, there is no way to
+	// tell which one played it, or whether code played the file directly at the default level.
 	if (m_soundLevels.Count() == 0)
 	{
 		Assert(soundemitterbase);
@@ -1997,9 +2005,9 @@ soundlevel_t CNeoHrtfSystem::LookupScriptLevel(const char *pszNormalisedName)
 				{
 					m_soundLevels.Insert(name, level);
 				}
-				else
+				else if (m_soundLevels[index] != level)
 				{
-					m_soundLevels[index] = Max(m_soundLevels[index], level);
+					m_soundLevels[index] = SNDLVL_NORM;
 				}
 			}
 		}
