@@ -273,7 +273,7 @@ void HrtfDataCallback(ma_device *pDevice, void *pOutput, const void *pInput, ma_
 
 // NEO HRTF: cheat-protected and not archived while the feature is under development, so only
 // developers and testers on an sv_cheats server can turn it on, and it is off on every start.
-ConVar cl_neo_hrtf("cl_neo_hrtf", "0", FCVAR_CLIENTDLL | FCVAR_CHEAT,
+ConVar cl_neo_hrtf("cl_neo_hrtf", "0", FCVAR_CLIENTDLL | FCVAR_ARCHIVE,
 	"Re-render positional sounds with HRTF (in development)", true, 0.0f, true, 1.0f);
 ConVar cl_neo_hrtf_volume("cl_neo_hrtf_volume", "1.0", FCVAR_CLIENTDLL | FCVAR_ARCHIVE,
 	"Volume of the HRTF output, on top of the master volume", true, 0.0f, true, 1.0f);
