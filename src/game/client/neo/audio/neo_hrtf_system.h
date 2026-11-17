@@ -281,6 +281,8 @@ private:
 	void PollEngineSounds();
 	void BuildSimFrame();
 	void FindDoorOnPaths(Voice &voice, const Vector &arrival, float reachMetres);
+	void UpdateRoomSize();
+	float ProbeRoomMetres(const Vector &origin, float *pSkyShare) const;
 	void PublishRenderFrame();
 	void ReleaseRetiredVoices();
 	void BuildScene();
@@ -382,6 +384,12 @@ private:
 	int m_gameTimingFrames = 0;
 	double m_gameTimingStart = 0.0;
 	SimVoiceResult m_lastPaths[kMaxVoices]; // the latest simulation results, by sim frame entry
+	float m_roomMetres = 0.0f; // mean ray length around the listener at the last probe
+	float m_roomSkyShare = 0.0f; // share of those rays that reached the sky
+	float m_roomReverbGain = 0.0f; // reverb level for the room size, eased toward its target
+	float m_roomReverbTarget = 0.0f;
+	double m_roomProbeTime = 0.0; // when the next probe is due; 0 = at once
+	double m_roomUpdateTime = 0.0; // when the gain last moved
 
 	// Shared, each under its own mutex.
 	CThreadMutex m_renderMutex;
@@ -440,6 +448,7 @@ private:
 	uint32 m_renderGenerations[kMaxVoices] = {}; // the sound the cursor belongs to
 	std::atomic<uint32> m_finishedGeneration[kMaxVoices] = {}; // by slot: the last sound played to its end
 	float m_carry[kFrameSize * 2]; // interleaved stereo block not yet handed to miniaudio
+	float m_lastBlockReverbGain = 0.0f; // where the next block's reverb level ramps from
 	int m_carryRead = 0;
 	int m_carryAvailable = 0;
 	float m_scratchMono[kFrameSize];
