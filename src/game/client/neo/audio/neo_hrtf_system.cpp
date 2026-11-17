@@ -102,6 +102,9 @@ constexpr double kHrtfOwnedGraceSeconds = 1.0;
 
 // Leave most cores to the game while a bake runs in the background.
 constexpr int kHrtfBakeCoresPerThread = 4;
+// The most probes the game bakes itself. Bake memory grows with the probe pairs within path range,
+// so a large open map would need many gigabytes; such a map has to be baked with neo_soundbake.
+constexpr int kHrtfRuntimeBakeMaxProbes = 5000;
 
 constexpr float kHrtfProbeDrawRangeUnits = 1024.0f;
 constexpr float kHrtfProbeDrawSizeUnits = 4.0f;
@@ -1234,6 +1237,16 @@ void CNeoHrtfSystem::SetupProbes(const CNeoAudioGeometry &geometry)
 							geometry.GetBlockerVolumes());
 	m_probeCoverage.Build(m_probes, kHrtfPathReachMetres);
 	const double generateMs = (Plat_FloatTime() - startTime) * 1000.0;
+
+	const int numProbes = static_cast<int>(m_probes.centres.size());
+	if (numProbes > kHrtfRuntimeBakeMaxProbes)
+	{
+		Warning("NEO HRTF: %d acoustic probes, over the %d the game bakes; bake the map with neo_soundbake. "
+				"No baked reverb or sound paths on this map.\n", numProbes, kHrtfRuntimeBakeMaxProbes);
+		m_probes = NeoSpatial::ProbeSet();
+		m_probeCoverage = NeoSpatial::ProbeCoverage();
+		return;
+	}
 
 	CRC32_t key;
 	CRC32_Init(&key);
