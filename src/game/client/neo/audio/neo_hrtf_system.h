@@ -241,6 +241,7 @@ private:
 		NeoSpatial::DirectPath m_path;
 		NeoSpatial::PathParams m_paths; // around obstacles, through baked probes
 		Vector m_pathArrival = vec3_origin; // where the paths come from before any door, unit or zero
+		bool m_bPathsHeld = false; // the paths wait for the game thread's door check
 	};
 	struct SimTimings
 	{
@@ -399,7 +400,8 @@ private:
 	std::atomic<uint32> m_renderAcquired{ 0 }; // the sequence of the render frame the audio thread has
 	CThreadEvent m_simWake; // a new SimInput, or time to quit
 	std::atomic<bool> m_bSimQuit{ false };
-	std::atomic<bool> m_bSimNewVoices{ false }; // a voice started that the simulation has not run for
+	std::atomic<bool> m_bSimNewVoices{ false }; // a voice waits for its first run, or for its held paths
+	bool m_bDoorChecksDone = false; // game thread: this frame checks doors for a voice whose paths were held
 	std::thread m_simThread;
 
 	// Simulation thread only.

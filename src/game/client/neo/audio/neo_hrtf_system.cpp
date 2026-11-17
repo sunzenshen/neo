@@ -644,7 +644,7 @@ void CNeoHrtfSystem::PollEngineSounds()
 		m_simShared.m_placements.Swap(m_simNext.m_placements);
 		m_bSimInputFresh = true;
 	}
-	if (pendingCount > 0)
+	if (pendingCount > 0 || m_bDoorChecksDone)
 	{
 		m_bSimNewVoices = true;
 	}
@@ -833,6 +833,7 @@ void CNeoHrtfSystem::BuildSimFrame()
 	frame.m_bOcclusion = cl_neo_hrtf_occlusion.GetBool();
 	frame.m_bReverb = cl_neo_hrtf_reverb.GetFloat() > 0.0f;
 	frame.m_count = 0;
+	m_bDoorChecksDone = false;
 	for (int v = 0; v < kMaxVoices; ++v)
 	{
 		const Voice &voice = m_voices[v];
@@ -894,6 +895,7 @@ void CNeoHrtfSystem::BuildSimFrame()
 			input.m_bDoorChecked = !bDoors || m_lastPaths[i].m_generation == input.m_generation;
 			if (bDoors && m_lastPaths[i].m_generation == input.m_generation)
 			{
+				m_bDoorChecksDone |= m_lastPaths[i].m_bPathsHeld;
 				const NeoSpatial::Vec3 &from = m_listener.origin;
 				const Vector toSound(input.m_origin.x - from.x, input.m_origin.y - from.y, input.m_origin.z - from.z);
 				FindDoorOnPaths(voice, m_lastPaths[i].m_pathArrival, toSound.Length());
@@ -1169,8 +1171,9 @@ void CNeoHrtfSystem::RunSimulation(const SimInput &input, SimResults &results)
 	}
 	for (int i = 0; i < count; ++i)
 	{
+		const bool bPathsHeld = frame.m_bPathing && !frame.m_voices[i].m_bDoorChecked;
 		results.m_voices[frame.m_voices[i].m_slot] = { frame.m_voices[i].m_generation, m_simPaths[i], m_simPathing[i],
-														frame.m_bPathing ? m_simArrivals[i] : vec3_origin };
+														frame.m_bPathing ? m_simArrivals[i] : vec3_origin, bPathsHeld };
 	}
 	results.m_dynamicInstances = m_dynamicGeometry.NumInstances();
 
@@ -2158,6 +2161,13 @@ void CNeoHrtfSystem::RenderBlock()
 			// starts with one unoccluded block.
 			const SimVoiceResult &sim = m_renderSim.m_voices[v];
 			if (m_finished[v] || sim.m_generation != voice.m_generation)
+			{
+				continue;
+			}
+
+			// Out of sight the paths are most of what is heard, so the sound waits for them
+			// rather than losing its start.
+			if (sim.m_bPathsHeld && sim.m_path.occlusion <= 0.0f)
 			{
 				continue;
 			}
