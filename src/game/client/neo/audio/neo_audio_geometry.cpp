@@ -1560,7 +1560,7 @@ bool CNeoAudioGeometry::ReadBakedProbes(NeoSpatial::ProbeLumpHeader &header, Neo
 	if (m_probeLump.Count() >= static_cast<int>(sizeof(lzma_header_t)) && CLZMA::IsCompressed(pStored))
 	{
 		const lzma_header_t *pLzma = reinterpret_cast<const lzma_header_t *>(pStored);
-		if (pLzma->actualSize == 0 || pLzma->actualSize > static_cast<unsigned int>(kGeometryMaxLumpBytes)
+		if (pLzma->actualSize == 0 || pLzma->actualSize > static_cast<unsigned int>(NeoSpatial::PROBE_LUMP_MAX_BYTES)
 			|| pLzma->lzmaSize > static_cast<unsigned int>(m_probeLump.Count()) - sizeof(lzma_header_t))
 		{
 			V_snprintf(pszErrorOut, errorLen, "the baked probe lump is malformed");
