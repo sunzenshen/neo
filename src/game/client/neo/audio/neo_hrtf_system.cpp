@@ -108,6 +108,9 @@ constexpr int kHrtfRuntimeBakeMaxProbes = 5000;
 // Occlusion and paths change slowly next to a fast client's frame rate, and every run costs the
 // simulation thread the same, so it runs at most this often.
 constexpr double kHrtfSimMinIntervalSeconds = 1.0 / 60.0;
+// New voices may run it sooner, but at most this often, so a stream of new sounds cannot bring
+// back a run every frame.
+constexpr double kHrtfSimMinEarlyIntervalSeconds = 0.004;
 
 constexpr float kHrtfProbeDrawRangeUnits = 1024.0f;
 constexpr float kHrtfProbeDrawSizeUnits = 4.0f;
@@ -641,6 +644,10 @@ void CNeoHrtfSystem::PollEngineSounds()
 		m_simShared.m_placements.Swap(m_simNext.m_placements);
 		m_bSimInputFresh = true;
 	}
+	if (pendingCount > 0)
+	{
+		m_bSimNewVoices = true;
+	}
 	m_simWake.Set();
 
 	// Muting is an engine call, so it stays out of the audio thread's lock.
@@ -959,6 +966,7 @@ void CNeoHrtfSystem::ResetSimulation()
 void CNeoHrtfSystem::SimulationThreadMain()
 {
 	double lastRunStart = 0.0;
+	double lastEarlyRun = 0.0;
 	for (;;)
 	{
 		m_simWake.Wait();
@@ -967,16 +975,28 @@ void CNeoHrtfSystem::SimulationThreadMain()
 			return;
 		}
 
-		// Waiting first means the run takes the newest frame.
-		const double wait = lastRunStart + kHrtfSimMinIntervalSeconds - Plat_FloatTime();
-		if (wait > 0.0)
+		// Waiting first means the run takes the newest frame. A new voice is silent until its first
+		// result, so it cuts the wait short, though not more often than the early interval allows.
+		for (;;)
 		{
-			ThreadSleep(static_cast<unsigned>(wait * 1000.0));
+			const double now = Plat_FloatTime();
+			const double wait = lastRunStart + kHrtfSimMinIntervalSeconds - now;
+			if (wait <= 0.0)
+			{
+				break;
+			}
+			if (m_bSimNewVoices && now >= lastEarlyRun + kHrtfSimMinEarlyIntervalSeconds)
+			{
+				lastEarlyRun = now;
+				break;
+			}
+			m_simWake.Wait(Max(1u, static_cast<uint32>(wait * 1000.0)));
 			if (m_bSimQuit)
 			{
 				return;
 			}
 		}
+		m_bSimNewVoices = false;
 		lastRunStart = Plat_FloatTime();
 		{
 			AUTO_LOCK(m_simInputMutex);
