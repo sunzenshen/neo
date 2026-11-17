@@ -38,7 +38,7 @@
 {
 	"channel"			"CHAN_WEAPON"
 	"volume"			"1.0"
-        "soundlevel"            	"SNDLVL_90dB"
+        "soundlevel"            	"SNDLVL_95dB"
 	"pitch"				"98, 102"
         "wave"				"^weapons/milso/milso_fire.wav"
 }
@@ -49,7 +49,7 @@
 {
 	"channel"			"CHAN_WEAPON"
 	"volume"			"1.0"
-        "soundlevel"            	"SNDLVL_90dB"
+        "soundlevel"            	"SNDLVL_95dB"
 	"pitch"				"98, 102"
         "wave"				"^weapons/milso/milso_fire.wav"
 }
@@ -94,7 +94,7 @@
 {
 	"channel"			"CHAN_WEAPON"
 	"volume"			"1.0"
-        "soundlevel"            	"SNDLVL_90dB"
+        "soundlevel"            	"SNDLVL_95dB"
 	"pitch"				"98,102"
         "wave"				"^weapons/tachi/tachi_fire.wav"
 }
@@ -105,7 +105,7 @@
 {
 	"channel"			"CHAN_WEAPON"
 	"volume"			"1.0"
-        "soundlevel"            	"SNDLVL_90dB"
+        "soundlevel"            	"SNDLVL_95dB"
 	"pitch"				"98,102"
         "wave"				"^weapons/tachi/tachi_fire.wav"
 }
@@ -161,7 +161,7 @@
 {
 	"channel"			"CHAN_WEAPON"
 	"volume"			"1.0"
-        "soundlevel"            	"SNDLVL_90dB"
+        "soundlevel"            	"SNDLVL_95dB"
 	"pitch"				"98, 102"
         "wave"				"^weapons/kyla/kyla_fire.wav"
 }
@@ -172,7 +172,7 @@
 {
 	"channel"			"CHAN_WEAPON"
 	"volume"		        "1.0"
-        "soundlevel"            	"SNDLVL_90dB"
+        "soundlevel"            	"SNDLVL_95dB"
 	"pitch"				"98, 102"
         "wave"				"^weapons/kyla/kyla_fire.wav"
 }
@@ -219,7 +219,7 @@
 {
 	"channel"			"CHAN_WEAPON"
 	"volume"			"1.0"
-        "soundlevel"            	"SNDLVL_90dB"
+        "soundlevel"            	"SNDLVL_95dB"
 	"pitch"				"98, 102"
         "wave"				"^weapons/aa13/aa13_fire.wav"
 }
@@ -230,7 +230,7 @@
 {
 	"channel"			"CHAN_WEAPON"
 	"volume"			"1.0"
-        "soundlevel"            	"SNDLVL_90dB"
+        "soundlevel"            	"SNDLVL_95dB"
 	"pitch"				"98,102"
         "wave"				"^weapons/aa13/aa13_fire.wav"
 }
@@ -311,7 +311,7 @@
 "weapon_murata.single"
 {
 	"channel"			"CHAN_WEAPON"
-	"soundlevel"			"SNDLVL_90dB"
+	"soundlevel"			"SNDLVL_95dB"
 	"volume"			"1.0"
 	"pitch"				"PITCH_NORM"
 	"wave"			        "^weapons/murata/murata_fire.wav"
@@ -322,7 +322,7 @@
 "weapon_murata.npc_single"
 {
 	"channel"			"CHAN_WEAPON"
-	"soundlevel"			"SNDLVL_90dB"
+	"soundlevel"			"SNDLVL_95dB"
 	"volume"			"1.0"
 	"pitch"				"PITCH_NORM"
 	"wave"			        "^weapons/murata/murata_fire.wav"
@@ -369,7 +369,7 @@
 {
 	"channel"			"CHAN_WEAPON"
 	"volume"			"1.0"
-	"soundlevel"            	"SNDLVL_90dB"
+	"soundlevel"            	"SNDLVL_95dB"
 	"pitch"				"98,102"
         "wave"				"^weapons/mpn45/mpn45_fire.wav"
 }
@@ -378,7 +378,7 @@
 {
 	"channel"			"CHAN_WEAPON"
 	"volume"			"1.0"
-	"soundlevel"            	"SNDLVL_85dB"
+	"soundlevel"            	"SNDLVL_90dB"
 	"pitch"				"98,102"
         "wave"				"^weapons/mpn45/mpn45s_fire.wav"
 }
@@ -389,7 +389,7 @@
 {
 	"channel"			"CHAN_WEAPON"
 	"volume"			"1.0"
-        "soundlevel"            	"SNDLVL_90dB"
+        "soundlevel"            	"SNDLVL_95dB"
 	"pitch"				"98, 102"
         "wave"				"^weapons/mpn45/mpn45_fire.wav"
 }
@@ -398,7 +398,7 @@
 {
 	"channel"			"CHAN_WEAPON"
 	"volume"			"1.0"
-        "soundlevel"            	"SNDLVL_85dB"
+        "soundlevel"            	"SNDLVL_90dB"
 	"pitch"				"98, 102"
         "wave"				"^weapons/mpn45/mpn45s_fire.wav"
 }
@@ -445,7 +445,7 @@
 {
 	"channel"			"CHAN_WEAPON"
 	"volume"			"1.0"
-	 "soundlevel"            	"SNDLVL_90dB"
+	 "soundlevel"            	"SNDLVL_95dB"
 	"pitch"				"98,102"
         "wave"				"^weapons/srm/srm_fire.wav"
 
@@ -457,7 +457,7 @@
 {
 	"channel"			"CHAN_WEAPON"
 	"volume"			"1.0"
-	"soundlevel"            	"SNDLVL_90dB"
+	"soundlevel"            	"SNDLVL_95dB"
 	"pitch"				"98,102"
         "wave"				"^weapons/srm/srm_fire.wav"
 
@@ -469,7 +469,7 @@
 {
 	"channel"			"CHAN_WEAPON"
 	"volume"			"1.0"
-	"soundlevel"            	"SNDLVL_85dB"
+	"soundlevel"            	"SNDLVL_90dB"
 	"pitch"				"98,102"
         "wave"				"^weapons/srm/srm_s_fire.wav"
 
@@ -481,7 +481,7 @@
 {
 	"channel"			"CHAN_WEAPON"
 	"volume"			"1.0"
-	"soundlevel"            	"SNDLVL_85dB"
+	"soundlevel"            	"SNDLVL_90dB"
 	"pitch"				"98,102"
         "wave"				"^weapons/srm/srm_s_fire.wav"
 
@@ -530,7 +530,7 @@
 {
 	"channel"			"CHAN_WEAPON"
 	"volume"			"1.0"
-	"soundlevel"            	"SNDLVL_90dB"
+	"soundlevel"            	"SNDLVL_95dB"
 	"pitch"				"98,102"
         "wave"				"^weapons/jitte/jitte_fire.wav"
 
@@ -542,7 +542,7 @@
 {
 	"channel"			"CHAN_WEAPON"
 	"volume"			"1.0"
-	"soundlevel"            	"SNDLVL_90dB"
+	"soundlevel"            	"SNDLVL_95dB"
 	"pitch"				"98,102"
         "wave"				"^weapons/jitte/jitte_fire.wav"
 
@@ -554,7 +554,7 @@
 {
 	"channel"			"CHAN_WEAPON"
 	"volume"			"1.0"
-	"soundlevel"            	"SNDLVL_90dB"
+	"soundlevel"            	"SNDLVL_95dB"
 	"pitch"				"98,102"
         "wave"				"^weapons/jitte/jitte_scoped_fire.wav"
 
@@ -566,7 +566,7 @@
 {
 	"channel"			"CHAN_WEAPON"
 	"volume"			"1.0"
-	"soundlevel"            	"SNDLVL_90dB"
+	"soundlevel"            	"SNDLVL_95dB"
 	"pitch"				"98,102"
         "wave"				"^weapons/jitte/jitte_scoped_fire.wav"
 
@@ -613,7 +613,7 @@
 {
 	"channel"			"CHAN_WEAPON"
 	"volume"			"1.0"
-	"soundlevel"            	"SNDLVL_90dB"
+	"soundlevel"            	"SNDLVL_95dB"
 	"pitch"				"98,102"
         "wave"				"^weapons/m41/m41_fire.wav"
 
@@ -623,7 +623,7 @@
 {
 	"channel"			"CHAN_WEAPON"
 	"volume"			"1.0"
-	"soundlevel"        "SNDLVL_85dB"
+	"soundlevel"        "SNDLVL_90dB"
     "wave"				"^weapons/m41/s_fire.wav"
 
 }
@@ -634,7 +634,7 @@
 {
 	"channel"			"CHAN_WEAPON"
 	"volume"			"1.0"
-	"soundlevel"            	"SNDLVL_90dB"	
+	"soundlevel"            	"SNDLVL_95dB"	
 	"pitch"				"98,102"
         "wave"				"^weapons/m41/m41_fire.wav"
 
@@ -646,7 +646,7 @@
 {
 	"channel"			"CHAN_WEAPON"
 	"volume"			"1.0"
-	"soundlevel"            	"SNDLVL_90dB"
+	"soundlevel"            	"SNDLVL_95dB"
 	"pitch"				"98,102"
         "wave"				"^weapons/m41/m41l_fire.wav"
 
@@ -658,7 +658,7 @@
 {
 	"channel"			"CHAN_WEAPON"
 	"volume"			"1.0"
-	"soundlevel"            	"SNDLVL_90dB"	
+	"soundlevel"            	"SNDLVL_95dB"	
 	"pitch"				"98,102"
         "wave"				"^weapons/m41/m41l_fire.wav"
 
@@ -726,7 +726,7 @@
 {
 	"channel"			"CHAN_WEAPON"
 	"volume"			"1.0"
-	"soundlevel"            	"SNDLVL_90dB"
+	"soundlevel"            	"SNDLVL_95dB"
 	"pitch"				"98,102"
         "wave"				"^weapons/srs/srs_fire.wav"
 
@@ -738,7 +738,7 @@
 {
 	"channel"			"CHAN_WEAPON"
 	"volume"			"1.0"
-	"soundlevel"            	"SNDLVL_90dB"	
+	"soundlevel"            	"SNDLVL_95dB"	
 	"pitch"				"98,102"
         "wave"				"^weapons/srs/srs_fire.wav"
 
@@ -809,7 +809,7 @@
 "weapon_zr68.single"
 {
 	"channel"			"CHAN_WEAPON"
-	"soundlevel"            	"SNDLVL_90dB"
+	"soundlevel"            	"SNDLVL_95dB"
         "volume"			"1.0"
 	"pitch"				"98,102"
         "wave"				"^weapons/zr68/zr68c_fire.wav"
@@ -821,7 +821,7 @@
 "weapon_zr68.npc_single"
 {
 	"channel"			"CHAN_WEAPON"
-	"soundlevel"            	"SNDLVL_90dB"
+	"soundlevel"            	"SNDLVL_95dB"
         "volume"			"1.0"
 	"pitch"				"98,102"
         "wave"				"^weapons/zr68/zr68c_fire.wav"
@@ -833,7 +833,7 @@
 "weapon_zr68s.fire"
 {
 	"channel"			"CHAN_WEAPON"
-        "soundlevel"            	"SNDLVL_85dB"
+        "soundlevel"            	"SNDLVL_90dB"
 	"volume"			"1.0"
 	"pitch"				"98,102"
         "wave"				"^weapons/zr68/zr68s_fire.wav"
@@ -845,7 +845,7 @@
 "weapon_zr68s.npc_fire"
 {
 	"channel"			"CHAN_WEAPON"
-        "soundlevel"            	"SNDLVL_85dB"
+        "soundlevel"            	"SNDLVL_90dB"
 	"volume"			"1.0"
 	"pitch"				"98,102"
         "wave"				"^weapons/zr68/zr68s_fire.wav"
@@ -857,7 +857,7 @@
 "weapon_zr68l.single"
 {
 	"channel"			"CHAN_WEAPON"
-	"soundlevel"            	"SNDLVL_90dB"
+	"soundlevel"            	"SNDLVL_95dB"
         "volume"			"1.0"
 	"pitch"				"98,102"
         "wave"				"^weapons/zr68/zr68l_fire.wav"
@@ -869,7 +869,7 @@
 "weapon_zr68l.npc_single"
 {
 	"channel"			"CHAN_WEAPON"
-	"soundlevel"            	"SNDLVL_90dB"
+	"soundlevel"            	"SNDLVL_95dB"
         "volume"			"1.0"
 	"pitch"				"98,102"
         "wave"				"^weapons/zr68/zr68l_fire.wav"
@@ -922,7 +922,7 @@
 {
 	"channel"		        "CHAN_WEAPON"
 	"volume"		        "1.0"
-	"soundlevel"		        "SNDLVL_90dB"
+	"soundlevel"		        "SNDLVL_95dB"
 	"pitch"			        "98,102"
         "wave"			        "^weapons/mx/mx_fire.wav"	
 }
@@ -932,7 +932,7 @@
 "weapon_mX.npc_fire"
 {
 	"channel"		        "CHAN_WEAPON"
-        "soundlevel"		        "SNDLVL_90dB"
+        "soundlevel"		        "SNDLVL_95dB"
 	"volume"		        "1.0"
 	"pitch"			        "98,102"
         "wave"			        "^weapons/mx/mx_fire.wav"	
@@ -943,7 +943,7 @@
 "weapon_mXs.fire"
 {
 	"channel"		        "CHAN_WEAPON"
-        "soundlevel"		        "SNDLVL_85dB"
+        "soundlevel"		        "SNDLVL_90dB"
 	"volume"		        "1.0"
 	"pitch"			        "98,102"
         "wave"			        "^weapons/mx/mxs_fire.wav"	
@@ -954,7 +954,7 @@
 "weapon_mXs.npc_fire"
 {
 	"channel"		        "CHAN_WEAPON"
-        "soundlevel"		        "SNDLVL_85dB"
+        "soundlevel"		        "SNDLVL_90dB"
 	"volume"		        "1.0"
 	"pitch"			        "98,102"
         "wave"			        "^weapons/mx/mxs_fire.wav"	
@@ -1003,7 +1003,7 @@
 "weapon_pz.single"
 {
 	"channel"		        "CHAN_WEAPON"
-        "soundlevel"		        "SNDLVL_90dB"
+        "soundlevel"		        "SNDLVL_95dB"
         "volume"		        "1.0"
 	"pitch"			        "98,102"
         "wave"			        "^weapons/pz/pz_fire.wav"	
@@ -1014,7 +1014,7 @@
 "weapon_pz.npc_single"
 {
 	"channel"		        "CHAN_WEAPON"
-        "soundlevel"		        "SNDLVL_90dB"
+        "soundlevel"		        "SNDLVL_95dB"
 	"volume"		        "1.0"		
 	"pitch"			        "98,102"
 	"wave"			        "^weapons/pz/pz_fire.wav"	
@@ -1222,7 +1222,7 @@
 {
 	"channel"		"CHAN_WEAPON"
 	"volume"		"0.55"
-	"soundlevel"	"SNDLVL_90dB"
+	"soundlevel"	"SNDLVL_95dB"
 	"pitch"			"98,102"
 
 	"wave"		"weapons/pistol/pistol_fire2.wav"
@@ -1232,7 +1232,7 @@
 {
 	"channel"		"CHAN_WEAPON"
 	"volume"		"0.7"
-	"soundlevel"	"SNDLVL_90dB"
+	"soundlevel"	"SNDLVL_95dB"
 	"pitch"			"90,120"
 
 	"wave"		"^weapons/pistol/pistol_fire3.wav"
@@ -1369,7 +1369,7 @@
 "ht_tank.single"
 {
 	"channel"			"CHAN_WEAPON"
-	"soundlevel"		"SNDLVL_90dB"
+	"soundlevel"		"SNDLVL_95dB"
 	"volume"			"1.0"
 	"pitch"				"98,102"
 	"wave"				"^rogue/ht_ubr_fire.wav"
@@ -1480,7 +1480,7 @@
 "weapon_balc.single"
 {
 	"channel"				"CHAN_WEAPON"
-	"soundlevel"			"SNDLVL_90dB"
+	"soundlevel"			"SNDLVL_95dB"
 	"volume"				"0.9"
 	"pitch"					"90,100"
 	"wave"					"^weapons/balc/balc_fire.wav"
