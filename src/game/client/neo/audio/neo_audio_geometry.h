@@ -12,6 +12,7 @@
 // DLL globals: the file system and physics interfaces it reads through are passed in.
 #pragma once
 
+#include "checksum_crc.h"
 #include "utlstring.h"
 #include "utlvector.h"
 
@@ -107,10 +108,10 @@ public:
 	// Excludes transmission, which does not affect baked reflections or paths.
 	uint32 GetGeometryCrc() const;
 
-	// The shape alone: positions (to the millimetre), triangles and BSP leaves, but not materials.
-	// What a bake made at compile time is checked against, on a machine that may classify materials
-	// differently or round the last bit of a float differently.
-	uint32 GetShapeCrc() const;
+	// The BSP lumps and prop collision files the static mesh is built from, as stored. What a bake
+	// made at compile time is checked against: unlike the built geometry, it is the same in every
+	// build of the game and the baker.
+	uint32 GetSourceCrc() const { return m_sourceCrc; }
 
 	// The probes baked into the map at compile time (NeoSpatial::PROBE_GAME_LUMP_ID), decoded:
 	// decompressed, parsed and checked against this geometry. False if the map has none
@@ -138,4 +139,5 @@ private:
 
 	CUtlVector<uint8> m_probeLump;
 	int m_probeLumpVersion = 0;
+	CRC32_t m_sourceCrc = 0;
 };

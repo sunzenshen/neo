@@ -31,13 +31,13 @@ bool ReadArray(const uint8_t *data, int64_t size, int64_t &offset, std::vector<T
 
 } // namespace
 
-void WriteProbeLump(const ProbeSet &probes, const uint8_t *batches, int64_t batchesSize, uint32_t shapeCrc,
+void WriteProbeLump(const ProbeSet &probes, const uint8_t *batches, int64_t batchesSize, uint32_t sourceCrc,
 					uint32_t libraryVersion, uint32_t materialCrc, std::vector<uint8_t> &out)
 {
 	ProbeLumpHeader header = {};
 	header.magic = PROBE_LUMP_MAGIC;
 	header.formatVersion = PROBE_LUMP_FORMAT_VERSION;
-	header.shapeCrc = shapeCrc;
+	header.sourceCrc = sourceCrc;
 	header.libraryVersion = libraryVersion;
 	header.materialCrc = materialCrc;
 	header.radius = probes.radius;
@@ -61,6 +61,11 @@ bool ReadProbeLump(const uint8_t *data, int64_t size, ProbeLumpHeader &header, P
 		return false;
 	}
 	memcpy(&header, data, sizeof(header));
+	if (header.magic == PROBE_LUMP_MAGIC && header.formatVersion < PROBE_LUMP_FORMAT_VERSION)
+	{
+		snprintf(errorOut, errorLen, "probe lump is from an older neo_soundbake (format %u); bake the map again", header.formatVersion);
+		return false;
+	}
 	if (header.magic != PROBE_LUMP_MAGIC || header.formatVersion != PROBE_LUMP_FORMAT_VERSION)
 	{
 		snprintf(errorOut, errorLen, "probe lump has an unknown format (version %u)", header.formatVersion);
