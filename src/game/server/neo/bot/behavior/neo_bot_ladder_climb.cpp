@@ -46,16 +46,9 @@ ConVar neo_bot_ladder_recovery_bounce_landing( "neo_bot_ladder_recovery_bounce_l
 	"Also recover when an upward climber falls back onto the floor at the ladder foot" );
 static constexpr float RECOVERY_BOUNCE_RISE = 8.0f;
 
-enum LadderExpiryTeleportLevel
-{
-	EXPIRY_TELEPORT_OFF = 0,
-	EXPIRY_TELEPORT_TIMERS,
-	EXPIRY_TELEPORT_ALL
-};
-
-ConVar neo_bot_ladder_expiry_teleport( "neo_bot_ladder_expiry_teleport", "0", FCVAR_CHEAT,
-	"When a bot's ladder action expires, place the bot on the ladder's exit area. 0 = off, 1 = climb and dismount timers, 2 = also the stall bail and the approach timer",
-	true, EXPIRY_TELEPORT_OFF, true, EXPIRY_TELEPORT_ALL );
+ConVar neo_bot_ladder_teleport( "neo_bot_ladder_teleport", "1", FCVAR_CHEAT,
+	"Place a bot that cannot get on, up or off a ladder on the ladder's exit area. 0 = off, for testing ladders without help",
+	true, 0.0f, true, 1.0f );
 static constexpr float EXPIRY_TELEPORT_COOLDOWN = 10.0f;
 static constexpr float EXPIRY_TELEPORT_APPROACH_RANGE = 48.0f;
 static constexpr float EXPIRY_TELEPORT_LANDING_STEP = 16.0f; // Half a hull
@@ -796,13 +789,20 @@ static const char *ExpiryTimerName( CNEOBotLadderClimb::ExpiryTimer timer )
 }
 
 //---------------------------------------------------------------------------------------------
+static const char *ExpiryTriggerName( CNEOBotLadderClimb::ExpiryTimer timer )
+{
+	return timer == CNEOBotLadderClimb::EXPIRY_MISS ? "miss" : "expiry";
+}
+
+//---------------------------------------------------------------------------------------------
 static void LogExpiryTeleport( CNEOBot *me, const CNavLadder *ladder, bool goingUp, CNEOBotLadderClimb::ExpiryTimer timer,
 	const Vector &from, const Vector &to, const CNavArea *area, const char *gate )
 {
 	const bool placed = FStrEq( gate, "none" );
-	Msg( "NEO_LADTELE %s t=%.2f bot=%d lad=%u up=%d timer=%s from=%.0f,%.0f,%.0f to=%.0f,%.0f,%.0f area=%u gate=%s\n",
+	Msg( "NEO_LADTELE %s t=%.2f bot=%d lad=%u up=%d trigger=%s timer=%s ghost=%d from=%.0f,%.0f,%.0f to=%.0f,%.0f,%.0f area=%u gate=%s\n",
 		placed ? "placed" : "refused", gpGlobals->curtime, me->entindex(), ladder->GetID(), goingUp ? 1 : 0,
-		ExpiryTimerName( timer ), from.x, from.y, from.z, to.x, to.y, to.z, area ? area->GetID() : 0, gate );
+		ExpiryTriggerName( timer ), ExpiryTimerName( timer ), me->IsCarryingGhost() ? 1 : 0,
+		from.x, from.y, from.z, to.x, to.y, to.z, area ? area->GetID() : 0, gate );
 }
 
 //---------------------------------------------------------------------------------------------
@@ -983,8 +983,7 @@ static void AddExpiryCandidates( const CNavArea *area, const Vector &end, const 
 bool CNEOBotLadderClimb::TryExpiryTeleport( CNEOBot *me, const CNavLadder *ladder, bool goingUp,
 	const CNavArea *pathExit, const Vector *dismountPos, ExpiryTimer timer )
 {
-	const int level = ( timer == EXPIRY_CLIMB || timer == EXPIRY_DISMOUNT ) ? EXPIRY_TELEPORT_TIMERS : EXPIRY_TELEPORT_ALL;
-	if ( !ladder || !me->IsAlive() || neo_bot_ladder_expiry_teleport.GetInt() < level )
+	if ( !ladder || !me->IsAlive() || !neo_bot_ladder_teleport.GetBool() )
 	{
 		return false;
 	}
@@ -1006,10 +1005,6 @@ bool CNEOBotLadderClimb::TryExpiryTeleport( CNEOBot *me, const CNavLadder *ladde
 	else if ( me->GetVisionInterface()->GetPrimaryKnownThreat( true ) )
 	{
 		gate = "threat";
-	}
-	else if ( me->IsCarryingGhost() )
-	{
-		gate = "ghost";
 	}
 	else if ( !me->m_ladderTeleportCooldown.IsElapsed() )
 	{
@@ -1049,6 +1044,8 @@ bool CNEOBotLadderClimb::TryExpiryTeleport( CNEOBot *me, const CNavLadder *ladde
 
 	LandingProbe probe;
 	probe.gate = "no_exit";
+	// The nearest candidate's refusal explains the outcome; later ones are fallbacks
+	const char *refusal = nullptr;
 	const CNavArea *placedArea = nullptr;
 	Vector landing = vec3_origin;
 	for ( int areaIndex = 0; areaIndex < ARRAYSIZE( areas ) && !placedArea; ++areaIndex )
@@ -1074,27 +1071,26 @@ bool CNEOBotLadderClimb::TryExpiryTeleport( CNEOBot *me, const CNavLadder *ladde
 		FOR_EACH_VEC( candidates, i )
 		{
 			Vector spot;
-			if ( !ValidateLanding( me, candidates[i], &spot, &probe, RECOVERY_PLACEMENT ) )
-			{
-				continue;
-			}
-
-			const bool rightWay = goingUp ? spot.z > feet.z - step : spot.z < feet.z + step;
-			if ( !rightWay )
+			const bool valid = ValidateLanding( me, candidates[i], &spot, &probe, RECOVERY_PLACEMENT );
+			if ( valid && ( goingUp ? spot.z <= feet.z - step : spot.z >= feet.z + step ) )
 			{
 				probe.gate = "direction";
-				continue;
 			}
-
-			if ( spot.DistTo( feet ) > ladder->m_length + RECOVERY_SEARCH_RANGE )
+			else if ( valid && spot.DistTo( feet ) > ladder->m_length + RECOVERY_SEARCH_RANGE )
 			{
 				probe.gate = "distance_cap";
-				continue;
+			}
+			else if ( valid )
+			{
+				landing = spot;
+				placedArea = area;
+				break;
 			}
 
-			landing = spot;
-			placedArea = area;
-			break;
+			if ( !refusal )
+			{
+				refusal = probe.gate;
+			}
 		}
 		state.ladder = savedLadder;
 		state.landingArea = savedArea;
@@ -1103,7 +1099,7 @@ bool CNEOBotLadderClimb::TryExpiryTeleport( CNEOBot *me, const CNavLadder *ladde
 
 	if ( !placedArea )
 	{
-		LogExpiryTeleport( me, ladder, goingUp, timer, feet, vec3_origin, nullptr, probe.gate );
+		LogExpiryTeleport( me, ladder, goingUp, timer, feet, vec3_origin, nullptr, refusal ? refusal : probe.gate );
 		return false;
 	}
 
@@ -1146,7 +1142,7 @@ bool CNEOBotLadderClimb::TryExpiryTeleport( CNEOBot *me, const CNavLadder *ladde
 //---------------------------------------------------------------------------------------------
 bool CNEOBotLadderClimb::TeleportOnExpiry( CNEOBot *me, ExpiryTimer timer )
 {
-	if ( neo_bot_ladder_expiry_teleport.GetInt() == EXPIRY_TELEPORT_OFF )
+	if ( !neo_bot_ladder_teleport.GetBool() )
 	{
 		return false;
 	}
