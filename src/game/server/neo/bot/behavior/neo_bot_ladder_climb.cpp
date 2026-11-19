@@ -1245,7 +1245,8 @@ static bool CanWalkOntoLadderTop( CNEOBot *me, const CNavLadder *ladder, const C
 	Vector maxs = me->WorldAlignMaxs();
 	maxs.z = mins.z + me->GetBodyInterface()->GetStandHullHeight();
 	const Vector lift( 0.0f, 0.0f, step );
-	NextBotTraceFilterIgnoreActors filter( me, COLLISION_GROUP_NONE );
+	// Collide as a moving player, so a weapon or the ghost on the landing does not block the walk
+	NextBotTraceFilterIgnoreActors filter( me, COLLISION_GROUP_PLAYER_MOVEMENT );
 
 	// The landings and the areas a bot walks onto from them
 	CUtlVector<const CNavArea *> landings;
