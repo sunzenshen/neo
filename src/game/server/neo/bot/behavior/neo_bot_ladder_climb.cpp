@@ -141,7 +141,7 @@ bool CNEOBotLadderClimb::CheckLandingSupport( CNEOBot *me, const Vector &sample,
 	const Vector to( sample.x, sample.y, navZ - step );
 	trace_t trace;
 	NextBotTraceFilterIgnoreActors geometryFilter( me, COLLISION_GROUP_NONE );
-	CTraceFilterSimple placementFilter( me, COLLISION_GROUP_NONE );
+	CTraceFilterSimple placementFilter( me, COLLISION_GROUP_PLAYER_MOVEMENT );
 	ITraceFilter *filter = purpose == WATCH_GEOMETRY ? static_cast<ITraceFilter *>( &geometryFilter ) : &placementFilter;
 	UTIL_TraceLine( from, to, MASK_PLAYERSOLID, filter, &trace );
 	if ( trace.startsolid || trace.allsolid || !trace.DidHit() || !trace.m_pEnt || trace.m_pEnt->IsPlayer()
@@ -184,7 +184,7 @@ bool CNEOBotLadderClimb::ValidateLanding( CNEOBot *me, const Vector &point, Vect
 	footMaxs.z = mins.z + RECOVERY_FLOOR_PROBE_HEIGHT;
 	trace_t floor;
 	NextBotTraceFilterIgnoreActors geometryFilter( me, COLLISION_GROUP_NONE );
-	CTraceFilterSimple placementFilter( me, COLLISION_GROUP_NONE );
+	CTraceFilterSimple placementFilter( me, COLLISION_GROUP_PLAYER_MOVEMENT );
 	ITraceFilter *filter = purpose == WATCH_GEOMETRY ? static_cast<ITraceFilter *>( &geometryFilter ) : &placementFilter;
 	UTIL_TraceHull( navPoint + vertical, navPoint - vertical, mins, footMaxs, MASK_PLAYERSOLID, filter, &floor );
 	if ( floor.startsolid || floor.allsolid )
