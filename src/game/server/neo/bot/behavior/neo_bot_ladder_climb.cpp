@@ -1172,6 +1172,42 @@ static bool IsBesideLadderTop( const CNavLadder *ladder, const CNavArea *area )
 }
 
 //---------------------------------------------------------------------------------------------
+// A bot on floor just off the mesh at the top can still walk onto a landing in a straight line
+static bool CanWalkOntoLadderTop( CNEOBot *me, const CNavLadder *ladder, const CNavArea *exitArea, const Vector &feet )
+{
+	const float step = me->GetLocomotionInterface()->GetStepHeight();
+	const Vector mins = me->WorldAlignMins();
+	Vector maxs = me->WorldAlignMaxs();
+	maxs.z = mins.z + me->GetBodyInterface()->GetStandHullHeight();
+	const Vector lift( 0.0f, 0.0f, step );
+	NextBotTraceFilterIgnoreActors filter( me, COLLISION_GROUP_NONE );
+
+	const CNavArea *landings[] = { exitArea, ladder->m_topForwardArea, ladder->m_topLeftArea, ladder->m_topRightArea, ladder->m_topBehindArea };
+	for ( const CNavArea *landing : landings )
+	{
+		if ( !landing )
+		{
+			continue;
+		}
+
+		Vector closest;
+		landing->GetClosestPointOnArea( feet, &closest );
+		if ( fabsf( closest.z - feet.z ) > step )
+		{
+			continue;
+		}
+
+		trace_t trace;
+		UTIL_TraceHull( feet + lift, closest + lift, mins, maxs, MASK_PLAYERSOLID, &filter, &trace );
+		if ( !trace.startsolid && trace.fraction >= 1.0f )
+		{
+			return true;
+		}
+	}
+	return false;
+}
+
+//---------------------------------------------------------------------------------------------
 // A climber that left the ladder at its top but came down beside the landing, not on it
 bool CNEOBotLadderClimb::IsMissedLanding( CNEOBot *me ) const
 {
@@ -1192,7 +1228,11 @@ bool CNEOBotLadderClimb::IsMissedLanding( CNEOBot *me ) const
 	{
 		return false;
 	}
-	return !m_pExitArea || !m_pExitArea->IsOverlapping( feet );
+	if ( m_pExitArea && m_pExitArea->IsOverlapping( feet ) )
+	{
+		return false;
+	}
+	return !CanWalkOntoLadderTop( me, m_ladder, m_pExitArea, feet );
 }
 
 //---------------------------------------------------------------------------------------------
