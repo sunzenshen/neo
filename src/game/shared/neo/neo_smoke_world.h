@@ -30,8 +30,6 @@ public:
 	virtual bool CellSolid( int x, int y, int z ) override;
 	virtual bool LinkBlocked( int x, int y, int z, int axis ) override;
 	virtual bool SeedBlocked( int x, int y, int z ) override;
-	virtual bool SeedInWater() override;
-	virtual bool CellWater( int x, int y, int z ) override;
 
 protected:
 	bool InBox( int x, int y, int z ) const

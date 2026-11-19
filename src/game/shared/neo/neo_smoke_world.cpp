@@ -98,16 +98,6 @@ bool CNEOSmokeWorld::SeedBlocked( int x, int y, int z )
 	return tr.startsolid || tr.fraction < 1.0f;
 }
 
-bool CNEOSmokeWorld::SeedInWater()
-{
-	return PointIn( Grenade(), NEO_VOLSMOKE_WATER_MASK );
-}
-
-bool CNEOSmokeWorld::CellWater( int x, int y, int z )
-{
-	return PointIn( Center( x, y, z ), NEO_VOLSMOKE_WATER_MASK );
-}
-
 bool CNEOSmokeWorld::InEmptyBlock( int x, int y, int z )
 {
 	if ( !InLattice( x, y, z ) )
