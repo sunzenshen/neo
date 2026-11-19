@@ -23,6 +23,10 @@ void CNEOBotLocomotion::Update( void )
 	{
 		return;
 	}
+	if ( me->OwnsLadderRecoveryInputs() )
+	{
+		return;
+	}
 
 	BaseClass::Update();
 
@@ -58,9 +62,28 @@ void CNEOBotLocomotion::Update( void )
 
 
 //-----------------------------------------------------------------------------------------
+void CNEOBotLocomotion::Upkeep( void )
+{
+	CNEOBot *me = ToNEOBot( GetBot()->GetEntity() );
+	if ( me && me->OwnsLadderRecoveryInputs() )
+	{
+		return;
+	}
+
+	BaseClass::Upkeep();
+}
+
+
+//-----------------------------------------------------------------------------------------
 // Move directly towards the given position
 void CNEOBotLocomotion::Approach( const Vector& pos, float goalWeight )
 {
+	CNEOBot *me = ToNEOBot( GetBot()->GetEntity() );
+	if ( me && me->OwnsLadderRecoveryInputs() )
+	{
+		return;
+	}
+
 	BaseClass::Approach( pos, goalWeight );
 }
 

@@ -62,6 +62,10 @@ public:
 	virtual bool IsAscendingOrDescendingLadder( void ) const;	// we are actually on the ladder right now, either climbing up or down
 	virtual bool IsAbleToAutoCenterOnLadder( void ) const;
 #ifdef NEO
+	bool IsDismountingLadderTop() const
+	{
+		return m_ladderState == DISMOUNTING_LADDER_TOP;
+	}
 	bool IsForwardDownLadder( const CNavLadder *ladder ) const;	// would pressing forward move us down this ladder
 	void CatchLadderBelowTop( const CNavLadder *ladder );	// press into this ladder's face the tick we drop past its top
 	void StopCatchingLadder( void );

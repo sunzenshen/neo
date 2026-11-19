@@ -21,6 +21,7 @@
 #include "decals.h"
 #include "neo_weapon_loadout.h"
 #include "behavior/neo_bot_behavior.h"
+#include "behavior/neo_bot_ladder_climb.h"
 #include "neo_crosshair.h"
 #include "neo/weapons/weapon_ghost.h"
 
@@ -639,6 +640,8 @@ CNEOBot::~CNEOBot()
 //-----------------------------------------------------------------------------------------------------
 void CNEOBot::Spawn()
 {
+	ResetLadderRecovery();
+	m_ladderRecoveryBlocks.RemoveAll();
 	// CNEOBot do m_iNeoClass a bit earlier
 	// so that we get correct loadout choices for the class
 	if (m_iNextSpawnClassChoice == NEO_CLASS_RANDOM) 
@@ -753,6 +756,7 @@ void CNEOBot::SetMission(MissionType mission, bool resetBehaviorSystem)
 extern void respawn(CBaseEntity* pEdict, bool fCopyCorpse);
 void CNEOBot::PhysicsSimulate(void)
 {
+	CNEOBotLadderClimb::UpdateRecovery( this );
 	BaseClass::PhysicsSimulate();
 
 	if (m_bWantsRespawn)
@@ -887,6 +891,11 @@ void CNEOBot::FireGameEvent(IGameEvent* event)
 extern ConVar nb_update_frequency;
 void CNEOBot::Update()
 {
+	if ( !IsAlive() || ( GetNeoFlags() & NEO_FL_FREEZETIME )
+		|| ( NEORules()->GetRoundStatus() != RoundLive && NEORules()->GetRoundStatus() != Overtime ) )
+	{
+		ResetLadderRecovery();
+	}
 	if (!TheNavMesh->IsLoaded())
 	{
 		if ( IsDebugging( NEXTBOT_DEBUG_ALL ) )
@@ -904,6 +913,7 @@ void CNEOBot::Update()
 //-----------------------------------------------------------------------------------------------------
 void CNEOBot::Event_Killed(const CTakeDamageInfo& info)
 {
+	ResetLadderRecovery();
 	BaseClass::Event_Killed(info);
 
 	if (HasProxy())
@@ -3015,7 +3025,18 @@ static void CNEOBotApplyOnStuckAreaPenalty( CNEOBot *me )
 
 void CNEOBotIntention::OnStuck()
 {
-	CNEOBotApplyOnStuckAreaPenalty( static_cast<CNEOBot *>( GetBot() ) );
+	CNEOBot *me = static_cast<CNEOBot *>( GetBot() );
+	CNEOBotApplyOnStuckAreaPenalty( me );
+	// Consume a successful recovery before the main action can jump and sidestep off the ladder.
+	if ( CNEOBotLadderClimb::TryStuckRecovery( me, m_behavior ) )
+	{
+		return;
+	}
+
+	if ( CNEOBotLadderClimb::TryStuckTeleport( me ) )
+	{
+		return;
+	}
 	INextBotEventResponder::OnStuck();
 }
 
@@ -3030,6 +3051,7 @@ void CNEOBotIntention::OnMoveToFailure( const Path *path, MoveToFailureType reas
 
 void CNEOBotIntention::Reset()
 {
+	static_cast<CNEOBot *>( GetBot() )->CancelLadderRecovery();
 	delete m_behavior;
 	m_behavior = new CNEOBotBehavior(new CNEOBotMainAction);
 }

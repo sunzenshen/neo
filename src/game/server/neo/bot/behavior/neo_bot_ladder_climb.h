@@ -27,9 +27,96 @@ public:
 	virtual ActionResult<CNEOBot> OnSuspend( CNEOBot *me, Action<CNEOBot> *interruptingAction ) override;
 	virtual ActionResult<CNEOBot> OnResume( CNEOBot *me, Action<CNEOBot> *interruptingAction ) override;
 
+	static bool TryStuckRecovery( CNEOBot *me, INextBotEventResponder *behavior );
+
+	enum RecoveryWatchPhase
+	{
+		RECOVERY_APPROACH,
+		RECOVERY_CLIMB
+	};
+	static void BeginRecoveryWatch( CNEOBot *me, const CNavLadder *ladder, bool goingUp, const void *owner );
+	static void EndRecoveryWatch( CNEOBot *me, const void *owner );
+	static void UpdateRecoveryWatch( CNEOBot *me, const void *owner, const CNavArea *exitArea, RecoveryWatchPhase phase );
+	static void LatchRecoveryDismount( CNEOBot *me, const void *owner );
+	static void UpdateRecovery( CNEOBot *me );
+
+	enum ExpiryTimer
+	{
+		EXPIRY_CLIMB,
+		EXPIRY_DISMOUNT,
+		EXPIRY_STALL,
+		EXPIRY_APPROACH,
+		EXPIRY_MISS,
+		EXPIRY_STUCK
+	};
+	static bool TryExpiryTeleport( CNEOBot *me, const CNavLadder *ladder, bool goingUp,
+		const CNavArea *pathExit, const Vector *dismountPos, ExpiryTimer timer );
+	static bool TryStuckTeleport( CNEOBot *me );
+
 private:
+	friend class CNEOBot;
+	enum RecoveryTrigger
+	{
+		RECOVERY_SLIP = 1 << 0,
+		RECOVERY_BOUNCE = 1 << 1,
+		RECOVERY_STALL = 1 << 2,
+		RECOVERY_STUCK = 1 << 3,
+		RECOVERY_EXIT_TIMEOUT = 1 << 4,
+		RECOVERY_BOUNCE_LANDING = 1 << 5
+	};
+	static bool IsRecoveryOwner( CNEOBot *me, const void *owner );
+	static bool HasRecoveryIntent( CNEOBot *me );
+	static void RecoveryDecision( CNEOBot *me, RecoveryTrigger trigger, RecoveryWatchPhase phase, const char *gate );
+	struct LandingCandidate
+	{
+		Vector position;
+		float distanceSqr;
+	};
+	struct LandingProbe
+	{
+		const char *gate = "none";
+		int hit = -1;
+	};
+	static bool ResolveRecoveryExit( CNEOBot *me );
+	enum LandingSearchPurpose
+	{
+		WATCH_GEOMETRY,
+		RECOVERY_PLACEMENT,
+		RECOVERY_HANDOFF
+	};
+	static void FindRecoveryLandings( CNEOBot *me, LandingSearchPurpose purpose );
+	static bool ValidateLanding( CNEOBot *me, const Vector &point, Vector *landing, LandingProbe *probe, LandingSearchPurpose purpose );
+	static bool CheckLandingSupport( CNEOBot *me, const Vector &sample, float floorZ, LandingProbe *probe, LandingSearchPurpose purpose );
+	static void SaveLandingProbe( LandingProbe *probe, const trace_t &trace, const char *gate );
+	static int CompareLandings( const LandingCandidate *left, const LandingCandidate *right );
+	static bool IsRecoveryCorridor( CNEOBot *me );
+	static bool StartRecoveryC( CNEOBot *me );
+	static bool StartRecoveryA( CNEOBot *me, RecoveryWatchPhase phase, bool slide );
+	static void UpdateRecoverySlide( CNEOBot *me );
+	static bool FindRecoveryLaunch( CNEOBot *me, RecoveryWatchPhase phase );
+	static bool TryRecoveryLaunchAt( CNEOBot *me, float height, const Vector &normal );
+	static bool FindLaunchContact( CNEOBot *me, float height, const Vector &normal, Vector *point, trace_t *face );
+	static bool TraceLaunchFace( CNEOBot *me, const Vector &point, const Vector &normal, trace_t *face );
+	static bool SolveRecoveryFlight( CNEOBot *me, const Vector &start, Vector *velocity, float *flightTime );
+	static bool CheckRecoveryArc( CNEOBot *me, const Vector &start, const Vector &velocity, float flightTime );
+	static bool PlaceRecoveryLaunch( CNEOBot *me );
+	static void LaunchRecovery( CNEOBot *me );
+	static void UpdateRecoveryFlight( CNEOBot *me );
+	static void FallbackRecoveryC( CNEOBot *me, const char *gate );
+	static bool CheckRecoverySource( CNEOBot *me );
+	static bool PlaceRecoveryC( CNEOBot *me );
+	static void StopRecovery( CNEOBot *me, const char *result, const char *gate );
+	static bool FindRecoveryHandoff( CNEOBot *me );
+	static bool CheckRecoveryWalk( CNEOBot *me, const Vector &target );
+	static bool RecomputeRecoveryPath( CNEOBot *me );
+	static void BlockRecoveryLadder( CNEOBot *me, float duration );
+	static void ClearRecoveryInputs( CNEOBot *me );
+	static void TryRecoveryReturn( CNEOBot *me );
+
 	void EnterDismountPhase( CNEOBot *me );
 	void ResolveExitArea( CNEOBot *me );
+	bool TeleportOnExpiry( CNEOBot *me, ExpiryTimer timer );
+	bool IsMissedLanding( CNEOBot *me ) const;
 	const CNavArea *FindLanding( const PathFollower *path, const CNavArea *pathExit ) const;
 	const CNavArea *LadderEndArea() const;
 	bool IsNarrowLanding( CNEOBot *me ) const;

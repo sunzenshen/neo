@@ -299,6 +299,12 @@ public:
 
 	virtual void AvoidPlayers( CUserCmd *pCmd ) { }								// some game types allow players to pass through each other, this method pushes them apart
 
+#ifdef NEO
+	virtual void FilterUserCommand( CUserCmd *cmd )
+	{
+	}
+#endif
+
 public:
 	// begin INextBot ------------------------------------------------------------------------------------------------------------------
 	virtual void Update( void );												// (EXTEND) update internal state
@@ -1063,6 +1069,10 @@ inline void NextBotPlayer< PlayerType >::PhysicsSimulate( void )
 	_NextBot_BuildUserCommand( &userCmd, angles, forwardSpeed, strafeSpeed, verticalSpeed, inputButtons, 0 );
 
 	AvoidPlayers( &userCmd );
+
+#ifdef NEO
+	FilterUserCommand( &userCmd );
+#endif
 
 	// allocate a new command and add it to the player's list of command to process
 	this->ProcessUsercmds( &userCmd, 1, 1, 0, false );

@@ -17,6 +17,7 @@ public:
 	virtual ~CNEOBotLocomotion() { }
 
 	virtual void Update( void );								// (EXTEND) update internal state
+	void Upkeep( void ) override;
 
 	virtual void Approach( const Vector &pos, float goalWeight = 1.0f );	// move directly towards the given position
 

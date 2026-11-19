@@ -9,7 +9,7 @@
 
 //---------------------------------------------------------------------------------------------
 CNEOBotLadderApproach::CNEOBotLadderApproach( const CNavLadder *ladder, bool goingUp )
-	: m_ladder( ladder ), m_bGoingUp( goingUp ), m_bOverTop( false ), m_bFlushTop( false ), m_vecLastProgressPos( vec3_origin )
+	: m_ladder( ladder ), m_bGoingUp( goingUp ), m_bOverTop( false ), m_bFlushTop( false ), m_bLeftOverTop( false ), m_vecLastProgressPos( vec3_origin )
 {
 	m_ladderCenter = ladder ? ( ladder->m_top + ladder->m_bottom ) * 0.5f : vec3_origin;
 }
@@ -21,6 +21,12 @@ ActionResult<CNEOBot> CNEOBotLadderApproach::OnStart( CNEOBot *me, Action<CNEOBo
 	{
 		return Done( "No ladder specified" );
 	}
+
+	if ( me->IsLadderRecoveryBlocked( m_ladder, m_bGoingUp ) )
+	{
+		return Done( "Ladder excluded by bot recovery cooldown" );
+	}
+	CNEOBotLadderClimb::BeginRecoveryWatch( me, m_ladder, m_bGoingUp, this );
 
 	// Timeout for approach phase
 	m_timeoutTimer.Start( 3.0f );
@@ -82,6 +88,27 @@ ActionResult<CNEOBot> CNEOBotLadderApproach::Update( CNEOBot *me, float )
 		return Continue();
 	}
 
+	if ( !me->m_ladderRecovery.owner )
+	{
+		CNEOBotLadderClimb::BeginRecoveryWatch( me, m_ladder, m_bGoingUp, this );
+	}
+	CNEOBotLadderClimb::UpdateRecoveryWatch( me, this, nullptr, CNEOBotLadderClimb::RECOVERY_APPROACH );
+	if ( me->m_ladderRecovery.ownsInputs )
+	{
+		return Continue();
+	}
+	if ( me->m_ladderRecovery.owner == this && ( me->m_ladderRecovery.phase == CNEOBot::LadderRecoveryState::COMPLETE
+		|| me->m_ladderRecovery.phase == CNEOBot::LadderRecoveryState::FAILED ) )
+	{
+		return Done( "Ladder recovery episode finished" );
+	}
+
+	if ( m_timeoutTimer.IsElapsed() && CNEOBotLadderClimb::TryExpiryTeleport( me, m_ladder, m_bGoingUp, nullptr, nullptr,
+		CNEOBotLadderClimb::EXPIRY_APPROACH ) )
+	{
+		return Done( "Ladder approach timeout, placed on exit area" );
+	}
+
 	if ( m_timeoutTimer.IsElapsed() )
 	{
 		return Done( "Ladder approach timeout" );
@@ -138,6 +165,23 @@ ActionResult<CNEOBot> CNEOBotLadderApproach::Update( CNEOBot *me, float )
 	// Get ladder's outward normal in 2D
 	Vector2D ladderNormal2D = m_ladder->GetNormal().AsVector2D();
 	float dot = DotProduct2D( ladderNormal2D, to );
+
+	// Going down, level with the top, behind the hang point and within the ladder's width: walking on
+	// leaves the top forward, moving away from the face, so back out over the edge instead
+	if ( !m_bGoingUp && !m_bOverTop && !m_bLeftOverTop && mover->IsOnGround() && dot > 0.0f )
+	{
+		const Vector2D toFeet = ( myPos - m_ladder->m_top ).AsVector2D();
+		const float side = toFeet.x * ladderNormal2D.y - toFeet.y * ladderNormal2D.x;
+		const bool bLevel = fabsf( myPos.z - m_ladder->m_top.z ) <= mover->GetStepHeight();
+
+		if ( bLevel && fabsf( side ) <= ( m_ladder->m_width + body->GetHullWidth() ) * 0.5f )
+		{
+			m_bOverTop = true;
+			m_bFlushTop = true;
+			m_timeoutTimer.Start( OVER_TOP_TIMEOUT );
+			m_progressTimer.Start();
+		}
+	}
 
 	if ( m_bOverTop )
 	{
@@ -294,6 +338,7 @@ ActionResult<CNEOBot> CNEOBotLadderApproach::UpdateOverTop( CNEOBot *me, const V
 	if ( m_bFlushTop && out < 0.0f && m_progressTimer.IsGreaterThen( STALL_TIME ) )
 	{
 		m_bOverTop = false;
+		m_bLeftOverTop = true;
 		mover->StopCatchingLadder();
 		m_progressTimer.Start();
 		return Continue();
@@ -347,6 +392,15 @@ ActionResult<CNEOBot> CNEOBotLadderApproach::UpdateOverTop( CNEOBot *me, const V
 	}
 	else
 	{
+		// Backed out before the view has turned to the face, the bot drops where the locomotion cannot press
+		// into the face, so wait for the turn
+		Vector view;
+		me->EyeVectors( &view );
+		if ( DotProduct2D( view.AsVector2D(), intoFace.AsVector2D() ) < BACK_OUT_FACING )
+		{
+			return Continue();
+		}
+
 		me->PressBackwardButton();
 
 		// Backing out over a level top can wedge the bot on the ladder brush's top in front of the face,
@@ -385,6 +439,7 @@ bool CNEOBotLadderApproach::IsBarrierAhead( CNEOBot *me, const Vector &hangPos )
 //---------------------------------------------------------------------------------------------
 void CNEOBotLadderApproach::OnEnd( CNEOBot *me, Action<CNEOBot> *nextAction )
 {
+	CNEOBotLadderClimb::EndRecoveryWatch( me, this );
 	me->StartLookingAroundForEnemies();
 	me->ClearAttribute( CNEOBot::IGNORE_ENEMIES );
 	me->GetLocomotionInterface()->StopCatchingLadder();
@@ -398,6 +453,7 @@ void CNEOBotLadderApproach::OnEnd( CNEOBot *me, Action<CNEOBot> *nextAction )
 //---------------------------------------------------------------------------------------------
 ActionResult<CNEOBot> CNEOBotLadderApproach::OnSuspend( CNEOBot *me, Action<CNEOBot> *interruptingAction )
 {
+	CNEOBotLadderClimb::EndRecoveryWatch( me, this );
 	return Done( "OnSuspend: Cancel out of ladder approach, situation will likely become stale." );
 }
 
