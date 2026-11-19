@@ -135,8 +135,8 @@ bool CNEOBotLadderClimb::CheckLandingSupport( CNEOBot *me, const Vector &sample,
 	const CNavArea *area = state.landingArea->IsOverlapping( sample ) ? state.landingArea : unionArea;
 	if ( !area || !area->IsOverlapping( sample ) )
 	{
-		probe->gate = "no_support";
-		return false;
+		// A hull may overhang a narrow area onto world floor level with it
+		area = state.landingArea;
 	}
 
 	const float step = me->GetLocomotionInterface()->GetStepHeight();
