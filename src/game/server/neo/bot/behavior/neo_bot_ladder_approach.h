@@ -36,6 +36,7 @@ private:
 	bool m_bGoingUp;
 	bool m_bOverTop;	// going down from behind a barrier at the ladder's top (UpdateOverTop)
 	bool m_bFlushTop;	// over the top with no barrier: the floor is level with it
+	bool m_bLeftOverTop;	// gave up going over the top: stay on the ordinary approach
 	Vector m_vecLastProgressPos;
 	IntervalTimer m_progressTimer;	// since the bot last moved PROGRESS_STEP
 	Vector m_ladderCenter;

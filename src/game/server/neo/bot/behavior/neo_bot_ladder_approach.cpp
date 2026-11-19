@@ -9,7 +9,7 @@
 
 //---------------------------------------------------------------------------------------------
 CNEOBotLadderApproach::CNEOBotLadderApproach( const CNavLadder *ladder, bool goingUp )
-	: m_ladder( ladder ), m_bGoingUp( goingUp ), m_bOverTop( false ), m_bFlushTop( false ), m_vecLastProgressPos( vec3_origin )
+	: m_ladder( ladder ), m_bGoingUp( goingUp ), m_bOverTop( false ), m_bFlushTop( false ), m_bLeftOverTop( false ), m_vecLastProgressPos( vec3_origin )
 {
 	m_ladderCenter = ladder ? ( ladder->m_top + ladder->m_bottom ) * 0.5f : vec3_origin;
 }
@@ -166,6 +166,23 @@ ActionResult<CNEOBot> CNEOBotLadderApproach::Update( CNEOBot *me, float )
 	Vector2D ladderNormal2D = m_ladder->GetNormal().AsVector2D();
 	float dot = DotProduct2D( ladderNormal2D, to );
 
+	// Going down, level with the top, behind the hang point and within the ladder's width: walking on
+	// leaves the top forward, moving away from the face, so back out over the edge instead
+	if ( !m_bGoingUp && !m_bOverTop && !m_bLeftOverTop && mover->IsOnGround() && dot > 0.0f )
+	{
+		const Vector2D toFeet = ( myPos - m_ladder->m_top ).AsVector2D();
+		const float side = toFeet.x * ladderNormal2D.y - toFeet.y * ladderNormal2D.x;
+		const bool bLevel = fabsf( myPos.z - m_ladder->m_top.z ) <= mover->GetStepHeight();
+
+		if ( bLevel && fabsf( side ) <= ( m_ladder->m_width + body->GetHullWidth() ) * 0.5f )
+		{
+			m_bOverTop = true;
+			m_bFlushTop = true;
+			m_timeoutTimer.Start( OVER_TOP_TIMEOUT );
+			m_progressTimer.Start();
+		}
+	}
+
 	if ( m_bOverTop )
 	{
 		return UpdateOverTop( me, targetPos, range );
@@ -321,6 +338,7 @@ ActionResult<CNEOBot> CNEOBotLadderApproach::UpdateOverTop( CNEOBot *me, const V
 	if ( m_bFlushTop && out < 0.0f && m_progressTimer.IsGreaterThen( STALL_TIME ) )
 	{
 		m_bOverTop = false;
+		m_bLeftOverTop = true;
 		mover->StopCatchingLadder();
 		m_progressTimer.Start();
 		return Continue();
