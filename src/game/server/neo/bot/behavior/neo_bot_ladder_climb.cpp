@@ -827,7 +827,7 @@ static void LogExpiryTeleport( CNEOBot *me, const CNavLadder *ladder, bool going
 	const Vector &from, const Vector &to, const CNavArea *area, const char *gate )
 {
 	const bool placed = FStrEq( gate, "none" );
-	Msg( "NEO_LADTELE %s t=%.2f bot=%d lad=%u up=%d trigger=%s timer=%s ghost=%d from=%.0f,%.0f,%.0f to=%.0f,%.0f,%.0f area=%u gate=%s\n",
+	DevMsg( "NEO_LADTELE %s t=%.2f bot=%d lad=%u up=%d trigger=%s timer=%s ghost=%d from=%.0f,%.0f,%.0f to=%.0f,%.0f,%.0f area=%u gate=%s\n",
 		placed ? "placed" : "refused", gpGlobals->curtime, me->entindex(), ladder->GetID(), goingUp ? 1 : 0,
 		ExpiryTriggerName( timer ), ExpiryTimerName( timer ), me->IsCarryingGhost() ? 1 : 0,
 		from.x, from.y, from.z, to.x, to.y, to.z, area ? area->GetID() : 0, gate );
