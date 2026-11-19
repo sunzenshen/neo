@@ -648,6 +648,13 @@ void CLagCompensationManager::BacktrackPlayer( CBasePlayer *pPlayer, float flTar
 	flags |= LC_ANIMATION_CHANGED;
 	restore->m_masterSequence = pPlayer->GetSequence();
 	restore->m_masterCycle = pPlayer->GetCycle();
+#ifdef NEO
+	// FinishLagCompensation writes these back; without the live values it would zero every pose.
+	for ( int i = 0; i < MAXSTUDIOPOSEPARAM; i++ )
+	{
+		restore->m_flPoseParameters[i] = pPlayer->GetPoseParameter( i );
+	}
+#endif
 
 	bool interpolationAllowed = false;
 	if( prevRecord && (record->m_masterSequence == prevRecord->m_masterSequence) )
@@ -871,6 +878,14 @@ void CLagCompensationManager::FinishLagCompensation( CBasePlayer *player )
 		{
 			pPlayer->SetSimulationTime( restore->m_flSimulationTime );
 		}
+
+#ifdef NEO
+		// The bone cache still holds the rewound pose, and a query later this tick would reuse it.
+		if ( restoreSimulationTime && sv_lagflushbonecache.GetBool() )
+		{
+			pPlayer->InvalidateBoneCache();
+		}
+#endif
 	}
 
 	m_isCurrentlyDoingCompensation = false;
