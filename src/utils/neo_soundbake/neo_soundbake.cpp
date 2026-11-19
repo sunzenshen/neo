@@ -1,0 +1,970 @@
+//========= NEOTOKYO;REBUILD =========//
+//
+// neo_soundbake: bakes a map's acoustic probes (Steam Audio reverb and pathing) at compile time
+// and stores them in the BSP as a game lump, so the game loads them instead of baking at runtime.
+//
+// Run after VRAD, on the BSP it wrote:
+//     neo_soundbake -game <mod dir> [-threads <n>] [-phonon <library>] [-obj] [-dumpprobes <file>]
+//                   [-probes <file>] [-navmask [<m>]] [-pathrange <m>] [-appid_dir_<appid> <dir>] <map.bsp>
+// In Hammer++'s expert compile configuration: $bindir\neo_soundbake.exe, parameters
+//     -game $gamedir $path\$file.bsp
+// after the VRAD step and before the copy into the game's maps directory.
+//
+// -dumpprobes writes the probe centres the bake would use to a file ("x y z" in metres per line) and
+// stops; -probes bakes the centres listed in such a file instead, e.g. a filtered copy; -navmask
+// keeps only the probes within a margin (default 2 m) of an area in the map's maps/nav/<map>.nav;
+// -pathrange sets the longest baked path in metres.
+//
+// It places probes and builds the acoustic scene with the very code the client uses
+// (game/client/neo/audio), against the same content: the engine file system with the mod's
+// gameinfo.txt search paths, the map's own pakfile, and vphysics for surface properties and static
+// prop collision. It must therefore live in the engine's bin/<platform> directory (bin/x64 or
+// bin/linux64), next to filesystem_stdio and vphysics, like VBSP and VRAD. Windows and Linux.
+//
+//====================================//
+
+#include <stdint.h>
+#include <stdio.h>
+#include <algorithm>
+#include <vector>
+
+#ifdef _WIN32
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <windows.h>
+#include <direct.h>
+#else
+#include <errno.h>
+#include <stdlib.h>
+#include <string.h>
+#include <sys/stat.h>
+#include <unistd.h>
+#endif
+
+#include "bspfile.h"
+#include "filesystem.h"
+#include "filesystem_init.h"
+#include "KeyValues.h"
+#include "mathlib/mathlib.h"
+#include "tier0/dbg.h"
+#include "tier0/icommandline.h"
+#include "tier0/platform.h"
+#include "tier0/threadtools.h"
+#include "tier1/interface.h"
+#include "tier1/strtools.h"
+#include "tier1/utlbuffer.h"
+#include "vphysics_interface.h"
+
+#include "neo_audio_geometry.h"
+#include "neo_audio_probe_lump.h"
+#include "neo_audio_probes.h"
+#include "neo_spatializer.h"
+#include "neo/nav_shared.h"
+
+// memdbgon must be the last include file in a .cpp file!!!
+#include "tier0/memdbgon.h"
+
+// utils/lzma/lzma.cpp: Valve's lzma_header_t format, which the client's CLZMA decodes. Free with free().
+unsigned char *LZMA_Compress(unsigned char *pInput, unsigned int inputSize, unsigned int *pOutputSize);
+
+namespace
+{
+
+// As the client renders; the bake itself does not depend on them.
+constexpr int kBakeSampleRate = 48000;
+constexpr int kBakeFrameSize = 512;
+constexpr float kBakeProgressStep = 0.05f;
+constexpr unsigned kBakePollMs = 250;
+
+#ifdef _WIN32
+constexpr char kPhononLibrary[] = "phonon.dll";
+#else
+constexpr char kPhononLibrary[] = "libphonon.so";
+
+// Where Steam keeps steamapps on Linux, relative to $HOME: the native client's links and data
+// directory, and the Flatpak's.
+const char *const kSteamRootsUnderHome[] = {
+	".steam/steam",
+	".steam/root",
+	".local/share/Steam",
+	".var/app/com.valvesoftware.Steam/.local/share/Steam",
+};
+#endif
+
+constexpr char kGameInfoPathToken[] = "|gameinfo_path|";
+constexpr char kAppIdToken[] = "|appid_";
+constexpr char kSurfacePropManifest[] = "scripts/surfaceproperties_manifest.txt";
+
+// -navmask keeps a probe only where a player can hear: within this distance of a nav area and
+// within this height window over the area's floor.
+constexpr float kNavMaskMarginMetres = 2.0f;
+constexpr float kNavMaskMinHeightMetres = -0.5f;
+constexpr float kNavMaskMaxHeightMetres = 3.0f;
+constexpr float kNavMetresPerUnit = 0.0254f; // as the acoustic code: 1 Source unit = 1 inch
+
+// Record sizes in a nav file the mask skips over (CNavArea::Load, game/server/nav_file.cpp).
+constexpr int kNavLadderDirections = 2;
+constexpr int kNavHidingSpotBytes = 17; // id, position, flags
+constexpr int kNavEncounterBytes = 10; // from id and direction, to id and direction
+constexpr int kNavEncounterSpotBytes = 5; // spot id, position along the path
+constexpr int kNavVisibleAreaBytes = 5; // area id, attributes
+
+IFileSystem *g_pBakeFileSystem = nullptr;
+
+bool Fail(const char *pszFormat, ...)
+{
+	char message[2048];
+	va_list args;
+	va_start(args, pszFormat);
+	V_vsnprintf(message, sizeof(message), pszFormat, args);
+	va_end(args);
+	Warning("neo_soundbake: %s\n", message);
+	return false;
+}
+
+void ToForwardSlashes(char *pszPath)
+{
+	V_FixSlashes(pszPath, '/');
+}
+
+//-----------------------------------------------------------------------------
+// Appid mounting. gameinfo.txt mounts Source SDK Base content with |appid_N|, which the SDK's
+// tool file system init refuses ("not supported on non-engine DLL projects"). So the install
+// directory is found the way Steam records it, and the paths are rewritten before loading.
+//-----------------------------------------------------------------------------
+bool LoadKeyValuesAbsolute(KeyValues *pKv, const char *pszPath)
+{
+	pKv->UsesEscapeSequences(true);
+	return pKv->LoadFromFile(g_pBakeFileSystem, pszPath, nullptr);
+}
+
+bool FindSteamRoot(char *pszOut, int outSize)
+{
+#ifdef _WIN32
+	DWORD size = static_cast<DWORD>(outSize);
+	if (RegGetValueA(HKEY_CURRENT_USER, "Software\\Valve\\Steam", "SteamPath", RRF_RT_REG_SZ, nullptr, pszOut, &size) == ERROR_SUCCESS)
+	{
+		ToForwardSlashes(pszOut);
+		return true;
+	}
+#else
+	// The first install that has a library list; the native client's links usually resolve to
+	// the same place.
+	const char *pszHome = getenv("HOME");
+	for (const char *pszRoot : kSteamRootsUnderHome)
+	{
+		char libraries[MAX_PATH];
+		V_snprintf(pszOut, outSize, "%s/%s", pszHome ? pszHome : "", pszRoot);
+		V_snprintf(libraries, sizeof(libraries), "%s/steamapps/libraryfolders.vdf", pszOut);
+		if (pszHome && access(libraries, R_OK) == 0)
+		{
+			return true;
+		}
+	}
+#endif
+	return false;
+}
+
+// A private directory for the resolved gameinfo.txt; removed again by RemoveTempDir.
+void MakeTempDir(char *pszOut, int outSize)
+{
+#ifdef _WIN32
+	char tempRoot[MAX_PATH];
+	GetTempPathA(sizeof(tempRoot), tempRoot);
+	V_snprintf(pszOut, outSize, "%sneo_soundbake_%lu", tempRoot, GetCurrentProcessId());
+	_mkdir(pszOut);
+#else
+	const char *pszTempRoot = getenv("TMPDIR");
+	V_snprintf(pszOut, outSize, "%s/neo_soundbake_%d", (pszTempRoot && *pszTempRoot) ? pszTempRoot : "/tmp",
+			   static_cast<int>(getpid()));
+	if (mkdir(pszOut, 0700) != 0 && errno != EEXIST)
+	{
+		Warning("neo_soundbake: cannot create %s: %s\n", pszOut, strerror(errno));
+	}
+#endif
+}
+
+void RemoveTempDir(const char *pszDir)
+{
+#ifdef _WIN32
+	_rmdir(pszDir);
+#else
+	rmdir(pszDir);
+#endif
+}
+
+bool ResolveAppInstallDir(int appId, char *pszOut, int outSize)
+{
+	// An explicit -appid_dir_<appid> <dir> wins, e.g. for a Steam install in an unusual place.
+	char overrideParm[64];
+	V_snprintf(overrideParm, sizeof(overrideParm), "-appid_dir_%d", appId);
+	if (const char *pszOverride = CommandLine()->ParmValue(overrideParm))
+	{
+		V_strncpy(pszOut, pszOverride, outSize);
+		ToForwardSlashes(pszOut);
+		return true;
+	}
+
+	char steamRoot[MAX_PATH];
+	if (!FindSteamRoot(steamRoot, sizeof(steamRoot)))
+	{
+		return Fail("cannot find Steam to resolve appid %d; pass %s <dir>", appId, overrideParm);
+	}
+
+	char path[MAX_PATH];
+	V_snprintf(path, sizeof(path), "%s/steamapps/libraryfolders.vdf", steamRoot);
+	KeyValues::AutoDelete pLibraries("libraryfolders");
+	if (!LoadKeyValuesAbsolute(pLibraries, path))
+	{
+		return Fail("cannot read %s to resolve appid %d; pass %s <dir>", path, appId, overrideParm);
+	}
+
+	char appKey[32];
+	V_snprintf(appKey, sizeof(appKey), "%d", appId);
+	for (KeyValues *pLibrary = pLibraries->GetFirstTrueSubKey(); pLibrary; pLibrary = pLibrary->GetNextTrueSubKey())
+	{
+		KeyValues *pApps = pLibrary->FindKey("apps");
+		const char *pszLibraryPath = pLibrary->GetString("path");
+		if (!pApps || !pApps->FindKey(appKey) || !*pszLibraryPath)
+		{
+			continue;
+		}
+
+		V_snprintf(path, sizeof(path), "%s/steamapps/appmanifest_%d.acf", pszLibraryPath, appId);
+		KeyValues::AutoDelete pManifest("AppState");
+		if (!LoadKeyValuesAbsolute(pManifest, path) || !*pManifest->GetString("installdir"))
+		{
+			return Fail("cannot read %s; pass %s <dir>", path, overrideParm);
+		}
+		V_snprintf(pszOut, outSize, "%s/steamapps/common/%s", pszLibraryPath, pManifest->GetString("installdir"));
+		ToForwardSlashes(pszOut);
+		return true;
+	}
+	return Fail("appid %d is not installed in any Steam library; install it or pass %s <dir>", appId, overrideParm);
+}
+
+// Writes a copy of gameInfoDir/gameinfo.txt into tempDir with |gameinfo_path| and |appid_N|
+// replaced by absolute directories, which the SDK search path loader handles natively.
+bool WriteResolvedGameInfo(const char *pszGameInfoDir, const char *pszTempDir)
+{
+	char path[MAX_PATH];
+	V_snprintf(path, sizeof(path), "%s/gameinfo.txt", pszGameInfoDir);
+	KeyValues::AutoDelete pGameInfo("GameInfo");
+	if (!pGameInfo->LoadFromFile(g_pBakeFileSystem, path, nullptr))
+	{
+		return Fail("cannot read %s", path);
+	}
+	KeyValues *pFileSystem = pGameInfo->FindKey("FileSystem");
+	KeyValues *pSearchPaths = pFileSystem ? pFileSystem->FindKey("SearchPaths") : nullptr;
+	if (!pSearchPaths)
+	{
+		return Fail("%s has no FileSystem/SearchPaths", path);
+	}
+
+	char gameInfoDir[MAX_PATH];
+	V_strncpy(gameInfoDir, pszGameInfoDir, sizeof(gameInfoDir));
+	ToForwardSlashes(gameInfoDir);
+	for (KeyValues *pPath = pSearchPaths->GetFirstValue(); pPath; pPath = pPath->GetNextValue())
+	{
+		const char *pszLocation = pPath->GetString();
+		char resolved[MAX_PATH];
+		if (V_strnicmp(pszLocation, kGameInfoPathToken, sizeof(kGameInfoPathToken) - 1) == 0)
+		{
+			V_snprintf(resolved, sizeof(resolved), "%s/%s", gameInfoDir, pszLocation + sizeof(kGameInfoPathToken) - 1);
+		}
+		else if (V_strnicmp(pszLocation, kAppIdToken, sizeof(kAppIdToken) - 1) == 0)
+		{
+			const char *pszAppId = pszLocation + sizeof(kAppIdToken) - 1;
+			const char *pszRest = strchr(pszAppId, '|');
+			char installDir[MAX_PATH];
+			if (!pszRest || !ResolveAppInstallDir(atoi(pszAppId), installDir, sizeof(installDir)))
+			{
+				return pszRest ? false : Fail("malformed search path %s in %s", pszLocation, path);
+			}
+			V_snprintf(resolved, sizeof(resolved), "%s/%s", installDir, pszRest + 1);
+		}
+		else
+		{
+			continue;
+		}
+		ToForwardSlashes(resolved);
+		pPath->SetStringValue(resolved);
+	}
+
+	// Plain stdio: the temp directory is outside the file system's write paths, which it complains about.
+	CUtlBuffer text(0, 0, CUtlBuffer::TEXT_BUFFER);
+	pGameInfo->RecursiveSaveToFile(text, 0);
+	V_snprintf(path, sizeof(path), "%s/gameinfo.txt", pszTempDir);
+	FILE *pFile = fopen(path, "wb");
+	const bool bWritten = pFile && fwrite(text.Base(), 1, text.TellPut(), pFile) == static_cast<size_t>(text.TellPut());
+	if (pFile)
+	{
+		fclose(pFile);
+	}
+	return bWritten ? true : Fail("cannot write %s", path);
+}
+
+bool InitFileSystem(const char *pszBspPath, char *pszGameInfoDir, int gameInfoDirSize)
+{
+	// The SDK falls back to a file system that no longer exists when filesystem_stdio is not beside
+	// the executable, with an unhelpful message; say where the tool has to be instead.
+	char fileSystemDll[MAX_PATH];
+	bool bSteam = false;
+	if (FileSystem_GetFileSystemDLLName(fileSystemDll, sizeof(fileSystemDll), bSteam) != FS_OK || bSteam
+		|| !V_stristr(fileSystemDll, "filesystem_stdio"))
+	{
+		return Fail("filesystem_stdio is not next to neo_soundbake: put it in the engine's bin%s directory, beside VBSP",
+					PLATFORM_DIR);
+	}
+
+	CFSLoadModuleInfo loadInfo;
+	loadInfo.m_pFileSystemDLLName = fileSystemDll;
+	loadInfo.m_pDirectoryName = pszBspPath;
+	loadInfo.m_bOnlyUseDirectoryName = false;
+	loadInfo.m_ConnectFactory = Sys_GetFactoryThis();
+	loadInfo.m_bSteam = bSteam;
+	loadInfo.m_bToolsMode = true;
+	if (FileSystem_LoadFileSystemModule(loadInfo) != FS_OK)
+	{
+		return Fail("cannot load the file system (is the tool next to filesystem_stdio, and -game set?)");
+	}
+	g_pBakeFileSystem = loadInfo.m_pFileSystem;
+
+	CFSMountContentInfo mountInfo;
+	mountInfo.m_pDirectoryName = loadInfo.m_GameInfoPath;
+	mountInfo.m_pFileSystem = loadInfo.m_pFileSystem;
+	mountInfo.m_bToolsMode = true;
+	if (FileSystem_MountContent(mountInfo) != FS_OK)
+	{
+		return Fail("cannot mount content");
+	}
+
+	// The resolved gameinfo.txt only has to exist while the search paths load.
+	char tempDir[MAX_PATH];
+	MakeTempDir(tempDir, sizeof(tempDir));
+	const bool bWritten = WriteResolvedGameInfo(loadInfo.m_GameInfoPath, tempDir);
+	FSReturnCode_t searchPathsResult = FS_INVALID_PARAMETERS;
+	if (bWritten)
+	{
+		CFSSearchPathsInit searchInfo;
+		searchInfo.m_pDirectoryName = tempDir;
+		searchInfo.m_pFileSystem = loadInfo.m_pFileSystem;
+		searchPathsResult = FileSystem_LoadSearchPaths(searchInfo);
+	}
+	char tempGameInfo[MAX_PATH];
+	V_snprintf(tempGameInfo, sizeof(tempGameInfo), "%s/gameinfo.txt", tempDir);
+	remove(tempGameInfo);
+	RemoveTempDir(tempDir);
+	if (!bWritten || searchPathsResult != FS_OK)
+	{
+		return bWritten ? Fail("cannot load the search paths of %s/gameinfo.txt", loadInfo.m_GameInfoPath) : false;
+	}
+
+	FileSystem_AddSearchPath_Platform(loadInfo.m_pFileSystem, loadInfo.m_GameInfoPath);
+	V_strncpy(pszGameInfoDir, loadInfo.m_GameInfoPath, gameInfoDirSize);
+
+	// Map-specific materials (cubemap and water patches) live in the map's own pakfile.
+	loadInfo.m_pFileSystem->AddSearchPath(pszBspPath, "GAME", PATH_ADD_TO_HEAD);
+	return true;
+}
+
+//-----------------------------------------------------------------------------
+// vphysics, for surface properties and static prop collision, as the game sets it up
+// (PhysParseSurfaceData) and as VBSP loads it.
+//-----------------------------------------------------------------------------
+bool InitPhysics(IPhysicsSurfaceProps *&pSurfaceProps, IPhysicsCollision *&pCollision)
+{
+	CSysModule *pPhysicsModule = Sys_LoadModule("vphysics");
+	CreateInterfaceFn physicsFactory = pPhysicsModule ? Sys_GetFactory(pPhysicsModule) : nullptr;
+	if (!physicsFactory)
+	{
+		return Fail("cannot load vphysics (is the tool next to it?)");
+	}
+	pSurfaceProps = static_cast<IPhysicsSurfaceProps *>(physicsFactory(VPHYSICS_SURFACEPROPS_INTERFACE_VERSION, nullptr));
+	pCollision = static_cast<IPhysicsCollision *>(physicsFactory(VPHYSICS_COLLISION_INTERFACE_VERSION, nullptr));
+	if (!pSurfaceProps || !pCollision)
+	{
+		return Fail("vphysics lacks the surface property or collision interface");
+	}
+
+	KeyValues::AutoDelete pManifest(kSurfacePropManifest);
+	if (!pManifest->LoadFromFile(g_pBakeFileSystem, kSurfacePropManifest, "GAME"))
+	{
+		return Fail("cannot read %s", kSurfacePropManifest);
+	}
+	for (KeyValues *pFile = pManifest->GetFirstSubKey(); pFile; pFile = pFile->GetNextKey())
+	{
+		if (V_stricmp(pFile->GetName(), "file") != 0)
+		{
+			continue;
+		}
+		CUtlBuffer text(0, 0, CUtlBuffer::TEXT_BUFFER);
+		if (!g_pBakeFileSystem->ReadFile(pFile->GetString(), "GAME", text))
+		{
+			Warning("neo_soundbake: cannot read %s, skipping it\n", pFile->GetString());
+			continue;
+		}
+		text.PutChar('\0');
+		pSurfaceProps->ParseSurfaceData(pFile->GetString(), static_cast<const char *>(text.Base()));
+	}
+	return true;
+}
+
+//-----------------------------------------------------------------------------
+// Writing the game lump. The game lump directory (LUMP_GAME_LUMP) holds absolute file offsets, so
+// it is rewritten whole with every other game lump copied byte for byte. It goes in place when it
+// already ends the file (a previous bake), else at the end of the file: nothing else moves.
+//-----------------------------------------------------------------------------
+bool ReadWholeFile(const char *pszPath, std::vector<uint8_t> &out)
+{
+	FILE *pFile = fopen(pszPath, "rb");
+	if (!pFile)
+	{
+		return false;
+	}
+	fseek(pFile, 0, SEEK_END);
+	const long size = ftell(pFile);
+	fseek(pFile, 0, SEEK_SET);
+	out.resize(size > 0 ? static_cast<size_t>(size) : 0);
+	const bool bRead = size > 0 && fread(out.data(), 1, out.size(), pFile) == out.size();
+	fclose(pFile);
+	return bRead;
+}
+
+bool WriteProbeGameLump(const char *pszBspPath, const uint8_t *pLump, uint32_t lumpSize)
+{
+	std::vector<uint8_t> file;
+	if (!ReadWholeFile(pszBspPath, file) || file.size() < sizeof(dheader_t))
+	{
+		return Fail("cannot read %s", pszBspPath);
+	}
+	dheader_t header;
+	memcpy(&header, file.data(), sizeof(header));
+	lump_t &gameLump = header.lumps[LUMP_GAME_LUMP];
+	if (gameLump.uncompressedSize != 0 || gameLump.fileofs < 0 || gameLump.filelen < 0
+		|| static_cast<size_t>(gameLump.fileofs) + gameLump.filelen > file.size())
+	{
+		return Fail("%s has a malformed game lump directory", pszBspPath);
+	}
+
+	// Every game lump but a previous bake's, with its data.
+	struct KeptLump
+	{
+		dgamelump_t entry;
+		std::vector<uint8_t> data;
+	};
+	std::vector<KeptLump> kept;
+	if (gameLump.filelen >= static_cast<int>(sizeof(dgamelumpheader_t)))
+	{
+		dgamelumpheader_t directory;
+		memcpy(&directory, file.data() + gameLump.fileofs, sizeof(directory));
+		if (directory.lumpCount < 0
+			|| directory.lumpCount > (gameLump.filelen - static_cast<int>(sizeof(directory))) / static_cast<int>(sizeof(dgamelump_t)))
+		{
+			return Fail("%s has a malformed game lump directory", pszBspPath);
+		}
+		for (int i = 0; i < directory.lumpCount; ++i)
+		{
+			dgamelump_t entry;
+			memcpy(&entry, file.data() + gameLump.fileofs + sizeof(directory) + i * sizeof(dgamelump_t), sizeof(entry));
+			if (entry.id == NeoSpatial::PROBE_GAME_LUMP_ID || (entry.id == 0 && entry.filelen == 0))
+			{
+				continue; // the previous bake, or the terminal entry compression appends
+			}
+			if (entry.flags & GAMELUMPFLAG_COMPRESSED)
+			{
+				return Fail("%s has compressed game lumps; run neo_soundbake before compressing the map (bspzip -repack -compress)",
+							pszBspPath);
+			}
+			if (entry.fileofs < 0 || entry.filelen < 0 || static_cast<size_t>(entry.fileofs) + entry.filelen > file.size())
+			{
+				return Fail("%s has a malformed game lump", pszBspPath);
+			}
+			KeptLump keptLump;
+			keptLump.entry = entry;
+			keptLump.data.assign(file.begin() + entry.fileofs, file.begin() + entry.fileofs + entry.filelen);
+			kept.push_back(std::move(keptLump));
+		}
+	}
+
+	// Replace the directory in place when it ends the file; else leave it, unreferenced, and append.
+	const bool bAtEnd = gameLump.filelen > 0 && static_cast<size_t>(gameLump.fileofs) + gameLump.filelen == file.size();
+	file.resize(bAtEnd ? static_cast<size_t>(gameLump.fileofs) : file.size());
+	file.resize((file.size() + 3) & ~static_cast<size_t>(3), 0); // lumps are 4-byte aligned
+
+	dgamelump_t probeEntry = {};
+	probeEntry.id = NeoSpatial::PROBE_GAME_LUMP_ID;
+	probeEntry.version = NeoSpatial::PROBE_GAME_LUMP_VERSION;
+	probeEntry.filelen = static_cast<int>(lumpSize);
+
+	const size_t blockStart = file.size();
+	const int count = static_cast<int>(kept.size()) + 1;
+	size_t dataOffset = blockStart + sizeof(dgamelumpheader_t) + count * sizeof(dgamelump_t);
+	std::vector<dgamelump_t> entries;
+	for (KeptLump &keptLump : kept)
+	{
+		keptLump.entry.fileofs = static_cast<int>(dataOffset);
+		dataOffset += keptLump.data.size();
+		entries.push_back(keptLump.entry);
+	}
+	probeEntry.fileofs = static_cast<int>(dataOffset);
+	entries.push_back(probeEntry);
+	if (dataOffset + lumpSize > static_cast<size_t>(INT32_MAX))
+	{
+		return Fail("%s would grow past 2 GB", pszBspPath);
+	}
+
+	const dgamelumpheader_t directory = { count };
+	const uint8_t *pDirectory = reinterpret_cast<const uint8_t *>(&directory);
+	file.insert(file.end(), pDirectory, pDirectory + sizeof(directory));
+	const uint8_t *pEntries = reinterpret_cast<const uint8_t *>(entries.data());
+	file.insert(file.end(), pEntries, pEntries + entries.size() * sizeof(dgamelump_t));
+	for (const KeptLump &keptLump : kept)
+	{
+		file.insert(file.end(), keptLump.data.begin(), keptLump.data.end());
+	}
+	file.insert(file.end(), pLump, pLump + lumpSize);
+
+	gameLump.fileofs = static_cast<int>(blockStart);
+	gameLump.filelen = static_cast<int>(file.size() - blockStart);
+	memcpy(file.data(), &header, sizeof(header));
+
+	// Through a temporary file, so a failed write never leaves a broken map behind.
+	char tempPath[MAX_PATH];
+	V_snprintf(tempPath, sizeof(tempPath), "%s.soundbake", pszBspPath);
+	FILE *pOut = fopen(tempPath, "wb");
+	bool bWritten = pOut && fwrite(file.data(), 1, file.size(), pOut) == file.size();
+	if (pOut)
+	{
+		bWritten = (fclose(pOut) == 0) && bWritten;
+	}
+#ifdef _WIN32
+	if (!bWritten || !MoveFileExA(tempPath, pszBspPath, MOVEFILE_REPLACE_EXISTING))
+#else
+	if (!bWritten || rename(tempPath, pszBspPath) != 0)
+#endif
+	{
+		remove(tempPath);
+		return Fail("cannot write %s", pszBspPath);
+	}
+	return true;
+}
+
+// Reloads the written map the way the game does (CNeoHrtfSystem::LoadBakedProbeLump), so a bake
+// that would not load in game fails here rather than silently falling back at runtime.
+bool VerifyBakedMap(const char *pszBspPath, const CNeoAudioGeometry::Services &services, NeoSpatial::ISpatializer &spatializer,
+					const NeoSpatial::ProbeSet &baked, const CNeoAcousticMaterials &materials)
+{
+	char error[512];
+	CNeoAudioGeometry geometry;
+	if (!geometry.LoadFromBsp(services, materials, pszBspPath, error, sizeof(error)))
+	{
+		return Fail("the written map does not load: %s", error);
+	}
+	NeoSpatial::ProbeLumpHeader header;
+	NeoSpatial::ProbeSet probes;
+	CUtlVector<uint8> storage;
+	const uint8 *pBatches = nullptr;
+	if (!geometry.ReadBakedProbes(header, probes, storage, pBatches, error, sizeof(error)))
+	{
+		return Fail("the written map's baked probes do not read back: %s", error[0] ? error : "no probe lump");
+	}
+	if (probes.centres.size() != baked.centres.size() || probes.batchStarts != baked.batchStarts
+		|| probes.batchAreas != baked.batchAreas)
+	{
+		return Fail("the written map's baked probes differ from the bake");
+	}
+	if (!spatializer.LoadProbeBatches(pBatches, header.batchesSize, error, sizeof(error))
+		|| spatializer.GetBakeState(nullptr) != NeoSpatial::BakeState::Done)
+	{
+		return Fail("the written map's baked probes do not load: %s", error[0] ? error : "incomplete bake");
+	}
+	return true;
+}
+
+// Probe centres as text, "x y z" in metres per line: what -dumpprobes writes and -probes reads.
+bool WriteProbeCentres(const char *pszPath, const std::vector<NeoSpatial::Vec3> &centres)
+{
+	FILE *pFile = fopen(pszPath, "w");
+	if (!pFile)
+	{
+		return Fail("cannot write %s", pszPath);
+	}
+	for (const NeoSpatial::Vec3 &centre : centres)
+	{
+		fprintf(pFile, "%.9g %.9g %.9g\n", centre.x, centre.y, centre.z);
+	}
+	return (fclose(pFile) == 0) || Fail("cannot write %s", pszPath);
+}
+
+bool ReadProbeCentres(const char *pszPath, std::vector<NeoSpatial::Vec3> &out)
+{
+	FILE *pFile = fopen(pszPath, "r");
+	if (!pFile)
+	{
+		return Fail("cannot read %s", pszPath);
+	}
+	NeoSpatial::Vec3 centre;
+	while (fscanf(pFile, "%f %f %f", &centre.x, &centre.y, &centre.z) == 3)
+	{
+		out.push_back(centre);
+	}
+	const bool bComplete = feof(pFile) != 0;
+	fclose(pFile);
+	return bComplete || Fail("%s: expected three numbers per line after probe %d", pszPath, static_cast<int>(out.size()));
+}
+
+// A nav area's floor in metres: its extent and the heights of its four corners.
+struct NavFloor
+{
+	float x0, y0, x1, y1;
+	float zNw, zNe, zSw, zSe;
+};
+
+// The floors of every area in the map's nav file, read as CNavMesh::Load and CNavArea::Load
+// (game/server/nav_file.cpp) read the current version; everything else in the file is skipped.
+bool ReadNavFloors(const char *pszMapName, std::vector<NavFloor> &out)
+{
+	char navPath[MAX_PATH];
+	V_snprintf(navPath, sizeof(navPath), FORMAT_NAVFILE, pszMapName);
+	V_FixSlashes(navPath);
+	CUtlBuffer file;
+	if (!g_pBakeFileSystem->ReadFile(navPath, "GAME", file))
+	{
+		return Fail("-navmask: cannot read %s (generate the map's nav first)", navPath);
+	}
+
+	const unsigned int magic = file.GetUnsignedInt();
+	const unsigned int version = file.GetUnsignedInt();
+	const unsigned int subVersion = file.GetUnsignedInt();
+	if (magic != NAV_MAGIC_NUMBER || version != NavCurrentVersion || subVersion != 0)
+	{
+		return Fail("-navmask: %s is not a version %d nav file without custom data", navPath, NavCurrentVersion);
+	}
+
+	// A record count that runs past the end of the file marks it as truncated instead of seeking.
+	bool bTruncated = false;
+	auto skip = [&](unsigned int count, int recordBytes)
+	{
+		const int64 bytes = static_cast<int64>(count) * recordBytes;
+		bTruncated = bTruncated || !file.IsValid() || bytes > file.GetBytesRemaining();
+		if (!bTruncated)
+		{
+			file.SeekGet(CUtlBuffer::SEEK_CURRENT, static_cast<int>(bytes));
+		}
+	};
+
+	skip(1, sizeof(uint32) + sizeof(uint8)); // BSP size, analyzed
+	const unsigned int numPlaces = file.GetUnsignedShort();
+	for (unsigned int i = 0; i < numPlaces && !bTruncated; ++i)
+	{
+		skip(file.GetUnsignedShort(), 1);
+	}
+	skip(1, sizeof(uint8)); // has unnamed areas
+
+	const unsigned int numAreas = file.GetUnsignedInt();
+	for (unsigned int a = 0; a < numAreas && !bTruncated; ++a)
+	{
+		skip(1, sizeof(uint32) + sizeof(int32)); // id, attributes
+		Vector nw, se;
+		file.Get(&nw, sizeof(nw));
+		file.Get(&se, sizeof(se));
+		const float neZ = file.GetFloat();
+		const float swZ = file.GetFloat();
+		out.push_back({ Min(nw.x, se.x) * kNavMetresPerUnit, Min(nw.y, se.y) * kNavMetresPerUnit,
+						Max(nw.x, se.x) * kNavMetresPerUnit, Max(nw.y, se.y) * kNavMetresPerUnit,
+						nw.z * kNavMetresPerUnit, neZ * kNavMetresPerUnit, swZ * kNavMetresPerUnit, se.z * kNavMetresPerUnit });
+
+		for (int d = 0; d < NUM_DIRECTIONS; ++d)
+		{
+			skip(file.GetUnsignedInt(), sizeof(uint32));
+		}
+		skip(file.GetUnsignedChar(), kNavHidingSpotBytes);
+		const unsigned int numEncounters = file.GetUnsignedInt();
+		for (unsigned int e = 0; e < numEncounters && !bTruncated; ++e)
+		{
+			skip(1, kNavEncounterBytes);
+			skip(file.GetUnsignedChar(), kNavEncounterSpotBytes);
+		}
+		skip(1, sizeof(uint16)); // place
+		for (int d = 0; d < kNavLadderDirections; ++d)
+		{
+			skip(file.GetUnsignedInt(), sizeof(uint32));
+		}
+		skip(MAX_NAV_TEAMS, sizeof(float)); // earliest occupy times
+		skip(NUM_CORNERS, sizeof(float)); // light intensity
+		skip(file.GetUnsignedInt(), kNavVisibleAreaBytes);
+		skip(1, sizeof(uint32)); // area to inherit visibility from
+	}
+	return (!bTruncated && file.IsValid() && !out.empty()) || Fail("-navmask: %s is truncated or has no areas", navPath);
+}
+
+// Whether a nav floor lies within `margin` of the point horizontally, with the point inside the
+// height window over the floor at the floor's nearest point.
+bool IsOverNavFloor(const NavFloor &floor, const NeoSpatial::Vec3 &point, float margin)
+{
+	const float x = Clamp(point.x, floor.x0, floor.x1);
+	const float y = Clamp(point.y, floor.y0, floor.y1);
+	if (Square(x - point.x) + Square(y - point.y) > Square(margin))
+	{
+		return false;
+	}
+
+	// Bilinear over the corners, as CNavArea::GetZ.
+	const float tx = (x - floor.x0) / Max(floor.x1 - floor.x0, FLT_EPSILON);
+	const float ty = (y - floor.y0) / Max(floor.y1 - floor.y0, FLT_EPSILON);
+	const float z = Lerp(ty, Lerp(tx, floor.zNw, floor.zNe), Lerp(tx, floor.zSw, floor.zSe));
+	const float height = point.z - z;
+	return height >= kNavMaskMinHeightMetres && height <= kNavMaskMaxHeightMetres;
+}
+
+// Drops the probes no player can stand near. Most of a map's open space is sky and
+// out-of-bounds volume, and baked paths between those probes are most of the lump.
+bool MaskProbesByNav(const char *pszMapName, std::vector<NeoSpatial::Vec3> &centres)
+{
+	std::vector<NavFloor> floors;
+	if (!ReadNavFloors(pszMapName, floors))
+	{
+		return false;
+	}
+
+	// A bare -navmask before the map path reads as margin 0.
+	const float requested = CommandLine()->ParmValue("-navmask", kNavMaskMarginMetres);
+	const float margin = (requested > 0.0f) ? requested : kNavMaskMarginMetres;
+	const size_t before = centres.size();
+	auto isOffNav = [&](const NeoSpatial::Vec3 &centre)
+	{
+		for (const NavFloor &floor : floors)
+		{
+			if (IsOverNavFloor(floor, centre, margin))
+			{
+				return false;
+			}
+		}
+		return true;
+	};
+	centres.erase(std::remove_if(centres.begin(), centres.end(), isOffNav), centres.end());
+	Msg("neo_soundbake: nav mask (%d areas, margin %g m) keeps %d of %d probes\n", static_cast<int>(floors.size()), margin,
+		static_cast<int>(centres.size()), static_cast<int>(before));
+	return true;
+}
+
+// The generated probes, or with -probes the listed ones; with -navmask only those near the nav.
+bool PlaceProbes(const CNeoAudioGeometry &geometry, const char *pszMapName, NeoSpatial::ProbeSet &probes)
+{
+	const char *pszList = CommandLine()->ParmValue("-probes");
+	const bool bNavMask = CommandLine()->FindParm("-navmask") != 0;
+	if (!pszList && !bNavMask)
+	{
+		NeoSpatial::BuildProbes(geometry.GetProbeGeometry(), geometry.GetBspTree(), NeoSpatial::DEFAULT_PROBE_SETTINGS, probes,
+								geometry.GetBlockerVolumes());
+		return true;
+	}
+
+	std::vector<NeoSpatial::Vec3> centres;
+	if (pszList && !ReadProbeCentres(pszList, centres))
+	{
+		return false;
+	}
+	if (!pszList)
+	{
+		NeoSpatial::ProbeSet generated;
+		NeoSpatial::BuildProbes(geometry.GetProbeGeometry(), geometry.GetBspTree(), NeoSpatial::DEFAULT_PROBE_SETTINGS, generated,
+								geometry.GetBlockerVolumes());
+		centres = std::move(generated.centres);
+	}
+	if (bNavMask && !MaskProbesByNav(pszMapName, centres))
+	{
+		return false;
+	}
+	const int dropped = NeoSpatial::BatchOpenProbes(centres, geometry.GetBspTree(),
+													  NeoSpatial::DEFAULT_PROBE_SETTINGS.spacing, probes);
+	Msg("neo_soundbake: %d probes from %s\n", static_cast<int>(probes.centres.size()), pszList ? pszList : "the nav mask");
+	if (dropped > 0)
+	{
+		Warning("neo_soundbake: dropped %d listed probes outside the map's open space\n", dropped);
+	}
+	return true;
+}
+
+int Run(const char *pszBspArg)
+{
+	char bspPath[MAX_PATH];
+	V_MakeAbsolutePath(bspPath, sizeof(bspPath), pszBspArg);
+	V_FixSlashes(bspPath);
+	const double startTime = Plat_FloatTime();
+
+	char gameInfoDir[MAX_PATH];
+	IPhysicsSurfaceProps *pSurfaceProps = nullptr;
+	IPhysicsCollision *pCollision = nullptr;
+	if (!InitFileSystem(bspPath, gameInfoDir, sizeof(gameInfoDir)) || !InitPhysics(pSurfaceProps, pCollision))
+	{
+		return 1;
+	}
+
+	char error[512];
+	CNeoAudioGeometry geometry;
+	const CNeoAudioGeometry::Services services = { g_pBakeFileSystem, pSurfaceProps, pCollision };
+	CNeoAcousticMaterials materials;
+	materials.Load(g_pBakeFileSystem);
+	if (!geometry.LoadFromBsp(services, materials, bspPath, error, sizeof(error)))
+	{
+		Fail("%s", error);
+		return 1;
+	}
+	Msg("neo_soundbake: %s: %d triangles, %d audio blocker brushes\n", bspPath, geometry.NumTriangles(),
+		geometry.NumAudioBlockerBrushes());
+
+	char mapName[MAX_PATH];
+	V_FileBase(bspPath, mapName, sizeof(mapName));
+	NeoSpatial::ProbeSet probes;
+	if (!PlaceProbes(geometry, mapName, probes))
+	{
+		return 1;
+	}
+	if (const char *pszDump = CommandLine()->ParmValue("-dumpprobes"))
+	{
+		if (!WriteProbeCentres(pszDump, probes.centres))
+		{
+			return 1;
+		}
+		Msg("neo_soundbake: wrote %d probe centres to %s\n", static_cast<int>(probes.centres.size()), pszDump);
+		return 0;
+	}
+
+	// The phonon the game ships, unless told otherwise.
+	char phononPath[MAX_PATH];
+	if (const char *pszPhonon = CommandLine()->ParmValue("-phonon"))
+	{
+		V_strncpy(phononPath, pszPhonon, sizeof(phononPath));
+	}
+	else
+	{
+		V_snprintf(phononPath, sizeof(phononPath), "%s/bin" PLATFORM_DIR "/%s", gameInfoDir, kPhononLibrary);
+	}
+	V_FixSlashes(phononPath);
+	NeoSpatial::ISpatializer *pSpatializer =
+		NeoSpatial::CreateSteamAudioSpatializer(phononPath, kBakeSampleRate, kBakeFrameSize, error, sizeof(error));
+	if (!pSpatializer)
+	{
+		Fail("%s", error);
+		return 1;
+	}
+
+	pSpatializer->SetBakePathRange(CommandLine()->ParmValue("-pathrange", 0.0f));
+
+	int result = 1;
+	if (!pSpatializer->SetSceneGeometry(geometry.GetSceneGeometry(), error, sizeof(error)))
+	{
+		Fail("%s", error);
+	}
+	else
+	{
+		// For checking what sound sees, audio blockers included: <map>_scene.obj (and .mtl) beside the map.
+		if (CommandLine()->FindParm("-obj"))
+		{
+			char objBase[MAX_PATH];
+			V_StripExtension(bspPath, objBase, sizeof(objBase));
+			V_strncat(objBase, "_scene", sizeof(objBase));
+			pSpatializer->SaveSceneObj(objBase);
+			Msg("neo_soundbake: wrote %s.obj\n", objBase);
+		}
+		if (probes.centres.empty())
+		{
+			Fail("the map has no open space to place probes in");
+		}
+		else if (!pSpatializer->SetProbeBatches(probes.Layout(), error, sizeof(error)))
+		{
+			Fail("%s", error);
+		}
+		else
+		{
+			const int threads = Max(1, CommandLine()->ParmValue("-threads", GetCPUInformation()->m_nLogicalProcessors));
+			Msg("neo_soundbake: baking %d probes in %d batches on %d threads\n", static_cast<int>(probes.centres.size()),
+				probes.NumBatches(), threads);
+			pSpatializer->StartBake(threads);
+			float progress = 0.0f;
+			float reported = 0.0f;
+			while (pSpatializer->GetBakeState(&progress) == NeoSpatial::BakeState::Running)
+			{
+				if (progress >= reported + kBakeProgressStep)
+				{
+					reported = progress;
+					Msg("neo_soundbake: %3.0f%%\n", progress * 100.0f);
+				}
+				ThreadSleep(kBakePollMs);
+			}
+
+			int64_t batchesSize = 0;
+			const uint8_t *pBatches = (pSpatializer->GetBakeState(nullptr) == NeoSpatial::BakeState::Done)
+				? pSpatializer->SerializeProbeBatches(&batchesSize) : nullptr;
+			if (!pBatches)
+			{
+				Fail("the bake did not finish");
+			}
+			else
+			{
+				std::vector<uint8_t> payload;
+				NeoSpatial::WriteProbeLump(probes, pBatches, batchesSize, geometry.GetSourceCrc(), pSpatializer->GetLibraryVersion(),
+										   materials.GetBakeCrc(), payload);
+				if (static_cast<int64_t>(payload.size()) > NeoSpatial::PROBE_LUMP_MAX_BYTES)
+				{
+					Fail("the baked probes are %.1f MB, over the %.0f MB the game reads; the map has too many probes",
+						 payload.size() / 1048576.0, NeoSpatial::PROBE_LUMP_MAX_BYTES / 1048576.0);
+					delete pSpatializer;
+					return result;
+				}
+				unsigned int compressedSize = 0;
+				unsigned char *pCompressed = (payload.size() < UINT32_MAX)
+					? LZMA_Compress(payload.data(), static_cast<unsigned int>(payload.size()), &compressedSize) : nullptr;
+				if (!pCompressed)
+				{
+					Fail("cannot compress the baked probes");
+				}
+				else
+				{
+					if (WriteProbeGameLump(bspPath, pCompressed, compressedSize)
+						&& VerifyBakedMap(bspPath, services, *pSpatializer, probes, materials))
+					{
+						Msg("neo_soundbake: wrote %.1f MB of baked probes (%.1f MB uncompressed) into %s in %.0f s\n",
+							compressedSize / 1048576.0, payload.size() / 1048576.0, bspPath, Plat_FloatTime() - startTime);
+						result = 0;
+					}
+					free(pCompressed);
+				}
+			}
+		}
+	}
+
+	delete pSpatializer;
+	return result;
+}
+
+} // namespace
+
+// Plain console output, so Hammer's compile log shows it; errors go to stderr.
+SpewRetval_t BakeSpew(SpewType_t spewType, const tchar *pszMessage)
+{
+	fputs(pszMessage, (spewType == SPEW_WARNING || spewType == SPEW_ERROR || spewType == SPEW_ASSERT) ? stderr : stdout);
+	return (spewType == SPEW_ERROR) ? SPEW_ABORT : SPEW_CONTINUE;
+}
+
+int main(int argc, char **argv)
+{
+	SpewOutputFunc(BakeSpew);
+	MathLib_Init(2.2f, 2.2f, 0.0f, 2.0f);
+	CommandLine()->CreateCmdLine(argc, argv);
+	if (argc < 2 || CommandLine()->FindParm("-help") || argv[argc - 1][0] == '-')
+	{
+		Msg("usage: neo_soundbake -game <mod dir> [-threads <n>] [-phonon <library>] [-obj] [-dumpprobes <file>] "
+			"[-probes <file>] [-navmask [<m>]] [-pathrange <m>] [-appid_dir_<appid> <dir>] <map.bsp>\n");
+		return 1;
+	}
+	const int result = Run(argv[argc - 1]);
+	if (g_pBakeFileSystem)
+	{
+		g_pBakeFileSystem->Shutdown();
+	}
+	return result;
+}
