@@ -321,10 +321,8 @@ public:
 			return false;
 		}
 
-		// Smoke shows through glass and grates, so they do not end it. A water
-		// surface does, though it may be translucent: no gas is under it.
-		const bool water = ( tr.contents & NEO_VOLSMOKE_WATER_MASK ) != 0;
-		if ( !water && ( ( tr.contents & ( CONTENTS_WINDOW | CONTENTS_GRATE ) ) || ( tr.surface.flags & SURF_TRANS ) ) )
+		// Smoke shows through glass and grates, so they do not end it.
+		if ( ( tr.contents & ( CONTENTS_WINDOW | CONTENTS_GRATE ) ) || ( tr.surface.flags & SURF_TRANS ) )
 		{
 			return false;
 		}

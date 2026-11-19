@@ -71,9 +71,7 @@ static constexpr float NEO_VOLSMOKE_CELL_VARIATION = 0.15f;
 static constexpr float NEO_VOLSMOKE_EXTINCTION = 0.06f;
 
 // World-only: no props or entities, so every client sees the same walls.
-// Gas does not enter water; it spreads over the surface as over a floor.
-static constexpr int NEO_VOLSMOKE_WATER_MASK = CONTENTS_WATER | CONTENTS_SLIME;
-static constexpr int NEO_VOLSMOKE_FILL_MASK = CONTENTS_SOLID | CONTENTS_WINDOW | NEO_VOLSMOKE_WATER_MASK;
+static constexpr int NEO_VOLSMOKE_FILL_MASK = CONTENTS_SOLID | CONTENTS_WINDOW;
 
 inline float VolSmokeBloom( float age )
 {
