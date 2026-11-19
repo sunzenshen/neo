@@ -3032,6 +3032,11 @@ void CNEOBotIntention::OnStuck()
 	{
 		return;
 	}
+
+	if ( CNEOBotLadderClimb::TryStuckTeleport( me ) )
+	{
+		return;
+	}
 	INextBotEventResponder::OnStuck();
 }
 

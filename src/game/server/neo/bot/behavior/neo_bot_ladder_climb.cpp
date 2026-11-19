@@ -53,6 +53,9 @@ static constexpr float EXPIRY_TELEPORT_COOLDOWN = 10.0f;
 static constexpr float EXPIRY_TELEPORT_APPROACH_RANGE = 48.0f;
 static constexpr float EXPIRY_TELEPORT_LANDING_STEP = 16.0f; // Half a hull
 static constexpr int EXPIRY_TELEPORT_LANDING_STEPS = 2;
+static constexpr float EXPIRY_TELEPORT_STUCK_RANGE = 128.0f;
+static constexpr float EXPIRY_TELEPORT_STUCK_HEIGHT = 72.0f;
+static constexpr float EXPIRY_TELEPORT_MAX_DROP = 72.0f;
 
 static constexpr float RECOVERY_SEARCH_RANGE = 128.0f;
 static constexpr float RECOVERY_CANDIDATE_GRID = 8.0f;
@@ -784,6 +787,8 @@ static const char *ExpiryTimerName( CNEOBotLadderClimb::ExpiryTimer timer )
 		return "approach";
 	case CNEOBotLadderClimb::EXPIRY_MISS:
 		return "miss";
+	case CNEOBotLadderClimb::EXPIRY_STUCK:
+		return "stuck";
 	}
 	return "unknown";
 }
@@ -791,7 +796,11 @@ static const char *ExpiryTimerName( CNEOBotLadderClimb::ExpiryTimer timer )
 //---------------------------------------------------------------------------------------------
 static const char *ExpiryTriggerName( CNEOBotLadderClimb::ExpiryTimer timer )
 {
-	return timer == CNEOBotLadderClimb::EXPIRY_MISS ? "miss" : "expiry";
+	if ( timer == CNEOBotLadderClimb::EXPIRY_MISS || timer == CNEOBotLadderClimb::EXPIRY_STUCK )
+	{
+		return ExpiryTimerName( timer );
+	}
+	return "expiry";
 }
 
 //---------------------------------------------------------------------------------------------
@@ -852,6 +861,7 @@ static bool IsAtLadderEntry( CNEOBot *me, const CNavLadder *ladder, bool goingUp
 static const CNavArea *FindExpiryNextArea( CNEOBot *me, const CNavArea *landing, const Vector &end )
 {
 	const CNavArea *next = nullptr;
+	bool fromPath = false;
 	const PathFollower *path = me->GetCurrentPath();
 	if ( path && path->IsValid() )
 	{
@@ -867,6 +877,7 @@ static const CNavArea *FindExpiryNextArea( CNEOBot *me, const CNavArea *landing,
 			if ( pastLanding )
 			{
 				next = seg->ladder ? nullptr : seg->area;
+				fromPath = next != nullptr;
 				break;
 			}
 		}
@@ -894,10 +905,13 @@ static const CNavArea *FindExpiryNextArea( CNEOBot *me, const CNavArea *landing,
 		return nullptr;
 	}
 
-	// No placement across a drop or up a step from the landing
+	// No placement up a step; across a drop only onto the bot's own next path area,
+	// for a landing with no standing room the path walks off anyway
 	Vector closest;
 	next->GetClosestPointOnArea( end, &closest );
-	if ( fabsf( closest.z - landing->GetZ( closest ) ) > me->GetLocomotionInterface()->GetStepHeight() )
+	const float below = landing->GetZ( closest ) - closest.z;
+	const float step = me->GetLocomotionInterface()->GetStepHeight();
+	if ( below < -step || below > ( fromPath ? EXPIRY_TELEPORT_MAX_DROP : step ) )
 	{
 		return nullptr;
 	}
@@ -993,8 +1007,13 @@ bool CNEOBotLadderClimb::TryExpiryTeleport( CNEOBot *me, const CNavLadder *ladde
 	const Vector &end = goingUp ? ladder->m_top : ladder->m_bottom;
 	Vector onLadder;
 	CalcClosestPointOnLineSegment( feet, ladder->m_bottom, ladder->m_top, onLadder );
+	// A stuck bot may be held back short of the entry, by an edge it cannot step up or a ledge it cannot leave
+	const bool far = timer == EXPIRY_STUCK
+		? ( feet - entry ).AsVector2D().LengthSqr() > Square( EXPIRY_TELEPORT_STUCK_RANGE )
+			|| fabsf( feet.z - entry.z ) > EXPIRY_TELEPORT_STUCK_HEIGHT
+		: feet.DistToSqr( onLadder ) > Square( MAX_DEVIATION_DIST );
 	const char *gate = nullptr;
-	if ( feet.DistToSqr( onLadder ) > Square( MAX_DEVIATION_DIST ) )
+	if ( far )
 	{
 		gate = "far";
 	}
@@ -1014,7 +1033,7 @@ bool CNEOBotLadderClimb::TryExpiryTeleport( CNEOBot *me, const CNavLadder *ladde
 	{
 		gate = "frozen";
 	}
-	else if ( timer == EXPIRY_APPROACH && IsLadderOccupied( me, ladder, MAX_DEVIATION_DIST ) )
+	else if ( ( timer == EXPIRY_APPROACH || timer == EXPIRY_STUCK ) && IsLadderOccupied( me, ladder, MAX_DEVIATION_DIST ) )
 	{
 		gate = "queue";
 	}
@@ -1137,6 +1156,36 @@ bool CNEOBotLadderClimb::TryExpiryTeleport( CNEOBot *me, const CNavLadder *ladde
 	me->m_ladderTeleportCooldown.Start( EXPIRY_TELEPORT_COOLDOWN );
 	LogExpiryTeleport( me, ladder, goingUp, timer, feet, landing, placedArea, "none" );
 	return true;
+}
+
+//---------------------------------------------------------------------------------------------
+// A bot the engine reports stuck in front of a ladder its path is about to use,
+// on the ladder's entry area or on the path area before it
+bool CNEOBotLadderClimb::TryStuckTeleport( CNEOBot *me )
+{
+	if ( !neo_bot_ladder_teleport.GetBool() || me->IsOnLadder() )
+	{
+		return false;
+	}
+
+	const PathFollower *path = me->GetCurrentPath();
+	if ( !path || !path->IsValid() )
+	{
+		return false;
+	}
+
+	const Path::Segment *segment = path->GetCurrentGoal();
+	if ( segment && !segment->ladder )
+	{
+		segment = path->NextSegment( segment );
+	}
+
+	if ( !segment || !segment->ladder )
+	{
+		return false;
+	}
+
+	return TryExpiryTeleport( me, segment->ladder, segment->how == GO_LADDER_UP, segment->area, nullptr, EXPIRY_STUCK );
 }
 
 //---------------------------------------------------------------------------------------------

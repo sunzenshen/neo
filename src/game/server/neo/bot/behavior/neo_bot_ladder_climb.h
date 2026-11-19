@@ -46,10 +46,12 @@ public:
 		EXPIRY_DISMOUNT,
 		EXPIRY_STALL,
 		EXPIRY_APPROACH,
-		EXPIRY_MISS
+		EXPIRY_MISS,
+		EXPIRY_STUCK
 	};
 	static bool TryExpiryTeleport( CNEOBot *me, const CNavLadder *ladder, bool goingUp,
 		const CNavArea *pathExit, const Vector *dismountPos, ExpiryTimer timer );
+	static bool TryStuckTeleport( CNEOBot *me );
 
 private:
 	friend class CNEOBot;
