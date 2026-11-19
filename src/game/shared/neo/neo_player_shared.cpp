@@ -846,6 +846,30 @@ bool CNEO_Player::ValidTakeoverTargetFor(CNEO_Player *pPlayerTakingOver)
 ConVar cl_neo_hud_context_hint_show_adjacent_interactable_objects("cl_neo_hud_context_hint_show_adjacent_interactable_objects", "1", FCVAR_ARCHIVE, "Show adjacent interactable objects", true, 0.f, true, 1.f);
 #endif // CLIENT_DLL
 extern ConVar sv_debug_player_use;
+
+Vector GetUseTargetPos(CBaseEntity *pEntity)
+{
+	if (!pEntity->IsBaseCombatWeapon())
+	{
+		return pEntity->CollisionProp()->WorldSpaceCenter();
+	}
+
+	// A dropped weapon's bounds don't rotate with it, so their center wanders
+	// off the model. The mass center of its physics model stays inside it.
+	const vcollide_t *pCollide = modelinfo->GetVCollide(pEntity->GetModelIndex());
+	if (!pCollide || pCollide->solidCount < 1)
+	{
+		return pEntity->CollisionProp()->WorldSpaceCenter();
+	}
+
+	Vector massCenterLocal;
+	physcollision->CollideGetMassCenter(pCollide->solids[0], &massCenterLocal);
+
+	Vector massCenterWorld;
+	VectorTransform(massCenterLocal, pEntity->EntityToWorldTransform(), massCenterWorld);
+	return massCenterWorld;
+}
+
 CBaseEntity *CNEO_Player::FindUseEntity()
 {
 	Vector forward;
@@ -942,7 +966,7 @@ CBaseEntity *CNEO_Player::FindUseEntity()
 	if ( pNearest )
 	{
 		// estimate nearest object by distance from the view vector
-		nearestDot = DotProduct((pNearest->CollisionProp()->WorldSpaceCenter() - searchCenter).Normalized(), forward);
+		nearestDot = DotProduct((GetUseTargetPos(pNearest) - searchCenter).Normalized(), forward);
 		if ( sv_debug_player_use.GetBool() )
 		{
 			Vector point;
@@ -968,7 +992,7 @@ CBaseEntity *CNEO_Player::FindUseEntity()
 		Vector point;
 		pObject->CollisionProp()->CalcNearestPoint( searchCenter, &point );
 		float dot = -1;
-		dot = DotProduct((pObject->CollisionProp()->WorldSpaceCenter() - searchCenter).Normalized(), forward);
+		dot = DotProduct((GetUseTargetPos(pObject) - searchCenter).Normalized(), forward);
 
 		if (addUseItemsToUseItemsList && IsUseableEntity(pObject, 0) && dot >= 0.8)
 		{
@@ -990,7 +1014,7 @@ CBaseEntity *CNEO_Player::FindUseEntity()
 
 #ifdef GAME_DLL
 		float dot = -1;
-		dot = DotProduct((pObject->CollisionProp()->WorldSpaceCenter() - searchCenter).Normalized(), forward);
+		dot = DotProduct((GetUseTargetPos(pObject) - searchCenter).Normalized(), forward);
 #endif // GAME_DLL
 
 		// Need to be looking at the object more or less
