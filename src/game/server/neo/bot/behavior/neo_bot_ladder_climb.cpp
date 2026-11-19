@@ -1245,6 +1245,7 @@ static bool CanWalkOntoLadderTop( CNEOBot *me, const CNavLadder *ladder, const C
 	Vector maxs = me->WorldAlignMaxs();
 	maxs.z = mins.z + me->GetBodyInterface()->GetStandHullHeight();
 	const Vector lift( 0.0f, 0.0f, step );
+	const Vector clear( 0.0f, 0.0f, RECOVERY_FLOOR_PROBE_HEIGHT );
 	// Collide as a moving player, so a weapon or the ghost on the landing does not block the walk
 	NextBotTraceFilterIgnoreActors filter( me, COLLISION_GROUP_PLAYER_MOVEMENT );
 
@@ -1279,6 +1280,12 @@ static bool CanWalkOntoLadderTop( CNEOBot *me, const CNavLadder *ladder, const C
 
 		trace_t trace;
 		UTIL_TraceHull( feet + lift, closest + lift, mins, maxs, MASK_PLAYERSOLID, &filter, &trace );
+		if ( trace.startsolid )
+		{
+			// Under a ceiling with room to stand but not a step more, walk without the lift
+			UTIL_TraceHull( feet + clear, closest + clear, mins, maxs, MASK_PLAYERSOLID, &filter, &trace );
+		}
+
 		if ( !trace.startsolid && trace.fraction >= 1.0f )
 		{
 			return true;
