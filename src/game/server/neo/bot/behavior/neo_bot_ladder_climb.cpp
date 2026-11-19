@@ -1172,7 +1172,8 @@ static bool IsBesideLadderTop( const CNavLadder *ladder, const CNavArea *area )
 }
 
 //---------------------------------------------------------------------------------------------
-// A bot on floor just off the mesh at the top can still walk onto a landing in a straight line
+// A bot on floor just off the mesh at the top can still walk onto a landing,
+// or onto an area beside one, in a straight line
 static bool CanWalkOntoLadderTop( CNEOBot *me, const CNavLadder *ladder, const CNavArea *exitArea, const Vector &feet )
 {
 	const float step = me->GetLocomotionInterface()->GetStepHeight();
@@ -1182,14 +1183,28 @@ static bool CanWalkOntoLadderTop( CNEOBot *me, const CNavLadder *ladder, const C
 	const Vector lift( 0.0f, 0.0f, step );
 	NextBotTraceFilterIgnoreActors filter( me, COLLISION_GROUP_NONE );
 
-	const CNavArea *landings[] = { exitArea, ladder->m_topForwardArea, ladder->m_topLeftArea, ladder->m_topRightArea, ladder->m_topBehindArea };
-	for ( const CNavArea *landing : landings )
+	// The landings and the areas a bot walks onto from them
+	CUtlVector<const CNavArea *> landings;
+	const CNavArea *tops[] = { exitArea, ladder->m_topForwardArea, ladder->m_topLeftArea, ladder->m_topRightArea, ladder->m_topBehindArea };
+	for ( const CNavArea *top : tops )
 	{
-		if ( !landing )
+		if ( !top )
 		{
 			continue;
 		}
 
+		landings.AddToTail( top );
+		for ( int dir = 0; dir < NUM_DIRECTIONS; ++dir )
+		{
+			for ( int i = 0; i < top->GetAdjacentCount( static_cast<NavDirType>( dir ) ); ++i )
+			{
+				landings.AddToTail( top->GetAdjacentArea( static_cast<NavDirType>( dir ), i ) );
+			}
+		}
+	}
+
+	for ( const CNavArea *landing : landings )
+	{
 		Vector closest;
 		landing->GetClosestPointOnArea( feet, &closest );
 		if ( fabsf( closest.z - feet.z ) > step )
