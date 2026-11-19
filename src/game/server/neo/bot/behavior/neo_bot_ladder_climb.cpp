@@ -117,6 +117,25 @@ bool CNEOBotLadderClimb::ResolveRecoveryExit( CNEOBot *me )
 }
 
 //---------------------------------------------------------------------------------------------
+// Blocks on world, props and every player, so two bots are never placed on one spot,
+// but not on a weapon or the ghost lying on the landing
+class CLandingTraceFilter : public CTraceFilterSimple
+{
+public:
+	explicit CLandingTraceFilter( CNEOBot *me ) : CTraceFilterSimple( me, COLLISION_GROUP_NONE ) {}
+
+	virtual bool ShouldHitEntity( IHandleEntity *handle, int contentsMask ) override
+	{
+		const CBaseEntity *entity = EntityFromEntityHandle( handle );
+		if ( entity && entity->IsBaseCombatWeapon() )
+		{
+			return false;
+		}
+		return CTraceFilterSimple::ShouldHitEntity( handle, contentsMask );
+	}
+};
+
+//---------------------------------------------------------------------------------------------
 void CNEOBotLadderClimb::SaveLandingProbe( LandingProbe *probe, const trace_t &trace, const char *gate )
 {
 	probe->gate = gate;
@@ -141,7 +160,7 @@ bool CNEOBotLadderClimb::CheckLandingSupport( CNEOBot *me, const Vector &sample,
 	const Vector to( sample.x, sample.y, navZ - step );
 	trace_t trace;
 	NextBotTraceFilterIgnoreActors geometryFilter( me, COLLISION_GROUP_NONE );
-	CTraceFilterSimple placementFilter( me, COLLISION_GROUP_PLAYER_MOVEMENT );
+	CLandingTraceFilter placementFilter( me );
 	ITraceFilter *filter = purpose == WATCH_GEOMETRY ? static_cast<ITraceFilter *>( &geometryFilter ) : &placementFilter;
 	UTIL_TraceLine( from, to, MASK_PLAYERSOLID, filter, &trace );
 	if ( trace.startsolid || trace.allsolid || !trace.DidHit() || !trace.m_pEnt || trace.m_pEnt->IsPlayer()
@@ -184,7 +203,7 @@ bool CNEOBotLadderClimb::ValidateLanding( CNEOBot *me, const Vector &point, Vect
 	footMaxs.z = mins.z + RECOVERY_FLOOR_PROBE_HEIGHT;
 	trace_t floor;
 	NextBotTraceFilterIgnoreActors geometryFilter( me, COLLISION_GROUP_NONE );
-	CTraceFilterSimple placementFilter( me, COLLISION_GROUP_PLAYER_MOVEMENT );
+	CLandingTraceFilter placementFilter( me );
 	ITraceFilter *filter = purpose == WATCH_GEOMETRY ? static_cast<ITraceFilter *>( &geometryFilter ) : &placementFilter;
 	UTIL_TraceHull( navPoint + vertical, navPoint - vertical, mins, footMaxs, MASK_PLAYERSOLID, filter, &floor );
 	if ( floor.startsolid || floor.allsolid )
