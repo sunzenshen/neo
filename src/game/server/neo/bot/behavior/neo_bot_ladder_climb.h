@@ -45,7 +45,8 @@ public:
 		EXPIRY_CLIMB,
 		EXPIRY_DISMOUNT,
 		EXPIRY_STALL,
-		EXPIRY_APPROACH
+		EXPIRY_APPROACH,
+		EXPIRY_MISS
 	};
 	static bool TryExpiryTeleport( CNEOBot *me, const CNavLadder *ladder, bool goingUp,
 		const CNavArea *pathExit, const Vector *dismountPos, ExpiryTimer timer );
@@ -113,6 +114,7 @@ private:
 	void EnterDismountPhase( CNEOBot *me );
 	void ResolveExitArea( CNEOBot *me );
 	bool TeleportOnExpiry( CNEOBot *me, ExpiryTimer timer );
+	bool IsMissedLanding( CNEOBot *me ) const;
 	const CNavArea *FindLanding( const PathFollower *path, const CNavArea *pathExit ) const;
 	const CNavArea *LadderEndArea() const;
 	bool IsNarrowLanding( CNEOBot *me ) const;

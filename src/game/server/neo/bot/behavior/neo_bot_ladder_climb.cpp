@@ -58,6 +58,8 @@ ConVar neo_bot_ladder_expiry_teleport( "neo_bot_ladder_expiry_teleport", "0", FC
 	true, EXPIRY_TELEPORT_OFF, true, EXPIRY_TELEPORT_ALL );
 static constexpr float EXPIRY_TELEPORT_COOLDOWN = 10.0f;
 static constexpr float EXPIRY_TELEPORT_APPROACH_RANGE = 48.0f;
+static constexpr float EXPIRY_TELEPORT_LANDING_STEP = 16.0f; // Half a hull
+static constexpr int EXPIRY_TELEPORT_LANDING_STEPS = 2;
 
 static constexpr float RECOVERY_SEARCH_RANGE = 128.0f;
 static constexpr float RECOVERY_CANDIDATE_GRID = 8.0f;
@@ -191,7 +193,7 @@ bool CNEOBotLadderClimb::ValidateLanding( CNEOBot *me, const Vector &point, Vect
 	UTIL_TraceHull( navPoint + vertical, navPoint - vertical, mins, footMaxs, MASK_PLAYERSOLID, filter, &floor );
 	if ( floor.startsolid || floor.allsolid )
 	{
-		SaveLandingProbe( probe, floor, floor.m_pEnt && floor.m_pEnt->IsPlayer() ? "occupied" : "ceiling" );
+		SaveLandingProbe( probe, floor, floor.m_pEnt && floor.m_pEnt->IsPlayer() ? "occupied" : "solid" );
 		return false;
 	}
 	if ( !floor.DidHit() || !floor.m_pEnt || floor.m_pEnt->IsPlayer() || floor.m_pEnt->GetMoveType() != MOVETYPE_NONE
@@ -787,6 +789,8 @@ static const char *ExpiryTimerName( CNEOBotLadderClimb::ExpiryTimer timer )
 		return "stall";
 	case CNEOBotLadderClimb::EXPIRY_APPROACH:
 		return "approach";
+	case CNEOBotLadderClimb::EXPIRY_MISS:
+		return "miss";
 	}
 	return "unknown";
 }
@@ -824,6 +828,128 @@ static bool IsLadderOccupied( CNEOBot *me, const CNavLadder *ladder, float range
 }
 
 //---------------------------------------------------------------------------------------------
+// A descent can start anywhere on a top area, which may reach well back from the ladder's top.
+// A climb up keeps the short range, so a bot wedged elsewhere on the floor is not lifted.
+static bool IsAtLadderEntry( CNEOBot *me, const CNavLadder *ladder, bool goingUp, const Vector &feet, const Vector &entry )
+{
+	if ( ( feet - entry ).AsVector2D().LengthSqr() <= Square( EXPIRY_TELEPORT_APPROACH_RANGE ) )
+	{
+		return true;
+	}
+
+	if ( goingUp )
+	{
+		return false;
+	}
+
+	const CNavArea *area = me->GetLastKnownArea();
+	return area && area->IsOverlapping( feet ) && ladder->IsConnected( area, CNavLadder::LADDER_UP );
+}
+
+//---------------------------------------------------------------------------------------------
+// The area beyond a ladder's landing, for a landing too narrow or too cluttered to stand on alone
+static const CNavArea *FindExpiryNextArea( CNEOBot *me, const CNavArea *landing, const Vector &end )
+{
+	const CNavArea *next = nullptr;
+	const PathFollower *path = me->GetCurrentPath();
+	if ( path && path->IsValid() )
+	{
+		bool pastLanding = false;
+		for ( const Path::Segment *seg = path->FirstSegment(); seg; seg = path->NextSegment( seg ) )
+		{
+			if ( seg->area == landing )
+			{
+				pastLanding = true;
+				continue;
+			}
+
+			if ( pastLanding )
+			{
+				next = seg->ladder ? nullptr : seg->area;
+				break;
+			}
+		}
+	}
+
+	if ( !next )
+	{
+		float largest = 0.0f;
+		for ( int dir = 0; dir < NUM_DIRECTIONS; ++dir )
+		{
+			for ( int i = 0; i < landing->GetAdjacentCount( static_cast<NavDirType>( dir ) ); ++i )
+			{
+				const CNavArea *adjacent = landing->GetAdjacentArea( static_cast<NavDirType>( dir ), i );
+				if ( adjacent && adjacent->GetSizeX() * adjacent->GetSizeY() > largest )
+				{
+					largest = adjacent->GetSizeX() * adjacent->GetSizeY();
+					next = adjacent;
+				}
+			}
+		}
+	}
+
+	if ( !next )
+	{
+		return nullptr;
+	}
+
+	// No placement across a drop or up a step from the landing
+	Vector closest;
+	next->GetClosestPointOnArea( end, &closest );
+	if ( fabsf( closest.z - landing->GetZ( closest ) ) > me->GetLocomotionInterface()->GetStepHeight() )
+	{
+		return nullptr;
+	}
+	return next;
+}
+
+//---------------------------------------------------------------------------------------------
+// The spot nearest the ladder's end where the whole hull fits, then steps from it toward the center,
+// so an obstacle at the area's near edge does not refuse the whole area
+static void AddExpiryCandidates( const CNavArea *area, const Vector &end, const Vector &mins, const Vector &maxs,
+	CUtlVector<Vector> *candidates )
+{
+	Vector from;
+	area->GetClosestPointOnArea( end, &from );
+	const Vector northWest = area->GetCorner( NORTH_WEST );
+	const Vector southEast = area->GetCorner( SOUTH_EAST );
+	const float minX = northWest.x - mins.x + RECOVERY_LANDING_INSET;
+	const float minY = northWest.y - mins.y + RECOVERY_LANDING_INSET;
+	const float maxX = southEast.x - maxs.x - RECOVERY_LANDING_INSET;
+	const float maxY = southEast.y - maxs.y - RECOVERY_LANDING_INSET;
+	if ( minX <= maxX && minY <= maxY )
+	{
+		from.x = Clamp( from.x, minX, maxX );
+		from.y = Clamp( from.y, minY, maxY );
+		from.z = area->GetZ( from );
+		candidates->AddToTail( from );
+	}
+
+	const Vector &center = area->GetCenter();
+	Vector toCenter = center - from;
+	toCenter.z = 0.0f;
+	const float distance = toCenter.NormalizeInPlace();
+	for ( int i = 1; i <= EXPIRY_TELEPORT_LANDING_STEPS; ++i )
+	{
+		const float along = EXPIRY_TELEPORT_LANDING_STEP * i;
+		if ( along >= distance )
+		{
+			break;
+		}
+
+		Vector stepped = from + toCenter * along;
+		if ( !area->IsOverlapping( stepped ) )
+		{
+			continue;
+		}
+		stepped.z = area->GetZ( stepped );
+		candidates->AddToTail( stepped );
+	}
+
+	candidates->AddToTail( center );
+}
+
+//---------------------------------------------------------------------------------------------
 // An escape hatch for a ladder action that ran out of time: place the bot on the ladder's exit area,
 // so a climb the bot cannot finish costs one timeout rather than the round.
 // ValidateLanding reads the recovery state, which is empty while ladder recovery is off, so it is set for the call.
@@ -846,7 +972,7 @@ bool CNEOBotLadderClimb::TryExpiryTeleport( CNEOBot *me, const CNavLadder *ladde
 	{
 		gate = "far";
 	}
-	else if ( timer == EXPIRY_APPROACH && ( feet - entry ).AsVector2D().LengthSqr() > Square( EXPIRY_TELEPORT_APPROACH_RANGE ) )
+	else if ( timer == EXPIRY_APPROACH && !IsAtLadderEntry( me, ladder, goingUp, feet, entry ) )
 	{
 		gate = "far";
 	}
@@ -878,7 +1004,13 @@ bool CNEOBotLadderClimb::TryExpiryTeleport( CNEOBot *me, const CNavLadder *ladde
 
 	const CNavLadder::LadderDirectionType dir = goingUp ? CNavLadder::LADDER_UP : CNavLadder::LADDER_DOWN;
 	const CNavArea *ladderEnd = goingUp ? ladder->GetTopArea() : ladder->m_bottomArea;
-	const CNavArea *areas[] = { pathExit, ladderEnd != pathExit ? ladderEnd : nullptr };
+	const CNavArea *landingBase = pathExit && ladder->IsConnected( pathExit, dir ) ? pathExit : ladderEnd;
+	const CNavArea *next = landingBase ? FindExpiryNextArea( me, landingBase, end ) : nullptr;
+	if ( next == pathExit || next == ladderEnd )
+	{
+		next = nullptr;
+	}
+	const CNavArea *areas[] = { pathExit, ladderEnd != pathExit ? ladderEnd : nullptr, next };
 	const float step = me->GetLocomotionInterface()->GetStepHeight();
 	const Vector mins = me->WorldAlignMins();
 	const Vector maxs = me->WorldAlignMaxs();
@@ -895,7 +1027,8 @@ bool CNEOBotLadderClimb::TryExpiryTeleport( CNEOBot *me, const CNavLadder *ladde
 	for ( int areaIndex = 0; areaIndex < ARRAYSIZE( areas ) && !placedArea; ++areaIndex )
 	{
 		const CNavArea *area = areas[areaIndex];
-		if ( !area || !ladder->IsConnected( area, dir ) )
+		const bool isNext = next && area == next;
+		if ( !area || ( !isNext && !ladder->IsConnected( area, dir ) ) )
 		{
 			continue;
 		}
@@ -905,27 +1038,12 @@ bool CNEOBotLadderClimb::TryExpiryTeleport( CNEOBot *me, const CNavLadder *ladde
 		{
 			candidates.AddToTail( *dismountPos );
 		}
+		AddExpiryCandidates( area, end, mins, maxs, &candidates );
 
-		// Clamped so the whole hull lands inside the area
-		Vector closest;
-		area->GetClosestPointOnArea( end, &closest );
-		const Vector northWest = area->GetCorner( NORTH_WEST );
-		const Vector southEast = area->GetCorner( SOUTH_EAST );
-		const float minX = northWest.x - mins.x + RECOVERY_LANDING_INSET;
-		const float minY = northWest.y - mins.y + RECOVERY_LANDING_INSET;
-		const float maxX = southEast.x - maxs.x - RECOVERY_LANDING_INSET;
-		const float maxY = southEast.y - maxs.y - RECOVERY_LANDING_INSET;
-		if ( minX <= maxX && minY <= maxY )
-		{
-			Vector clamped( Clamp( closest.x, minX, maxX ), Clamp( closest.y, minY, maxY ), 0.0f );
-			clamped.z = area->GetZ( clamped );
-			candidates.AddToTail( clamped );
-		}
-		candidates.AddToTail( area->GetCenter() );
-
+		// A hull may stand across the landing and the area beyond it
 		state.ladder = ladder;
 		state.landingArea = area;
-		state.landingUnionArea = nullptr;
+		state.landingUnionArea = isNext ? landingBase : next;
 		FOR_EACH_VEC( candidates, i )
 		{
 			Vector spot;
@@ -1009,6 +1127,29 @@ bool CNEOBotLadderClimb::TeleportOnExpiry( CNEOBot *me, ExpiryTimer timer )
 	// The path's exit can have changed since the climb started
 	ResolveExitArea( me );
 	return TryExpiryTeleport( me, m_ladder, m_bGoingUp, m_pExitArea, &m_dismountPos, timer );
+}
+
+//---------------------------------------------------------------------------------------------
+// A climber that left the ladder at its top but came down beside the landing, not on it
+bool CNEOBotLadderClimb::IsMissedLanding( CNEOBot *me ) const
+{
+	if ( !m_bGoingUp || ( !m_bDismountPhase && !m_bJumpedOffLadder ) )
+	{
+		return false;
+	}
+
+	const Vector &feet = me->GetLocomotionInterface()->GetFeet();
+	if ( feet.z <= m_ladder->m_top.z - me->GetLocomotionInterface()->GetStepHeight() )
+	{
+		return false;
+	}
+
+	const CNavArea *area = me->GetLastKnownArea();
+	if ( area && area->IsOverlapping( feet ) && m_ladder->IsConnected( area, CNavLadder::LADDER_UP ) )
+	{
+		return false;
+	}
+	return !m_pExitArea || !m_pExitArea->IsOverlapping( feet );
 }
 
 //---------------------------------------------------------------------------------------------
@@ -2441,6 +2582,11 @@ ActionResult<CNEOBot> CNEOBotLadderClimb::Update( CNEOBot *me, float /*interval*
 
 	if ( !onLadder )
 	{
+		if ( mover->IsOnGround() && !m_bCrawlDismount && IsMissedLanding( me ) && TeleportOnExpiry( me, EXPIRY_MISS ) )
+		{
+			return Done( "Reached the ground beside the landing, placed on exit area" );
+		}
+
 		// crawling off, the gap's sill is ground too, short of the landing
 		if ( mover->IsOnGround() && !m_bCrawlDismount )
 		{
