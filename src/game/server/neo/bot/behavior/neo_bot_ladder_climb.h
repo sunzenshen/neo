@@ -40,6 +40,16 @@ public:
 	static void LatchRecoveryDismount( CNEOBot *me, const void *owner );
 	static void UpdateRecovery( CNEOBot *me );
 
+	enum ExpiryTimer
+	{
+		EXPIRY_CLIMB,
+		EXPIRY_DISMOUNT,
+		EXPIRY_STALL,
+		EXPIRY_APPROACH
+	};
+	static bool TryExpiryTeleport( CNEOBot *me, const CNavLadder *ladder, bool goingUp,
+		const CNavArea *pathExit, const Vector *dismountPos, ExpiryTimer timer );
+
 private:
 	friend class CNEOBot;
 	enum RecoveryTrigger
@@ -102,6 +112,7 @@ private:
 
 	void EnterDismountPhase( CNEOBot *me );
 	void ResolveExitArea( CNEOBot *me );
+	bool TeleportOnExpiry( CNEOBot *me, ExpiryTimer timer );
 	const CNavArea *FindLanding( const PathFollower *path, const CNavArea *pathExit ) const;
 	const CNavArea *LadderEndArea() const;
 	bool IsNarrowLanding( CNEOBot *me ) const;

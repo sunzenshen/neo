@@ -46,6 +46,19 @@ ConVar neo_bot_ladder_recovery_bounce_landing( "neo_bot_ladder_recovery_bounce_l
 	"Also recover when an upward climber falls back onto the floor at the ladder foot" );
 static constexpr float RECOVERY_BOUNCE_RISE = 8.0f;
 
+enum LadderExpiryTeleportLevel
+{
+	EXPIRY_TELEPORT_OFF = 0,
+	EXPIRY_TELEPORT_TIMERS,
+	EXPIRY_TELEPORT_ALL
+};
+
+ConVar neo_bot_ladder_expiry_teleport( "neo_bot_ladder_expiry_teleport", "0", FCVAR_CHEAT,
+	"When a bot's ladder action expires, place the bot on the ladder's exit area. 0 = off, 1 = climb and dismount timers, 2 = also the stall bail and the approach timer",
+	true, EXPIRY_TELEPORT_OFF, true, EXPIRY_TELEPORT_ALL );
+static constexpr float EXPIRY_TELEPORT_COOLDOWN = 10.0f;
+static constexpr float EXPIRY_TELEPORT_APPROACH_RANGE = 48.0f;
+
 static constexpr float RECOVERY_SEARCH_RANGE = 128.0f;
 static constexpr float RECOVERY_CANDIDATE_GRID = 8.0f;
 static constexpr int RECOVERY_MAX_CANDIDATES = 64;
@@ -759,6 +772,243 @@ void CNEOBotLadderClimb::TryRecoveryReturn( CNEOBot *me )
 	me->SetBaseVelocity( vec3_origin );
 	me->GetLocomotionInterface()->Reset();
 	me->m_ladderNeutralThroughTick = gpGlobals->tickcount + RECOVERY_NEUTRAL_TICKS;
+}
+
+//---------------------------------------------------------------------------------------------
+static const char *ExpiryTimerName( CNEOBotLadderClimb::ExpiryTimer timer )
+{
+	switch ( timer )
+	{
+	case CNEOBotLadderClimb::EXPIRY_CLIMB:
+		return "climb";
+	case CNEOBotLadderClimb::EXPIRY_DISMOUNT:
+		return "dismount";
+	case CNEOBotLadderClimb::EXPIRY_STALL:
+		return "stall";
+	case CNEOBotLadderClimb::EXPIRY_APPROACH:
+		return "approach";
+	}
+	return "unknown";
+}
+
+//---------------------------------------------------------------------------------------------
+static void LogExpiryTeleport( CNEOBot *me, const CNavLadder *ladder, bool goingUp, CNEOBotLadderClimb::ExpiryTimer timer,
+	const Vector &from, const Vector &to, const CNavArea *area, const char *gate )
+{
+	const bool placed = FStrEq( gate, "none" );
+	Msg( "NEO_LADTELE %s t=%.2f bot=%d lad=%u up=%d timer=%s from=%.0f,%.0f,%.0f to=%.0f,%.0f,%.0f area=%u gate=%s\n",
+		placed ? "placed" : "refused", gpGlobals->curtime, me->entindex(), ladder->GetID(), goingUp ? 1 : 0,
+		ExpiryTimerName( timer ), from.x, from.y, from.z, to.x, to.y, to.z, area ? area->GetID() : 0, gate );
+}
+
+//---------------------------------------------------------------------------------------------
+// A bot still waiting at the foot must not jump the queue past a bot already on the ladder
+static bool IsLadderOccupied( CNEOBot *me, const CNavLadder *ladder, float range )
+{
+	for ( int i = 1; i <= gpGlobals->maxClients; ++i )
+	{
+		CBasePlayer *player = UTIL_PlayerByIndex( i );
+		if ( !player || player == me || !player->IsAlive() || player->GetMoveType() != MOVETYPE_LADDER )
+		{
+			continue;
+		}
+
+		Vector closest;
+		CalcClosestPointOnLineSegment( player->GetAbsOrigin(), ladder->m_bottom, ladder->m_top, closest );
+		if ( player->GetAbsOrigin().DistToSqr( closest ) < Square( range ) )
+		{
+			return true;
+		}
+	}
+	return false;
+}
+
+//---------------------------------------------------------------------------------------------
+// An escape hatch for a ladder action that ran out of time: place the bot on the ladder's exit area,
+// so a climb the bot cannot finish costs one timeout rather than the round.
+// ValidateLanding reads the recovery state, which is empty while ladder recovery is off, so it is set for the call.
+bool CNEOBotLadderClimb::TryExpiryTeleport( CNEOBot *me, const CNavLadder *ladder, bool goingUp,
+	const CNavArea *pathExit, const Vector *dismountPos, ExpiryTimer timer )
+{
+	const int level = ( timer == EXPIRY_CLIMB || timer == EXPIRY_DISMOUNT ) ? EXPIRY_TELEPORT_TIMERS : EXPIRY_TELEPORT_ALL;
+	if ( !ladder || !me->IsAlive() || neo_bot_ladder_expiry_teleport.GetInt() < level )
+	{
+		return false;
+	}
+
+	const Vector feet = me->GetLocomotionInterface()->GetFeet();
+	const Vector &entry = goingUp ? ladder->m_bottom : ladder->m_top;
+	const Vector &end = goingUp ? ladder->m_top : ladder->m_bottom;
+	Vector onLadder;
+	CalcClosestPointOnLineSegment( feet, ladder->m_bottom, ladder->m_top, onLadder );
+	const char *gate = nullptr;
+	if ( feet.DistToSqr( onLadder ) > Square( MAX_DEVIATION_DIST ) )
+	{
+		gate = "far";
+	}
+	else if ( timer == EXPIRY_APPROACH && ( feet - entry ).AsVector2D().LengthSqr() > Square( EXPIRY_TELEPORT_APPROACH_RANGE ) )
+	{
+		gate = "far";
+	}
+	else if ( me->GetVisionInterface()->GetPrimaryKnownThreat( true ) )
+	{
+		gate = "threat";
+	}
+	else if ( me->IsCarryingGhost() )
+	{
+		gate = "ghost";
+	}
+	else if ( !me->m_ladderTeleportCooldown.IsElapsed() )
+	{
+		gate = "cooldown";
+	}
+	else if ( me->GetNeoFlags() & NEO_FL_FREEZETIME )
+	{
+		gate = "frozen";
+	}
+	else if ( timer == EXPIRY_APPROACH && IsLadderOccupied( me, ladder, MAX_DEVIATION_DIST ) )
+	{
+		gate = "queue";
+	}
+	if ( gate )
+	{
+		LogExpiryTeleport( me, ladder, goingUp, timer, feet, vec3_origin, nullptr, gate );
+		return false;
+	}
+
+	const CNavLadder::LadderDirectionType dir = goingUp ? CNavLadder::LADDER_UP : CNavLadder::LADDER_DOWN;
+	const CNavArea *ladderEnd = goingUp ? ladder->GetTopArea() : ladder->m_bottomArea;
+	const CNavArea *areas[] = { pathExit, ladderEnd != pathExit ? ladderEnd : nullptr };
+	const float step = me->GetLocomotionInterface()->GetStepHeight();
+	const Vector mins = me->WorldAlignMins();
+	const Vector maxs = me->WorldAlignMaxs();
+
+	CNEOBot::LadderRecoveryState &state = me->m_ladderRecovery;
+	const CNavLadder *savedLadder = state.ladder;
+	const CNavArea *savedArea = state.landingArea;
+	const CNavArea *savedUnionArea = state.landingUnionArea;
+
+	LandingProbe probe;
+	probe.gate = "no_exit";
+	const CNavArea *placedArea = nullptr;
+	Vector landing = vec3_origin;
+	for ( int areaIndex = 0; areaIndex < ARRAYSIZE( areas ) && !placedArea; ++areaIndex )
+	{
+		const CNavArea *area = areas[areaIndex];
+		if ( !area || !ladder->IsConnected( area, dir ) )
+		{
+			continue;
+		}
+
+		CUtlVector<Vector> candidates;
+		if ( dismountPos && area == pathExit )
+		{
+			candidates.AddToTail( *dismountPos );
+		}
+
+		// Clamped so the whole hull lands inside the area
+		Vector closest;
+		area->GetClosestPointOnArea( end, &closest );
+		const Vector northWest = area->GetCorner( NORTH_WEST );
+		const Vector southEast = area->GetCorner( SOUTH_EAST );
+		const float minX = northWest.x - mins.x + RECOVERY_LANDING_INSET;
+		const float minY = northWest.y - mins.y + RECOVERY_LANDING_INSET;
+		const float maxX = southEast.x - maxs.x - RECOVERY_LANDING_INSET;
+		const float maxY = southEast.y - maxs.y - RECOVERY_LANDING_INSET;
+		if ( minX <= maxX && minY <= maxY )
+		{
+			Vector clamped( Clamp( closest.x, minX, maxX ), Clamp( closest.y, minY, maxY ), 0.0f );
+			clamped.z = area->GetZ( clamped );
+			candidates.AddToTail( clamped );
+		}
+		candidates.AddToTail( area->GetCenter() );
+
+		state.ladder = ladder;
+		state.landingArea = area;
+		state.landingUnionArea = nullptr;
+		FOR_EACH_VEC( candidates, i )
+		{
+			Vector spot;
+			if ( !ValidateLanding( me, candidates[i], &spot, &probe, RECOVERY_PLACEMENT ) )
+			{
+				continue;
+			}
+
+			const bool rightWay = goingUp ? spot.z > feet.z - step : spot.z < feet.z + step;
+			if ( !rightWay )
+			{
+				probe.gate = "direction";
+				continue;
+			}
+
+			if ( spot.DistTo( feet ) > ladder->m_length + RECOVERY_SEARCH_RANGE )
+			{
+				probe.gate = "distance_cap";
+				continue;
+			}
+
+			landing = spot;
+			placedArea = area;
+			break;
+		}
+		state.ladder = savedLadder;
+		state.landingArea = savedArea;
+		state.landingUnionArea = savedUnionArea;
+	}
+
+	if ( !placedArea )
+	{
+		LogExpiryTeleport( me, ladder, goingUp, timer, feet, vec3_origin, nullptr, probe.gate );
+		return false;
+	}
+
+	PathFollower *path = const_cast<PathFollower *>( me->GetCurrentPath() );
+	const bool hasGoal = path && path->IsValid();
+	const Vector goal = hasGoal ? path->GetEndPosition() : vec3_origin;
+
+	me->ClearLadderMovementInputs();
+	me->ReleaseCrouchButton();
+	me->SetMoveType( MOVETYPE_WALK );
+	me->SetGroundEntity( nullptr );
+
+	// Keep the yaw; a climb leaves the pitch pointing up or down the ladder
+	const QAngle upright( 0.0f, me->EyeAngles().y, 0.0f );
+	me->Teleport( &landing, &upright, &vec3_origin );
+	me->SetBaseVelocity( vec3_origin );
+	me->GetLocomotionInterface()->Reset();
+
+	// A buffered forward press would grab the ladder again at its foot
+	me->m_ladderNeutralThroughTick = gpGlobals->tickcount + RECOVERY_NEUTRAL_TICKS;
+
+	// The old path still leads to this ladder, and from the exit area of a short ladder
+	// the bot is close enough to its entry to start another approach
+	if ( path )
+	{
+		me->ClearLastKnownArea();
+		me->UpdateLastKnownArea();
+		CNEOBotPathCost cost( me, DEFAULT_ROUTE );
+		if ( !hasGoal || !me->GetLastKnownArea() || !path->Compute( me, goal, cost ) )
+		{
+			path->Invalidate();
+		}
+	}
+
+	me->m_ladderTeleportCooldown.Start( EXPIRY_TELEPORT_COOLDOWN );
+	LogExpiryTeleport( me, ladder, goingUp, timer, feet, landing, placedArea, "none" );
+	return true;
+}
+
+//---------------------------------------------------------------------------------------------
+bool CNEOBotLadderClimb::TeleportOnExpiry( CNEOBot *me, ExpiryTimer timer )
+{
+	if ( neo_bot_ladder_expiry_teleport.GetInt() == EXPIRY_TELEPORT_OFF )
+	{
+		return false;
+	}
+
+	// The path's exit can have changed since the climb started
+	ResolveExitArea( me );
+	return TryExpiryTeleport( me, m_ladder, m_bGoingUp, m_pExitArea, &m_dismountPos, timer );
 }
 
 //---------------------------------------------------------------------------------------------
@@ -2137,6 +2387,11 @@ ActionResult<CNEOBot> CNEOBotLadderClimb::Update( CNEOBot *me, float /*interval*
 		return Done( "Ladder recovery episode finished" );
 	}
 
+	if ( m_timeoutTimer.IsElapsed() && TeleportOnExpiry( me, EXPIRY_CLIMB ) )
+	{
+		return Done( "Ladder climb timeout, placed on exit area" );
+	}
+
 	if ( m_timeoutTimer.IsElapsed() )
 	{
 		return Done( "Ladder climb timeout" );
@@ -2252,6 +2507,10 @@ ActionResult<CNEOBot> CNEOBotLadderClimb::Update( CNEOBot *me, float /*interval*
 					{
 						DevMsg( "%s: Ladder climb stuck - jumping backwards to reset (delta %.1f)\n",
 							me->GetDebugIdentifier(), verticalDelta );
+					}
+					if ( TeleportOnExpiry( me, EXPIRY_STALL ) )
+					{
+						return Done( "Got stuck on something climbing the ladder, placed on exit area" );
 					}
 					me->PressJumpButton();
 					me->PressBackwardButton(0.1f);
@@ -2404,6 +2663,10 @@ ActionResult<CNEOBot> CNEOBotLadderClimb::Update( CNEOBot *me, float /*interval*
 		}
 
 		// Safety timeout
+		if ( m_dismountTimer.IsElapsed() && TeleportOnExpiry( me, EXPIRY_DISMOUNT ) )
+		{
+			return Done( "Dismount walk timed out, placed on exit area" );
+		}
 		if ( m_dismountTimer.IsElapsed() )
 		{
 			return Done( "Dismount walk timed out" );

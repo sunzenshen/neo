@@ -103,6 +103,12 @@ ActionResult<CNEOBot> CNEOBotLadderApproach::Update( CNEOBot *me, float )
 		return Done( "Ladder recovery episode finished" );
 	}
 
+	if ( m_timeoutTimer.IsElapsed() && CNEOBotLadderClimb::TryExpiryTeleport( me, m_ladder, m_bGoingUp, nullptr, nullptr,
+		CNEOBotLadderClimb::EXPIRY_APPROACH ) )
+	{
+		return Done( "Ladder approach timeout, placed on exit area" );
+	}
+
 	if ( m_timeoutTimer.IsElapsed() )
 	{
 		return Done( "Ladder approach timeout" );

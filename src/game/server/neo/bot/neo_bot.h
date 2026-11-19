@@ -581,6 +581,7 @@ private:
 	};
 	CUtlVector<LadderRecoveryBlock> m_ladderRecoveryBlocks;
 	int m_ladderNeutralThroughTick = -1;
+	CountdownTimer m_ladderTeleportCooldown;
 
 	void ToggleCloak(void);
 
