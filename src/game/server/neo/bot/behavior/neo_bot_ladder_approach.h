@@ -53,6 +53,7 @@ private:
 	static constexpr float LINEUP_DEPTH = 8.0f;			// the line-up point on the floor, behind the face beyond the hull's half width
 	static constexpr float BARRIER_PROBE = 4.0f;		// how close a barrier on the way to the hang point is hopped onto
 	static constexpr float EDGE_ZONE = 8.0f;			// beyond the hull's half width behind the face: over the ladder's own top
+	static constexpr float BACK_OUT_FACING = 0.707f;	// how squarely the view must point into the face before backing out (the locomotion's catch needs it)
 	static constexpr float CROUCH_HOLD = 0.3f;			// crouch held from each update while backing out on the top
 	static constexpr float PROGRESS_STEP = 4.0f;		// a move this far counts as progress
 	static constexpr float STALL_TIME = 0.6f;			// and none for this long, over a level top, means blocked (measured on ridgeline L1)

@@ -392,6 +392,15 @@ ActionResult<CNEOBot> CNEOBotLadderApproach::UpdateOverTop( CNEOBot *me, const V
 	}
 	else
 	{
+		// Backed out before the view has turned to the face, the bot drops where the locomotion cannot press
+		// into the face, so wait for the turn
+		Vector view;
+		me->EyeVectors( &view );
+		if ( DotProduct2D( view.AsVector2D(), intoFace.AsVector2D() ) < BACK_OUT_FACING )
+		{
+			return Continue();
+		}
+
 		me->PressBackwardButton();
 
 		// Backing out over a level top can wedge the bot on the ladder brush's top in front of the face,
