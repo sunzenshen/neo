@@ -842,8 +842,9 @@ static bool IsAtLadderEntry( CNEOBot *me, const CNavLadder *ladder, bool goingUp
 		return false;
 	}
 
+	// The hull can still stand on the area while its center is just past the edge
 	const CNavArea *area = me->GetLastKnownArea();
-	return area && area->IsOverlapping( feet ) && ladder->IsConnected( area, CNavLadder::LADDER_UP );
+	return area && area->IsOverlapping( feet, HalfHumanWidth ) && ladder->IsConnected( area, CNavLadder::LADDER_UP );
 }
 
 //---------------------------------------------------------------------------------------------
@@ -923,6 +924,32 @@ static void AddExpiryCandidates( const CNavArea *area, const Vector &end, const 
 		from.y = Clamp( from.y, minY, maxY );
 		from.z = area->GetZ( from );
 		candidates->AddToTail( from );
+	}
+	else
+	{
+		// Narrower than the hull: on that axis, stand at the edge away from the ladder,
+		// so the hull overhangs the open side rather than the ladder
+		const Vector &middle = area->GetCenter();
+		Vector away = from;
+		if ( minX > maxX )
+		{
+			away.x = end.x > middle.x ? northWest.x + RECOVERY_LANDING_INSET : southEast.x - RECOVERY_LANDING_INSET;
+		}
+		else
+		{
+			away.x = Clamp( from.x, minX, maxX );
+		}
+
+		if ( minY > maxY )
+		{
+			away.y = end.y > middle.y ? northWest.y + RECOVERY_LANDING_INSET : southEast.y - RECOVERY_LANDING_INSET;
+		}
+		else
+		{
+			away.y = Clamp( from.y, minY, maxY );
+		}
+		away.z = area->GetZ( away );
+		candidates->AddToTail( away );
 	}
 
 	const Vector &center = area->GetCenter();
@@ -1130,6 +1157,21 @@ bool CNEOBotLadderClimb::TeleportOnExpiry( CNEOBot *me, ExpiryTimer timer )
 }
 
 //---------------------------------------------------------------------------------------------
+// A top area, or an area walked onto from one: a bot that stepped past a narrow landing reached the top
+static bool IsBesideLadderTop( const CNavLadder *ladder, const CNavArea *area )
+{
+	const CNavArea *tops[] = { ladder->m_topForwardArea, ladder->m_topLeftArea, ladder->m_topRightArea, ladder->m_topBehindArea };
+	for ( const CNavArea *top : tops )
+	{
+		if ( top && ( top == area || top->IsConnected( area, NUM_DIRECTIONS ) ) )
+		{
+			return true;
+		}
+	}
+	return false;
+}
+
+//---------------------------------------------------------------------------------------------
 // A climber that left the ladder at its top but came down beside the landing, not on it
 bool CNEOBotLadderClimb::IsMissedLanding( CNEOBot *me ) const
 {
@@ -1139,13 +1181,14 @@ bool CNEOBotLadderClimb::IsMissedLanding( CNEOBot *me ) const
 	}
 
 	const Vector &feet = me->GetLocomotionInterface()->GetFeet();
-	if ( feet.z <= m_ladder->m_top.z - me->GetLocomotionInterface()->GetStepHeight() )
+	const float step = me->GetLocomotionInterface()->GetStepHeight();
+	if ( feet.z <= m_ladder->m_top.z - step )
 	{
 		return false;
 	}
 
 	const CNavArea *area = me->GetLastKnownArea();
-	if ( area && area->IsOverlapping( feet ) && m_ladder->IsConnected( area, CNavLadder::LADDER_UP ) )
+	if ( area && area->IsOverlapping( feet ) && fabsf( area->GetZ( feet ) - feet.z ) <= step && IsBesideLadderTop( m_ladder, area ) )
 	{
 		return false;
 	}
