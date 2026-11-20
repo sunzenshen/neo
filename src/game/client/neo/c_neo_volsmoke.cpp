@@ -603,7 +603,8 @@ C_NeoVolSmoke::C_NeoVolSmoke()
 	  m_bCellBytes( false ), m_nBounded( 0 ), m_pRegen( nullptr ), m_flDistRange( NEO_VOLSMOKE_DIST_RANGE ), m_nAtlasCols( 0 ),
 	  m_nAtlasW( 0 ), m_nAtlasH( 0 ), m_nPacked( 0 ), m_flNextUpload( 0 ), m_flUploadedFront( 0 ), m_bUploadPending( false ),
 	  m_nRenderSerial( -1 ), m_nCoverBoxes( 0 ), m_flNextCover( 0 ), m_bCoverFinal( false ), m_bCoverBoxes( false ),
-	  m_nPanes( 0 ), m_nPaneRay( 0 ), m_bPanesFound( false )
+	  m_nPanes( 0 ), m_nPaneRay( 0 ), m_bPanesFound( false ), m_nGlassWalk( -1 ), m_bGlassDrawn( false ),
+	  m_nGlassLayers( 0 ), m_nLayersDrawn( 0 )
 {
 	for ( int a = 0; a < 3; ++a )
 	{
@@ -2190,8 +2191,287 @@ void C_NeoVolSmoke::SetDrawParams( IMaterial *pMat ) const
 	SetFloatVar( pMat, "$age", age );
 }
 
+// ---------------------------------------------------------------------------
+// Glass in the translucent walk. The walk draws leaves back to front, and a
+// leaf's renderables after its surfaces, so a pane inside the box is drawn
+// before the volume and the smoke covers it. A held leaf waits in a queue
+// until every volume that holds it has drawn.
+// ---------------------------------------------------------------------------
+struct VolSmokeHeldLeaf_t
+{
+	IWorldRenderList *pList;
+	int sortIndex;
+	unsigned long flags;
+	int nWaiting;              // volumes that hold the leaf and have not drawn
+};
+
+static CUtlVector< VolSmokeHeldLeaf_t > s_HeldGlass;
+static int s_nHeldHead = 0;    // the first leaf not yet drawn
+static CUtlVector< C_NeoVolSmoke * > s_GlassVolumes;
+static CUtlVector< C_NeoVolSmoke * > s_LayeredVolumes; // drawn, with layers still to draw
+static bool s_bGlassWalk = false;
+static int s_nGlassWalk = 0;
+
+// The volumes with panes that may draw in this walk.
+void C_NeoVolSmoke::BeginGlassWalk( bool bMainView )
+{
+	s_HeldGlass.RemoveAll();
+	s_nHeldHead = 0;
+	s_GlassVolumes.RemoveAll();
+	s_LayeredVolumes.RemoveAll();
+	++s_nGlassWalk;
+	s_bGlassWalk = bMainView && !g_SmokeFogOverlayThermalOverride && !SmokeFogOverlayCoversView();
+	if ( !s_bGlassWalk )
+	{
+		return;
+	}
+
+	for ( C_NeoVolSmoke *pVol : s_Volumes )
+	{
+		if ( pVol->m_nPanes == 0 || !pVol->DrawsShaderCloud() || engine->CullBox( pVol->m_vecSmokeMin, pVol->m_vecSmokeMax ) )
+		{
+			continue;
+		}
+
+		pVol->m_nGlassWalk = s_nGlassWalk;
+		pVol->m_bGlassDrawn = false;
+		pVol->m_GlassWaits.RemoveAll();
+		for ( int p = 0; p < NEO_VOLSMOKE_MAX_PANES; ++p )
+		{
+			pVol->m_nPaneHeld[p] = -1;
+		}
+
+		pVol->m_nGlassLayers = 0;
+		pVol->m_nLayersDrawn = 0;
+		s_GlassVolumes.AddToTail( pVol );
+	}
+
+	s_bGlassWalk = s_GlassVolumes.Count() > 0;
+}
+
+// True when the leaf holds the camera-side faces of a pane of a volume that
+// has not drawn yet; the leaf is then queued, not drawn.
+bool C_NeoVolSmoke::HoldsGlass( int leaf, IWorldRenderList *pList, int sortIndex, unsigned long flags )
+{
+	if ( !s_bGlassWalk )
+	{
+		return false;
+	}
+
+	const Vector &eye = CurrentViewOrigin();
+	int queued = -1;
+	for ( C_NeoVolSmoke *pVol : s_GlassVolumes )
+	{
+		if ( pVol->m_bGlassDrawn )
+		{
+			continue;
+		}
+
+		bool waits = false;
+		for ( int p = 0; p < pVol->m_nPanes; ++p )
+		{
+			const VolSmokePane_t &pane = pVol->m_Panes[p];
+			const int side = DotProduct( pane.normal, eye ) >= pane.dist ? 0 : 1;
+			bool inSide = false;
+			for ( int k = 0; k < pane.nLeaves[side]; ++k )
+			{
+				inSide = inSide || pane.leaves[side][k] == leaf;
+			}
+
+			if ( !inSide )
+			{
+				continue;
+			}
+
+			if ( queued < 0 )
+			{
+				queued = s_HeldGlass.AddToTail( { pList, sortIndex, flags, 0 } );
+			}
+
+			pVol->m_nPaneHeld[p] = queued;
+			waits = true;
+		}
+
+		if ( waits )
+		{
+			++s_HeldGlass[queued].nWaiting;
+			pVol->m_GlassWaits.AddToTail( queued );
+		}
+	}
+
+	return queued >= 0;
+}
+
+// Draws the queued leaves from the head while no volume waits on the head,
+// each followed by the volume layers that come after it.
+void C_NeoVolSmoke::DrawHeldGlass()
+{
+	while ( s_nHeldHead < s_HeldGlass.Count() && s_HeldGlass[s_nHeldHead].nWaiting == 0 )
+	{
+		const int drawn = s_nHeldHead++;
+		const VolSmokeHeldLeaf_t &held = s_HeldGlass[drawn];
+		render->SetBlend( 1 );
+		render->DrawTranslucentSurfaces( held.pList, held.sortIndex, held.flags, false );
+
+		FOR_EACH_VEC_BACK( s_LayeredVolumes, i )
+		{
+			C_NeoVolSmoke *pVol = s_LayeredVolumes[i];
+			if ( pVol->m_nLayerAfter[pVol->m_nLayersDrawn] != drawn )
+			{
+				continue;
+			}
+
+			pVol->DrawNextLayer();
+			if ( pVol->m_nLayersDrawn == pVol->m_nGlassLayers )
+			{
+				s_LayeredVolumes.Remove( i );
+			}
+		}
+	}
+}
+
+// Draws what is still queued: the leaves of volumes that did not draw.
+void C_NeoVolSmoke::EndGlassWalk()
+{
+	for ( VolSmokeHeldLeaf_t &held : s_HeldGlass )
+	{
+		held.nWaiting = 0;
+	}
+
+	DrawHeldGlass();
+
+	// A volume whose last held leaf drew before the volume still owes its
+	// later layers; without them its smoke in front of a pane is missing.
+	Assert( s_LayeredVolumes.Count() == 0 );
+	for ( C_NeoVolSmoke *pVol : s_LayeredVolumes )
+	{
+		while ( pVol->m_nLayersDrawn < pVol->m_nGlassLayers )
+		{
+			pVol->DrawNextLayer();
+		}
+	}
+
+	s_HeldGlass.RemoveAll();
+	s_nHeldHead = 0;
+	s_GlassVolumes.RemoveAll();
+	s_LayeredVolumes.RemoveAll();
+	s_bGlassWalk = false;
+}
+
+// The volume draws with the shader in this view.
+bool C_NeoVolSmoke::DrawsShaderCloud()
+{
+	return !m_bCoverBoxes && m_Atlas.IsValid() && m_Material && !m_Material->IsErrorMaterial() && m_SlabMaterial
+		&& !m_SlabMaterial->IsErrorMaterial() && m_vecSmokeMax.x > m_vecSmokeMin.x;
+}
+
+// The volume draws now: the leaves it holds stop waiting on it.
+void C_NeoVolSmoke::ReleaseHeldGlass()
+{
+	if ( !s_bGlassWalk || m_nGlassWalk != s_nGlassWalk || m_bGlassDrawn )
+	{
+		return;
+	}
+
+	m_bGlassDrawn = true;
+	for ( int held : m_GlassWaits )
+	{
+		--s_HeldGlass[held].nWaiting;
+	}
+
+	m_GlassWaits.RemoveAll();
+}
+
+// The panes whose glass this walk held become the volume's layers: a pane's
+// glass draws after the layer numbered by its held leaf's place among them.
+// Without a held pane the volume draws as one layer.
+void C_NeoVolSmoke::SetPaneLayers()
+{
+	m_nGlassLayers = 0;
+	m_nLayersDrawn = 0;
+	const bool inWalk = s_bGlassWalk && m_nGlassWalk == s_nGlassWalk;
+	for ( int p = 0; inWalk && p < m_nPanes; ++p )
+	{
+		const int held = m_nPaneHeld[p];
+		// A leaf already drawn can no longer order a layer.
+		bool known = held < s_nHeldHead;
+		for ( int k = 0; k < m_nGlassLayers; ++k )
+		{
+			known = known || m_nLayerAfter[k] == held;
+		}
+
+		if ( !known )
+		{
+			m_nLayerAfter[m_nGlassLayers++] = held;
+		}
+	}
+
+	std::sort( m_nLayerAfter, m_nLayerAfter + m_nGlassLayers );
+
+	int nActive = 0;
+	float groups[NEO_VOLSMOKE_MAX_PANES] = { -1.0f, -1.0f, -1.0f, -1.0f };
+	static const char *const s_PaneVars[NEO_VOLSMOKE_MAX_PANES][3] = { { "$pane0plane", "$pane0u", "$pane0v" },
+		{ "$pane1plane", "$pane1u", "$pane1v" }, { "$pane2plane", "$pane2u", "$pane2v" }, { "$pane3plane", "$pane3u", "$pane3v" } };
+	for ( int p = 0; m_nGlassLayers > 0 && p < m_nPanes; ++p )
+	{
+		if ( m_nPaneHeld[p] < s_nHeldHead )
+		{
+			continue;
+		}
+
+		for ( int k = 0; k < m_nGlassLayers; ++k )
+		{
+			if ( m_nLayerAfter[k] == m_nPaneHeld[p] )
+			{
+				groups[nActive] = (float)( k + 1 );
+			}
+		}
+
+		const VolSmokePane_t &pane = m_Panes[p];
+		for ( IMaterial *pMat : { (IMaterial *)m_Material, (IMaterial *)m_SlabMaterial } )
+		{
+			SetVec4Var( pMat, s_PaneVars[nActive][0], pane.normal.x, pane.normal.y, pane.normal.z, pane.dist );
+			SetVec4Var( pMat, s_PaneVars[nActive][1], pane.u.x, pane.u.y, pane.u.z, pane.u0 );
+			SetVec4Var( pMat, s_PaneVars[nActive][2], pane.v.x, pane.v.y, pane.v.z, pane.v0 );
+		}
+
+		++nActive;
+	}
+
+	for ( IMaterial *pMat : { (IMaterial *)m_Material, (IMaterial *)m_SlabMaterial } )
+	{
+		SetIntVar( pMat, "$panecount", nActive );
+		SetIntVar( pMat, "$panelayer", 0 );
+		SetVec4Var( pMat, "$panegroups", groups[0], groups[1], groups[2], groups[3] );
+	}
+}
+
+// Draws the volume's next layer, after the glass in front of the last one.
+void C_NeoVolSmoke::DrawNextLayer()
+{
+	++m_nLayersDrawn;
+	SetIntVar( m_Material, "$panelayer", m_nLayersDrawn );
+	SetIntVar( m_SlabMaterial, "$panelayer", m_nLayersDrawn );
+
+	CMatRenderContextPtr pRenderContext( materials );
+	pRenderContext->MatrixMode( MATERIAL_MODEL );
+	pRenderContext->PushMatrix();
+	pRenderContext->LoadIdentity();
+	DrawFarSlabs( pRenderContext );
+	DrawNearPass( pRenderContext );
+	pRenderContext->MatrixMode( MATERIAL_MODEL );
+	pRenderContext->PopMatrix();
+
+	if ( m_nLayersDrawn == m_nGlassLayers )
+	{
+		DrawRevealed( pRenderContext );
+	}
+}
+
 int C_NeoVolSmoke::DrawModel( int flags )
 {
+	ReleaseHeldGlass();
+
 	// The scene depth the shader clips against is only current in the main view.
 	if ( CurrentViewID() != VIEW_MAIN )
 	{
@@ -2252,6 +2532,7 @@ int C_NeoVolSmoke::DrawModel( int flags )
 	const int nLights = CollectDynamicLights( m_vecSmokeMin, m_vecSmokeMax, lights );
 	SetDynamicLightParams( m_Material, lights, nLights );
 	SetDynamicLightParams( m_SlabMaterial, lights, nLights );
+	SetPaneLayers();
 
 	pRenderContext->MatrixMode( MATERIAL_MODEL );
 	pRenderContext->PushMatrix();
@@ -2269,6 +2550,13 @@ int C_NeoVolSmoke::DrawModel( int flags )
 
 	pRenderContext->MatrixMode( MATERIAL_MODEL );
 	pRenderContext->PopMatrix();
+
+	// What the smoke reveals draws over the last layer.
+	if ( m_nGlassLayers > 0 )
+	{
+		s_LayeredVolumes.AddToTail( this );
+		return 1;
+	}
 
 	DrawRevealed( pRenderContext );
 

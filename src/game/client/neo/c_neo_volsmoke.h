@@ -29,6 +29,7 @@
 class CNeoVolSmokeRegenerator;
 class IMatRenderContext;
 class IMaterial;
+class IWorldRenderList;
 class CNeoVolSmokeWorld;
 class CJob;
 struct VolSmokeCullGrid_t;
@@ -91,6 +92,14 @@ public:
 	// depth, can fade itself by this to stay hidden behind it.
 	static float Transmittance( const Vector &eye, const Vector &point );
 
+	// Glass inside a volume's box. The translucent world walk calls these:
+	// a leaf that holds a pane's camera-side faces is drawn after the volume
+	// rather than in its own place, so the pane shows over the smoke.
+	static void BeginGlassWalk( bool bMainView );
+	static bool HoldsGlass( int leaf, IWorldRenderList *pList, int sortIndex, unsigned long flags );
+	static void DrawHeldGlass();
+	static void EndGlassWalk();
+
 	// C_BaseEntity
 	virtual void ClientThink() override;
 	virtual bool ShouldDraw() override { return true; }
@@ -124,6 +133,10 @@ private:
 	bool PaneRay( int ray, Vector &start, Vector &end ) const;
 	void TracePaneRay( const Vector &start, const Vector &end );
 	void BuildPanes();
+	bool DrawsShaderCloud();
+	void ReleaseHeldGlass();
+	void SetPaneLayers();
+	void DrawNextLayer();
 
 	// Cells of the volume's box
 	int  CellIndex( int x, int y, int z ) const { return ( z * m_nBox[1] + y ) * m_nBox[0] + x; }
@@ -252,6 +265,15 @@ private:
 	int    m_nPanes;
 	int    m_nPaneRay;         // the next ray of the sweep
 	bool   m_bPanesFound;
+
+	// This volume's part in the current translucent walk
+	int    m_nGlassWalk;       // the walk the fields below belong to
+	int    m_nPaneHeld[NEO_VOLSMOKE_MAX_PANES]; // the pane's last held leaf in the walk's queue, or -1
+	bool   m_bGlassDrawn;      // the volume has drawn in this walk
+	CUtlVector< int > m_GlassWaits; // the held leaves that wait on this volume
+	int    m_nLayerAfter[NEO_VOLSMOKE_MAX_PANES]; // per layer from the second, the held leaf it draws after
+	int    m_nGlassLayers;     // layers after the first in this walk
+	int    m_nLayersDrawn;     // of those
 };
 
 #endif // C_NEO_VOLSMOKE_H

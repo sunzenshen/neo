@@ -85,6 +85,10 @@
 // Projective textures
 #include "C_Env_Projected_Texture.h"
 
+#ifdef NEO
+#include "neo/c_neo_volsmoke.h"
+#endif
+
 // memdbgon must be the last include file in a .cpp file!!!
 #include "tier0/memdbgon.h"
 
@@ -4538,7 +4542,15 @@ void CRendering3dView::DrawTranslucentWorldAndDetailPropsInLeaves( int iCurLeafI
 			nDetailLeafCount = 0;
 
 			// Now draw the surfaces in this leaf
+#ifdef NEO
+			// Glass inside a smoke volume waits until the volume draws.
+			if ( !C_NeoVolSmoke::HoldsGlass( info.m_pLeafList[iCurLeafIndex], m_pWorldRenderList, nActualLeafIndex, nEngineDrawFlags ) )
+			{
+				render->DrawTranslucentSurfaces( m_pWorldRenderList, nActualLeafIndex, nEngineDrawFlags, bShadowDepth );
+			}
+#else
 			render->DrawTranslucentSurfaces( m_pWorldRenderList, nActualLeafIndex, nEngineDrawFlags, bShadowDepth );
+#endif
 		}
 
 		// Queue up detail props that existed in this leaf
@@ -4791,6 +4803,10 @@ void CRendering3dView::DrawTranslucentRenderables( bool bInSkybox, bool bShadowD
 
 	DetailObjectSystem()->BeginTranslucentDetailRendering();
 
+#ifdef NEO
+	C_NeoVolSmoke::BeginGlassWalk( !bInSkybox && !bShadowDepth && CurrentViewID() == VIEW_MAIN );
+#endif
+
 	if ( m_pMainView->ShouldDrawEntities() && r_drawtranslucentrenderables.GetBool() )
 	{
 		MDLCACHE_CRITICAL_SECTION();
@@ -4861,6 +4877,9 @@ void CRendering3dView::DrawTranslucentRenderables( bool bInSkybox, bool bShadowD
 
 					// Then draw the translucent renderable
 					DrawTranslucentRenderable( pRenderable, (pEntities[iCurTranslucentEntity].m_TwoPass != 0), bShadowDepth, false );
+#ifdef NEO
+					C_NeoVolSmoke::DrawHeldGlass();
+#endif
 				}
 
 				// Draw all remaining props in this leaf
@@ -4912,6 +4931,9 @@ void CRendering3dView::DrawTranslucentRenderables( bool bInSkybox, bool bShadowD
 					}
 
 					DrawTranslucentRenderable( pRenderable, (pEntities[iCurTranslucentEntity].m_TwoPass != 0), bShadowDepth, false );
+#ifdef NEO
+					C_NeoVolSmoke::DrawHeldGlass();
+#endif
 				}
 			}
 
@@ -4924,6 +4946,10 @@ void CRendering3dView::DrawTranslucentRenderables( bool bInSkybox, bool bShadowD
 
 	// Draw any queued-up detail props from previously visited leaves
 	DetailObjectSystem()->RenderTranslucentDetailObjects( CurrentViewOrigin(), CurrentViewForward(), CurrentViewRight(), CurrentViewUp(), nDetailLeafCount, pDetailLeafList );
+
+#ifdef NEO
+	C_NeoVolSmoke::EndGlassWalk();
+#endif
 
 	// Reset the blend state.
 	render->SetBlend( 1 );
