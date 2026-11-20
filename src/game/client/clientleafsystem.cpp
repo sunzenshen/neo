@@ -23,6 +23,9 @@
 #include "datacache/imdlcache.h"
 #include "view.h"
 #include "viewrender.h"
+#ifdef NEO
+#include "neo/c_neo_volsmoke.h"
+#endif // NEO
 
 // memdbgon must be the last include file in a .cpp file!!!
 #include "tier0/memdbgon.h"
@@ -1774,6 +1777,13 @@ void CClientLeafSystem::SortEntities( const Vector &vecRenderOrigin, const Vecto
 	{
 		IClientRenderable *pRenderable = pEntities[i].m_pRenderable;
 
+#ifdef NEO
+		if ( C_NeoVolSmoke::SortDepth( pRenderable, vecRenderOrigin, vecRenderForward, dists[i] ) )
+		{
+			continue;
+		}
+
+#endif // NEO
 		// Compute the center of the object (needed for translucent brush models)
 		Vector boxcenter;
 		Vector mins,maxs;

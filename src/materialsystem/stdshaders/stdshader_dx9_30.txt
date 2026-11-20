@@ -21,6 +21,7 @@ neo_noise_ps30.fxc
 neo_ssao_combine_ps30.fxc
 neo_ssao_ps30.fxc
 neo_thermalvision_ps30.fxc
+neo_volsmoke_ps30.fxc
 neo_colorblind_ps30.fxc
 
 ////////////////////////
@@ -29,6 +30,7 @@ neo_colorblind_ps30.fxc
 
 //neo_motionvision_modelshader_vs30.fxc
 neo_passthrough_vs30.fxc
+neo_volsmoke_vs30.fxc
 
 cloak_vs20.fxc
 cloak_ps2x.fxc

@@ -1,9 +1,12 @@
 #include "cbase.h"
 #include "neo_smokegrenade.h"
 #include "neo_smokelineofsightblocker.h"
+#include "neo_smoke_volume.h"
+#include "neo_smoke_shared.h"
 
 #include "neo_tracefilter_collisiongroupdelta.h"
 #include "particle_smokegrenade.h"
+#include "tempentity.h"
 
 #include "mathlib/vector.h"
 
@@ -31,6 +34,7 @@ ConVar sv_neo_smoke_bloom_duration("sv_neo_smoke_bloom_duration", "25", FCVAR_CH
 ConVar sv_neo_smoke_bloom_layers("sv_neo_smoke_bloom_layers", "2", FCVAR_CHEAT, "Amount of smoke layers atop each other.", true, 0.0, true, 32.0);
 ConVar sv_neo_smoke_blocker_size("sv_neo_smoke_blocker_size", "140", FCVAR_CHEAT, "Size of each LOS blocker per smoke particle.", true, 0.0, true, 200.0);
 ConVar sv_neo_smoke_blocker_delay("sv_neo_smoke_blocker_delay", "1.0", FCVAR_CHEAT, "Time after spawn before LOS blocker activates LOS blocking", true, 0.0, true, 10.0);
+
 extern ConVar sv_neo_grenade_cor;
 extern ConVar sv_neo_grenade_gravity;
 extern ConVar sv_neo_grenade_friction;
@@ -119,8 +123,16 @@ void CNEOGrenadeSmoke::Detonate(void)
 	{
 		m_hasBeenMadeNonSolid = true;
 
-		SetupParticles(sv_neo_smoke_bloom_layers.GetInt());
 		m_flSmokeBloomTime = gpGlobals->curtime;
+		if (NEOSmokeIsVolumetric())
+		{
+			NEOSmokeVolume_Create(GetAbsOrigin(), this);
+			CNEOSmokeLineOfSightBlocker::CreateForSmokeField(GetAbsOrigin(), this);
+		}
+		else
+		{
+			SetupParticles(sv_neo_smoke_bloom_layers.GetInt());
+		}
 
 		CRecipientFilter filter;
 		filter.AddRecipientsByPAS(GetAbsOrigin());
@@ -135,11 +147,30 @@ void CNEOGrenadeSmoke::Detonate(void)
 	}
 	else if (gpGlobals->curtime - m_flSmokeBloomTime >= sv_neo_smoke_bloom_duration.GetFloat())
 	{
-		SetNextThink(TICK_NEVER_THINK);
+		if (NEOSmokeIsVolumetric())
+		{
+			BecomeDebris();
+		}
+		else
+		{
+			SetNextThink(TICK_NEVER_THINK);
+		}
+
 		return;
 	}
 	
 	SetNextThink(gpGlobals->curtime + 1.0f);
+}
+
+void CNEOGrenadeSmoke::BecomeDebris()
+{
+	// The spent shell would otherwise stay networked and drawn until the round ends.
+	// Clients replace it with a local physics prop, so it costs no edict.
+	CPVSFilter filter(GetAbsOrigin());
+	te->PhysicsProp(filter, 0.0f, GetModelIndex(), m_nSkin, GetAbsOrigin(), GetAbsAngles(), vec3_origin,
+		TE_PHYSPROPFLAG_DEBRIS, 0);
+
+	UTIL_Remove(this);
 }
 
 void CNEOGrenadeSmoke::SetupParticles(size_t number)

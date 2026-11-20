@@ -1,0 +1,49 @@
+// NEO volumetric smoke - vertex shader.
+//
+// The client draws the world-space AABB of a smoke volume with an identity
+// model matrix, so vPos *is* the world position. We hand the pixel shader
+// everything it needs to build a per-pixel eye ray and to compare against the
+// engine's depth-in-dest-alpha encoding without any extra matrices:
+//
+//   clip-space Z and view depth are affine in world position, so interpolating
+//   them as a TEXCOORD (perspective-correct) gives their exact values at the
+//   surface point, and their values at the eye are constants we compute here.
+//   Clip Z uses cModelViewProjZ, the row opaque shaders write to dest alpha;
+//   cModelViewProj has a different Z row under fast clip.
+
+#include "common_vs_fxc.h"
+
+struct VS_INPUT
+{
+	float4 vPos    : POSITION;
+	float2 vZRange : TEXCOORD0; // view depth range this draw marches
+};
+
+struct VS_OUTPUT
+{
+	float4 vProjPos   : POSITION;
+	float3 vWorldPos  : TEXCOORD0;
+	float4 vScreenPos : TEXCOORD1; // projPos, for screen UV reconstruction
+	float4 vDepth     : TEXCOORD2; // x, y = clip Z here and at the eye; z, w = view depth here and at the eye
+	float2 vZRange    : TEXCOORD3;
+};
+
+VS_OUTPUT main( const VS_INPUT v )
+{
+	VS_OUTPUT o = (VS_OUTPUT)0;
+
+	float4 worldPos = float4( v.vPos.xyz, 1.0f );
+	float4 projPos  = mul( worldPos, cModelViewProj );
+
+	o.vProjPos   = projPos;
+	o.vWorldPos  = worldPos.xyz;
+	o.vScreenPos = projPos;
+	float4 eyePos = float4( cEyePos, 1.0f );
+	o.vDepth.x   = dot( worldPos, cModelViewProjZ );
+	o.vDepth.y   = dot( eyePos, cModelViewProjZ );
+	o.vDepth.z   = projPos.w;
+	o.vDepth.w   = mul( eyePos, cModelViewProj ).w;
+	o.vZRange    = v.vZRange;
+
+	return o;
+}
