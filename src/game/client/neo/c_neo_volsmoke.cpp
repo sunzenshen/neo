@@ -270,6 +270,12 @@ static CUtlVector< float > s_flCenterOwn;
 // opaque: every volume's slab cull hides its tiles past it.
 static float s_flSheetDepth[NEO_VOLSMOKE_CULL_MAX_ROWS][NEO_VOLSMOKE_CULL_MAX_COLS];
 
+// Smoke shows through glass and grates, and the pane finder looks for them.
+static bool VolSmokeSeesThrough( const trace_t &tr )
+{
+	return ( tr.contents & ( CONTENTS_WINDOW | CONTENTS_GRATE ) ) || ( tr.surface.flags & SURF_TRANS );
+}
+
 // ---------------------------------------------------------------------------
 // The fill's world queries (shared with the server), plus what only the
 // client draws: the walls beside the gas.
@@ -321,8 +327,8 @@ public:
 			return false;
 		}
 
-		// Smoke shows through glass and grates, so they do not end it.
-		if ( ( tr.contents & ( CONTENTS_WINDOW | CONTENTS_GRATE ) ) || ( tr.surface.flags & SURF_TRANS ) )
+		// Glass and grates do not end the smoke.
+		if ( VolSmokeSeesThrough( tr ) )
 		{
 			return false;
 		}
@@ -596,7 +602,8 @@ C_NeoVolSmoke::C_NeoVolSmoke()
 	: m_nId( s_nNextId++ ), m_bBoxFitted( false ), m_bFitted( false ), m_flSpawnTime( 0 ), m_pWorld( nullptr ), m_pFillJob( nullptr ), m_bFillDone( false ),
 	  m_bCellBytes( false ), m_nBounded( 0 ), m_pRegen( nullptr ), m_flDistRange( NEO_VOLSMOKE_DIST_RANGE ), m_nAtlasCols( 0 ),
 	  m_nAtlasW( 0 ), m_nAtlasH( 0 ), m_nPacked( 0 ), m_flNextUpload( 0 ), m_flUploadedFront( 0 ), m_bUploadPending( false ),
-	  m_nRenderSerial( -1 ), m_nCoverBoxes( 0 ), m_flNextCover( 0 ), m_bCoverFinal( false ), m_bCoverBoxes( false )
+	  m_nRenderSerial( -1 ), m_nCoverBoxes( 0 ), m_flNextCover( 0 ), m_bCoverFinal( false ), m_bCoverBoxes( false ),
+	  m_nPanes( 0 ), m_nPaneRay( 0 ), m_bPanesFound( false )
 {
 	for ( int a = 0; a < 3; ++a )
 	{
@@ -750,6 +757,291 @@ void C_NeoVolSmoke::FitBoxToField()
 
 	// From here the light samples can be kept to where the gas went.
 	m_vecColor = SampleColor();
+}
+
+// The pane sweep: axis rays through the fitted box on a grid, both ways, so
+// each pane shows both faces. A pane larger than the grid step is hit.
+static constexpr float NEO_VOLSMOKE_PANE_GRID = 36.0f;
+static constexpr double NEO_VOLSMOKE_PANE_BUDGET = 0.0005; // seconds a frame
+static constexpr int NEO_VOLSMOKE_PANE_RAY_TRACES = 16;
+static constexpr float NEO_VOLSMOKE_PANE_SKIP = 1.0f;       // past a glass face
+static constexpr float NEO_VOLSMOKE_PANE_SOLID_STEP = 4.0f; // through a solid the ray starts in
+static constexpr int NEO_VOLSMOKE_PANE_GROUPS = 16;
+static constexpr float NEO_VOLSMOKE_PANE_SAME_NORMAL = 0.99f;
+static constexpr float NEO_VOLSMOKE_PANE_THICKNESS = 24.0f; // faces this close on one plane are one pane
+static constexpr float NEO_VOLSMOKE_PANE_LEAF_OUT = 2.0f;   // past a face, for its leaf
+static constexpr float NEO_VOLSMOKE_PANE_LEAF_SPREAD = 0.75f;
+static constexpr float NEO_VOLSMOKE_PANE_MIN_SPREAD = 1.0f; // between hits on two grid lines
+static constexpr float NEO_VOLSMOKE_PANE_GROW = NEO_VOLSMOKE_PANE_GRID; // past the outer hits, to the next grid line
+
+// Finds the panes a few rays a frame, one volume a frame. The box does not
+// change after the fit, so this runs once.
+void C_NeoVolSmoke::FindPanes()
+{
+	static int s_nPaneFrame = -1;
+	if ( s_nPaneFrame == gpGlobals->framecount )
+	{
+		return;
+	}
+
+	s_nPaneFrame = gpGlobals->framecount;
+	const double start = Plat_FloatTime();
+	Vector from, to;
+	while ( Plat_FloatTime() - start < NEO_VOLSMOKE_PANE_BUDGET )
+	{
+		if ( !PaneRay( m_nPaneRay, from, to ) )
+		{
+			BuildPanes();
+			m_PaneHits.Purge();
+			m_bPanesFound = true;
+			return;
+		}
+
+		TracePaneRay( from, to );
+		++m_nPaneRay;
+	}
+}
+
+// Ray `ray` of the sweep, or false past the last one. Pairs of rays run one
+// grid line in both directions.
+bool C_NeoVolSmoke::PaneRay( int ray, Vector &start, Vector &end ) const
+{
+	int counts[3];
+	for ( int a = 0; a < 3; ++a )
+	{
+		counts[a] = Max( 1, (int)ceilf( ( m_vecGridMax[a] - m_vecGridMin[a] ) / NEO_VOLSMOKE_PANE_GRID ) );
+	}
+
+	for ( int a = 0; a < 3; ++a )
+	{
+		const int b = ( a + 1 ) % 3;
+		const int c = ( a + 2 ) % 3;
+		const int nRays = 2 * counts[b] * counts[c];
+		if ( ray >= nRays )
+		{
+			ray -= nRays;
+			continue;
+		}
+
+		const bool back = ( ray & 1 ) != 0;
+		const int line = ray >> 1;
+		Vector p;
+		p[b] = m_vecGridMin[b] + ( line % counts[b] + 0.5f ) * ( m_vecGridMax[b] - m_vecGridMin[b] ) / counts[b];
+		p[c] = m_vecGridMin[c] + ( line / counts[b] + 0.5f ) * ( m_vecGridMax[c] - m_vecGridMin[c] ) / counts[c];
+		p[a] = back ? m_vecGridMax[a] : m_vecGridMin[a];
+		start = p;
+		end = p;
+		end[a] = back ? m_vecGridMin[a] : m_vecGridMax[a];
+		return true;
+	}
+
+	return false;
+}
+
+// Records the glass faces along a ray up to the first other world face.
+void C_NeoVolSmoke::TracePaneRay( const Vector &start, const Vector &end )
+{
+	Vector dir = end - start;
+	VectorNormalize( dir );
+	Vector from = start;
+	CTraceFilterWorldOnly filter;
+	for ( int i = 0; i < NEO_VOLSMOKE_PANE_RAY_TRACES && DotProduct( end - from, dir ) > 0.0f; ++i )
+	{
+		Ray_t ray;
+		ray.Init( from, end );
+		trace_t tr;
+		enginetrace->TraceRay( ray, NEO_VOLSMOKE_FILL_MASK, &filter, &tr );
+		if ( tr.startsolid )
+		{
+			from += dir * NEO_VOLSMOKE_PANE_SOLID_STEP;
+			continue;
+		}
+
+		if ( tr.fraction >= 1.0f || !VolSmokeSeesThrough( tr ) )
+		{
+			return;
+		}
+
+		// One normal per plane, whichever face the ray met.
+		VolSmokePaneHit_t hit;
+		hit.normal = tr.plane.normal;
+		const int major = ( fabsf( hit.normal.x ) >= fabsf( hit.normal.y ) && fabsf( hit.normal.x ) >= fabsf( hit.normal.z ) ) ? 0
+			: ( fabsf( hit.normal.y ) >= fabsf( hit.normal.z ) ? 1 : 2 );
+		if ( hit.normal[major] < 0.0f )
+		{
+			hit.normal = -hit.normal;
+		}
+
+		hit.dist = DotProduct( hit.normal, tr.endpos );
+		hit.pos = tr.endpos;
+		m_PaneHits.AddToTail( hit );
+		from = tr.endpos + dir * NEO_VOLSMOKE_PANE_SKIP;
+	}
+}
+
+// True when a leaf lies on both sides of the pane.
+static bool VolSmokePaneSharesLeaf( const VolSmokePane_t &pane )
+{
+	for ( int a = 0; a < pane.nLeaves[0]; ++a )
+	{
+		for ( int b = 0; b < pane.nLeaves[1]; ++b )
+		{
+			if ( pane.leaves[0][a] == pane.leaves[1][b] )
+			{
+				return true;
+			}
+		}
+	}
+
+	return false;
+}
+
+// Groups the hits by plane and keeps the panes with the most hits. The
+// rectangle is the hits' extent grown to the next grid line, so it covers
+// the pane between grid lines; a rectangle larger than the glass costs only a split
+// march where there is no glass.
+void C_NeoVolSmoke::BuildPanes()
+{
+	struct PaneGroup_t
+	{
+		Vector normal;
+		float  distLo;
+		float  distHi;
+		int    nHits;
+	};
+
+	PaneGroup_t groups[NEO_VOLSMOKE_PANE_GROUPS];
+	int nGroups = 0;
+	CUtlVector< int > hitGroup;
+	hitGroup.SetCount( m_PaneHits.Count() );
+	for ( int i = 0; i < m_PaneHits.Count(); ++i )
+	{
+		const VolSmokePaneHit_t &hit = m_PaneHits[i];
+		hitGroup[i] = -1;
+		for ( int g = 0; g < nGroups && hitGroup[i] < 0; ++g )
+		{
+			PaneGroup_t &group = groups[g];
+			if ( DotProduct( group.normal, hit.normal ) < NEO_VOLSMOKE_PANE_SAME_NORMAL
+				|| Max( group.distHi, hit.dist ) - Min( group.distLo, hit.dist ) > NEO_VOLSMOKE_PANE_THICKNESS )
+			{
+				continue;
+			}
+
+			group.distLo = Min( group.distLo, hit.dist );
+			group.distHi = Max( group.distHi, hit.dist );
+			++group.nHits;
+			hitGroup[i] = g;
+		}
+
+		if ( hitGroup[i] < 0 && nGroups < NEO_VOLSMOKE_PANE_GROUPS )
+		{
+			groups[nGroups] = { hit.normal, hit.dist, hit.dist, 1 };
+			hitGroup[i] = nGroups++;
+		}
+	}
+
+	// Panes past the cap keep the picture without layers.
+	m_nPanes = 0;
+	bool taken[NEO_VOLSMOKE_PANE_GROUPS] = {};
+	while ( m_nPanes < NEO_VOLSMOKE_MAX_PANES )
+	{
+		int best = -1;
+		for ( int g = 0; g < nGroups; ++g )
+		{
+			if ( !taken[g] && ( best < 0 || groups[g].nHits > groups[best].nHits ) )
+			{
+				best = g;
+			}
+		}
+
+		if ( best < 0 )
+		{
+			break;
+		}
+
+		taken[best] = true;
+		const PaneGroup_t &group = groups[best];
+		const Vector &n = group.normal;
+		Vector u = CrossProduct( n, Vector( 0, 0, 1 ) );
+		if ( u.LengthSqr() < 0.01f )
+		{
+			u = Vector( 1, 0, 0 ) - n * n.x;
+		}
+
+		VectorNormalize( u );
+		Vector v = CrossProduct( n, u );
+		VectorNormalize( v );
+
+		float uLo = FLT_MAX, uHi = -FLT_MAX, vLo = FLT_MAX, vHi = -FLT_MAX;
+		for ( int i = 0; i < m_PaneHits.Count(); ++i )
+		{
+			if ( hitGroup[i] != best )
+			{
+				continue;
+			}
+
+			const float pu = DotProduct( m_PaneHits[i].pos, u );
+			const float pv = DotProduct( m_PaneHits[i].pos, v );
+			uLo = Min( uLo, pu );
+			uHi = Max( uHi, pu );
+			vLo = Min( vLo, pv );
+			vHi = Max( vHi, pv );
+		}
+
+		// A glass brush's edge faces meet only one grid line across; the
+		// pane's own faces show its glass.
+		if ( uHi - uLo < NEO_VOLSMOKE_PANE_MIN_SPREAD || vHi - vLo < NEO_VOLSMOKE_PANE_MIN_SPREAD )
+		{
+			continue;
+		}
+
+		VolSmokePane_t &pane = m_Panes[m_nPanes++];
+		pane.normal = n;
+		pane.dist = 0.5f * ( group.distLo + group.distHi );
+		const float uMid = 0.5f * ( uLo + uHi );
+		const float vMid = 0.5f * ( vLo + vHi );
+		const float uHalf = 0.5f * ( uHi - uLo ) + NEO_VOLSMOKE_PANE_GROW;
+		const float vHalf = 0.5f * ( vHi - vLo ) + NEO_VOLSMOKE_PANE_GROW;
+		pane.u = u / uHalf;
+		pane.u0 = -uMid / uHalf;
+		pane.v = v / vHalf;
+		pane.v0 = -vMid / vHalf;
+
+		// The leaves a little past each face, over the glass the rays met.
+		const Vector mid = n * pane.dist + u * uMid + v * vMid;
+		const float out = 0.5f * ( group.distHi - group.distLo ) + NEO_VOLSMOKE_PANE_LEAF_OUT;
+		for ( int side = 0; side < 2; ++side )
+		{
+			pane.nLeaves[side] = 0;
+			const Vector off = n * ( side == 0 ? out : -out );
+			for ( int iu = -1; iu <= 1; ++iu )
+			{
+				for ( int iv = -1; iv <= 1; ++iv )
+				{
+					const Vector p = mid + off + u * ( iu * NEO_VOLSMOKE_PANE_LEAF_SPREAD * 0.5f * ( uHi - uLo ) )
+						+ v * ( iv * NEO_VOLSMOKE_PANE_LEAF_SPREAD * 0.5f * ( vHi - vLo ) );
+					const int leaf = enginetrace->GetLeafContainingPoint( p );
+					bool known = false;
+					for ( int k = 0; k < pane.nLeaves[side]; ++k )
+					{
+						known = known || pane.leaves[side][k] == leaf;
+					}
+
+					if ( !known && pane.nLeaves[side] < NEO_VOLSMOKE_PANE_LEAVES )
+					{
+						pane.leaves[side][pane.nLeaves[side]++] = leaf;
+					}
+				}
+			}
+		}
+
+		// Glass that does not cut its leaf shares that leaf with the glass
+		// around it, so holding the leaf cannot order this pane alone.
+		if ( VolSmokePaneSharesLeaf( pane ) )
+		{
+			--m_nPanes;
+		}
+	}
 }
 
 // The atlas and materials, whose layout depends on the fitted box. The
@@ -1583,6 +1875,11 @@ void C_NeoVolSmoke::ClientThink()
 		UpdateCoverBoxes( now );
 		AddCoverOverlay();
 		return;
+	}
+
+	if ( !m_bPanesFound )
+	{
+		FindPanes();
 	}
 
 	if ( !m_bFitted )

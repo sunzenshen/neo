@@ -34,6 +34,31 @@ class CJob;
 struct VolSmokeCullGrid_t;
 struct VolSmokeSheetVolume_t;
 
+// A glass pane that crosses a volume's box: a rectangle in the pane's middle
+// plane, where |dot( p, u ) + u0| <= 1 and |dot( p, v ) + v0| <= 1, and the
+// leaves beside each face that hold the pane's translucent surfaces.
+static constexpr int NEO_VOLSMOKE_MAX_PANES = 4;
+static constexpr int NEO_VOLSMOKE_PANE_LEAVES = 8;
+struct VolSmokePane_t
+{
+	Vector normal;
+	float  dist;
+	Vector u;
+	float  u0;
+	Vector v;
+	float  v0;
+	int    leaves[2][NEO_VOLSMOKE_PANE_LEAVES]; // [0] on the side the normal points to
+	int    nLeaves[2];
+};
+
+// A glass face that a ray of the pane sweep met.
+struct VolSmokePaneHit_t
+{
+	Vector normal;
+	float  dist;
+	Vector pos;
+};
+
 class C_NeoVolSmoke : public C_BaseEntity
 {
 	DECLARE_CLASS( C_NeoVolSmoke, C_BaseEntity );
@@ -93,6 +118,12 @@ private:
 	void FitToField();
 	void CreateAtlas();
 	Vector CellCenter( const int c[3] ) const;
+
+	// Glass panes inside the box
+	void FindPanes();
+	bool PaneRay( int ray, Vector &start, Vector &end ) const;
+	void TracePaneRay( const Vector &start, const Vector &end );
+	void BuildPanes();
 
 	// Cells of the volume's box
 	int  CellIndex( int x, int y, int z ) const { return ( z * m_nBox[1] + y ) * m_nBox[0] + x; }
@@ -214,6 +245,13 @@ private:
 	float  m_flNextCover;
 	bool   m_bCoverFinal;      // the cloud is full grown and the boxes hold all its cells
 	bool   m_bCoverBoxes;      // draws the cover boxes, not the shader cloud
+
+	// Glass panes that cross the fitted box, found once a few rays a frame
+	CUtlVector< VolSmokePaneHit_t > m_PaneHits;
+	VolSmokePane_t m_Panes[NEO_VOLSMOKE_MAX_PANES];
+	int    m_nPanes;
+	int    m_nPaneRay;         // the next ray of the sweep
+	bool   m_bPanesFound;
 };
 
 #endif // C_NEO_VOLSMOKE_H
