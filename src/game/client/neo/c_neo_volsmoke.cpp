@@ -2187,6 +2187,11 @@ float C_NeoVolSmoke::OpticalDepth( const Vector &eye, const Vector &point )
 	return tau;
 }
 
+float C_NeoVolSmoke::Transmittance( const Vector &eye, const Vector &point )
+{
+	return expf( -OpticalDepth( eye, point ) );
+}
+
 // How strongly a flash, or what it lights, shows through smoke of optical
 // depth tau.
 static float FlashShows( float tau )

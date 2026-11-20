@@ -61,6 +61,11 @@ public:
 	// corner of its smoke box. False when the renderable is not a volume.
 	static bool SortDepth( IClientRenderable *pRenderable, const Vector &viewOrigin, const Vector &viewForward, float &depth );
 
+	// The share of a point's light that reaches the eye through every
+	// volume. A translucent effect drawn after the smoke, which writes no
+	// depth, can fade itself by this to stay hidden behind it.
+	static float Transmittance( const Vector &eye, const Vector &point );
+
 	// C_BaseEntity
 	virtual void ClientThink() override;
 	virtual bool ShouldDraw() override { return true; }
