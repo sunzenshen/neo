@@ -26,7 +26,7 @@ public:
 
 	int GetIndex() const
 	{
-		return ( 3 * m_nCONVERT_TO_SRGB ) + 0;
+		return ( 6 * m_nCONVERT_TO_SRGB ) + 0;
 	}
 };
 
@@ -36,8 +36,10 @@ public:
 class neo_volsmoke_ps30_Dynamic_Index
 {
 	unsigned int m_nDLIGHTS : 2;
+	unsigned int m_nPANES : 2;
 #ifdef _DEBUG
 	bool m_bDLIGHTS : 1;
+	bool m_bPANES : 1;
 #endif	// _DEBUG
 public:
 	void SetDLIGHTS( int i )
@@ -49,20 +51,31 @@ public:
 #endif	// _DEBUG
 	}
 
+	void SetPANES( int i )
+	{
+		Assert( i >= 0 && i <= 1 );
+		m_nPANES = i;
+#ifdef _DEBUG
+		m_bPANES = true;
+#endif	// _DEBUG
+	}
+
 	neo_volsmoke_ps30_Dynamic_Index(  )
 	{
 		m_nDLIGHTS = 0;
+		m_nPANES = 0;
 #ifdef _DEBUG
 		m_bDLIGHTS = false;
+		m_bPANES = false;
 #endif	// _DEBUG
 	}
 
 	int GetIndex() const
 	{
-		Assert( m_bDLIGHTS );
-		return ( 1 * m_nDLIGHTS ) + 0;
+		Assert( m_bDLIGHTS && m_bPANES );
+		return ( 1 * m_nDLIGHTS ) + ( 3 * m_nPANES ) + 0;
 	}
 };
 
-#define shaderDynamicTest_neo_volsmoke_ps30 psh_forgot_to_set_dynamic_DLIGHTS
+#define shaderDynamicTest_neo_volsmoke_ps30 psh_forgot_to_set_dynamic_DLIGHTS + psh_forgot_to_set_dynamic_PANES
 

@@ -15,6 +15,9 @@
 // memdbgon must be the last include file in a .cpp file!!!
 #include "tier0/memdbgon.h"
 
+// Glass panes the pixel shader clips the march to.
+static constexpr int NEO_VOLSMOKE_SHADER_PANES = 4;
+
 BEGIN_VS_SHADER( Neo_VolSmoke, "NEO raymarched voxel smoke" )
 
 BEGIN_SHADER_PARAMS
@@ -40,6 +43,21 @@ BEGIN_SHADER_PARAMS
 	SHADER_PARAM( DLIGHT1POS, SHADER_PARAM_TYPE_VEC4,    "[0 0 0 0]",     "As $dlight0pos, second light" )
 	SHADER_PARAM( DLIGHT1COLOR, SHADER_PARAM_TYPE_VEC3,  "[0 0 0]",       "As $dlight0color, second light" )
 	SHADER_PARAM( FRONT,      SHADER_PARAM_TYPE_VEC3,    "[0 288 0.037]", "x = bloom front path length, y = path length at atlas value 1, z = 1 / edge width" )
+	SHADER_PARAM( PANECOUNT,  SHADER_PARAM_TYPE_INTEGER, "0",             "Glass panes the smoke draws in layers around, 0 to 4" )
+	SHADER_PARAM( PANELAYER,  SHADER_PARAM_TYPE_INTEGER, "0",             "The layer this draw marches" )
+	SHADER_PARAM( PANEGROUPS, SHADER_PARAM_TYPE_VEC4,    "[-1 -1 -1 -1]", "Per pane, the layer after which its glass draws" )
+	SHADER_PARAM( PANE0PLANE, SHADER_PARAM_TYPE_VEC4,    "[0 0 1 0]",     "First pane: xyz normal, w distance" )
+	SHADER_PARAM( PANE0U,     SHADER_PARAM_TYPE_VEC4,    "[0 0 0 0]",     "First pane: in-plane axis over the half width, w offset" )
+	SHADER_PARAM( PANE0V,     SHADER_PARAM_TYPE_VEC4,    "[0 0 0 0]",     "First pane: as $pane0u, the other axis" )
+	SHADER_PARAM( PANE1PLANE, SHADER_PARAM_TYPE_VEC4,    "[0 0 1 0]",     "As $pane0plane, second pane" )
+	SHADER_PARAM( PANE1U,     SHADER_PARAM_TYPE_VEC4,    "[0 0 0 0]",     "As $pane0u, second pane" )
+	SHADER_PARAM( PANE1V,     SHADER_PARAM_TYPE_VEC4,    "[0 0 0 0]",     "As $pane0v, second pane" )
+	SHADER_PARAM( PANE2PLANE, SHADER_PARAM_TYPE_VEC4,    "[0 0 1 0]",     "As $pane0plane, third pane" )
+	SHADER_PARAM( PANE2U,     SHADER_PARAM_TYPE_VEC4,    "[0 0 0 0]",     "As $pane0u, third pane" )
+	SHADER_PARAM( PANE2V,     SHADER_PARAM_TYPE_VEC4,    "[0 0 0 0]",     "As $pane0v, third pane" )
+	SHADER_PARAM( PANE3PLANE, SHADER_PARAM_TYPE_VEC4,    "[0 0 1 0]",     "As $pane0plane, fourth pane" )
+	SHADER_PARAM( PANE3U,     SHADER_PARAM_TYPE_VEC4,    "[0 0 0 0]",     "As $pane0u, fourth pane" )
+	SHADER_PARAM( PANE3V,     SHADER_PARAM_TYPE_VEC4,    "[0 0 0 0]",     "As $pane0v, fourth pane" )
 END_SHADER_PARAMS
 
 SHADER_INIT_PARAMS()
@@ -159,8 +177,8 @@ SHADER_DRAW
 		float front[3];
 		params[FRONT]->GetVecValue( front, 3 );
 
-		// c6: unused, age, bloom front, debug
-		c[0] = 0.0f;
+		// c6: layer, age, bloom front, debug
+		c[0] = (float)params[PANELAYER]->GetIntValue();
 		c[1] = params[AGE]->GetFloatValue();
 		c[2] = front[0];
 		c[3] = (float)params[DEBUGMODE]->GetIntValue();
@@ -225,11 +243,55 @@ SHADER_DRAW
 			pShaderAPI->SetPixelShaderConstant( 16, c );
 		}
 
+		// c17 - c26: the glass panes the smoke draws in layers around, packed
+		// as the pixel shader reads them. Without one the shader runs the combo
+		// that has no pane clip.
+		const int nPanes = clamp( params[PANECOUNT]->GetIntValue(), 0, NEO_VOLSMOKE_SHADER_PANES );
+		if ( nPanes > 0 )
+		{
+			const int paneParams[NEO_VOLSMOKE_SHADER_PANES][3] = { { PANE0PLANE, PANE0U, PANE0V }, { PANE1PLANE, PANE1U, PANE1V },
+				{ PANE2PLANE, PANE2U, PANE2V }, { PANE3PLANE, PANE3U, PANE3V } };
+			float groups[4];
+			params[PANEGROUPS]->GetVecValue( groups, 4 );
+			float vScale[4];
+			float vOffset[4];
+			for ( int p = 0; p < NEO_VOLSMOKE_SHADER_PANES; ++p )
+			{
+				float plane[4] = { 0.0f, 0.0f, 1.0f, 0.0f };
+				float u[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
+				float v[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
+				const float group = ( p < nPanes ) ? groups[p] : -1.0f;
+				if ( p < nPanes )
+				{
+					params[paneParams[p][0]]->GetVecValue( plane, 4 );
+					params[paneParams[p][1]]->GetVecValue( u, 4 );
+					params[paneParams[p][2]]->GetVecValue( v, 4 );
+				}
+
+				const float scale = group + 2.0f;
+				for ( int k = 0; k < 4; ++k )
+				{
+					plane[k] *= scale;
+				}
+
+				const float uLen = sqrtf( u[0] * u[0] + u[1] * u[1] + u[2] * u[2] );
+				const float vLen = sqrtf( v[0] * v[0] + v[1] * v[1] + v[2] * v[2] );
+				vScale[p] = ( uLen > 0.0f ) ? vLen / ( uLen * scale ) : 0.0f;
+				vOffset[p] = v[3];
+				pShaderAPI->SetPixelShaderConstant( 17 + p, plane );
+				pShaderAPI->SetPixelShaderConstant( 21 + p, u );
+			}
+
+			pShaderAPI->SetPixelShaderConstant( 25, vScale );
+			pShaderAPI->SetPixelShaderConstant( 26, vOffset );
+		}
+
 		DECLARE_DYNAMIC_VERTEX_SHADER( neo_volsmoke_vs30 );
 		SET_DYNAMIC_VERTEX_SHADER( neo_volsmoke_vs30 );
 
 		DECLARE_DYNAMIC_PIXEL_SHADER( neo_volsmoke_ps30 );
 		SET_DYNAMIC_PIXEL_SHADER_COMBO( DLIGHTS, nDLights );
+		SET_DYNAMIC_PIXEL_SHADER_COMBO( PANES, nPanes > 0 ? 1 : 0 );
 		SET_DYNAMIC_PIXEL_SHADER( neo_volsmoke_ps30 );
 	}
 

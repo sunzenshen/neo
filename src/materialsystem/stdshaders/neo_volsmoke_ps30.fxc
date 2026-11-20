@@ -17,6 +17,7 @@
 // STATIC: "CONVERT_TO_SRGB"	"0..1"	[ps30][= g_pHardwareConfig->NeedsShaderSRGBConversion()] [PC]
 // STATIC: "CONVERT_TO_SRGB"	"0..0"	[= 0] [XBOX]
 // DYNAMIC: "DLIGHTS"			"0..2"
+// DYNAMIC: "PANES"			"0..1"
 
 #include "common_ps_fxc.h"
 
@@ -30,7 +31,7 @@ const float4 g_VolMax       : register( c2 ); // xyz, w = 1 in a far slab
 const float4 g_Grid         : register( c3 ); // x = slices, y = tiles per atlas row, zw = atlas size in tiles
 const float4 g_Ambient      : register( c4 ); // rgb ambient light, w = jitter enable
 const float4 g_Light        : register( c5 ); // rgb directional light, w = time
-const float4 g_Misc         : register( c6 ); // x unused, y = volume age, z = bloom front path length, w = debug mode
+const float4 g_Misc         : register( c6 ); // x = layer, y = volume age, z = bloom front path length, w = debug mode
 const float4 g_ScreenParams : register( c7 ); // xy = half texel, z = path length at atlas value 1, w = 1 / edge width
 const float4 g_SmokeMin     : register( c8 ); // xyz box around the cells that hold smoke, w unused
 const float4 g_SmokeMax     : register( c9 ); // xyz, w unused
@@ -41,6 +42,15 @@ const float4 g_DLight0Pos   : register( c13 ); // xyz dynamic light position, w 
 const float4 g_DLight0Color : register( c14 ); // rgb added light at the center (linear), w unused
 const float4 g_DLight1Pos   : register( c15 ); // as c13, second light
 const float4 g_DLight1Color : register( c16 ); // as c14, second light
+// Glass panes; c28 - c31 belong to common_ps_fxc.h. A pane's plane row is
+// its normal and distance times ( group + 2 ), which leaves the hit distance
+// as it is, and the group is the layer after which the pane's glass draws.
+// The rectangle is |dot( p, u ) + u0| <= 1, and the same with the v axis,
+// which is cross( plane, u ) times the v scale.
+const float4 g_PanePlane[4] : register( c17 ); // xyz normal, w distance, both times ( group + 2 )
+const float4 g_PaneU[4]     : register( c21 ); // xyz u axis over the half width, w offset
+const float4 g_PaneVScale   : register( c25 ); // per pane
+const float4 g_PaneVOffset  : register( c26 ); // per pane
 
 #define STEP_LEN  8.0f
 
@@ -211,6 +221,34 @@ float4 main( PS_INPUT i ) : COLOR
 
 	t0 = max( t0, 0.0f );        // camera may be inside the box
 	t1 = min( t1, tScene );      // stop at opaque geometry
+
+#if PANES
+	// Glass panes inside the box draw between the layers of the volume. A
+	// layer holds the smoke behind every pane that draws after it, and in
+	// front of the panes that drew before it, so the layers add up to the
+	// whole ray.
+	float layer = g_Misc.x;
+	float layerLo = 0.0f;
+	float layerHi = 0.0f;
+	[unroll]
+	for ( int p = 0; p < 4; p++ )
+	{
+		float4 plane = g_PanePlane[p];
+		float4 axisU = g_PaneU[p];
+		float3 axisV = cross( plane.xyz, axisU.xyz ) * g_PaneVScale[p];
+		float  group = floor( length( plane.xyz ) + 0.5f ) - 2.0f;
+		float  den   = dot( plane.xyz, rd );
+		float  h     = ( abs( den ) > 1.0e-6f ) ? ( plane.w - dot( plane.xyz, ro ) ) / den : -1.0f;
+		float3 hit   = ro + rd * h;
+		bool   onPane = h > 0.0f && abs( dot( hit, axisU.xyz ) + axisU.w ) <= 1.0f
+			&& abs( dot( hit, axisV ) + g_PaneVOffset[p] ) <= 1.0f;
+		layerLo = ( onPane && group > layer ) ? max( layerLo, h ) : layerLo;
+		layerHi = ( onPane && group > layer - 1.0f ) ? max( layerHi, h ) : layerHi;
+	}
+
+	t0 = max( t0, layerLo );
+	t1 = ( layer < 0.5f ) ? t1 : min( t1, layerHi );
+#endif
 
 	int debugMode = (int)g_Misc.w;
 	if ( debugMode == 2 )
