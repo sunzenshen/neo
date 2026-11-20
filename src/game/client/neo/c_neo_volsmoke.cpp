@@ -21,6 +21,7 @@
 #include "iefx.h"
 #include "cdll_util.h"
 #include "c_neo_player.h"
+#include "view_scene.h"
 #include "vstdlib/jobthread.h"
 #include "neo_smoke_shared.h"
 #include "neo_smoke_world.h"
@@ -75,6 +76,7 @@ static constexpr float NEO_VOLSMOKE_NEAR_RANGE = 172.0f;
 static constexpr float NEO_VOLSMOKE_SLAB_MIN = 24.0f;
 static constexpr float NEO_VOLSMOKE_SLAB_GROWTH = 0.08f; // of the slab's view depth
 static constexpr int NEO_VOLSMOKE_MAX_SLABS = 32;
+static constexpr int NEO_VOLSMOKE_SLAB_QUAD_FLOATS = 6; // view-space x / z and y / z ranges, then the depth range
 
 // Far slab cull: a coarse grid of eye rays finds the view depth past which
 // the smoke is certainly opaque, and slab parts behind it are not drawn.
@@ -604,7 +606,7 @@ C_NeoVolSmoke::C_NeoVolSmoke()
 	  m_nAtlasW( 0 ), m_nAtlasH( 0 ), m_nPacked( 0 ), m_flNextUpload( 0 ), m_flUploadedFront( 0 ), m_bUploadPending( false ),
 	  m_nRenderSerial( -1 ), m_nCoverBoxes( 0 ), m_flNextCover( 0 ), m_bCoverFinal( false ), m_bCoverBoxes( false ),
 	  m_nPanes( 0 ), m_nPaneRay( 0 ), m_bPanesFound( false ), m_nGlassWalk( -1 ), m_bGlassDrawn( false ),
-	  m_nGlassLayers( 0 ), m_nLayersDrawn( 0 )
+	  m_nGlassLayers( 0 ), m_nLayersDrawn( 0 ), m_nActivePanes( 0 ), m_flLayerDepth( 0 )
 {
 	for ( int a = 0; a < 3; ++a )
 	{
@@ -2382,6 +2384,93 @@ void C_NeoVolSmoke::ReleaseHeldGlass()
 	m_GlassWaits.RemoveAll();
 }
 
+// The screen rectangle of some points in pixels (left, top, right, bottom),
+// clipped to the viewport; false when it is off screen. A point behind the
+// eye gives the whole viewport.
+static bool VolSmokeScreenRect( const Vector *points, int nPoints, int rect[4] )
+{
+	int x, y, w, h;
+	CMatRenderContextPtr pRenderContext( materials );
+	pRenderContext->GetViewport( x, y, w, h );
+	rect[0] = rect[1] = INT_MAX;
+	rect[2] = rect[3] = INT_MIN;
+	for ( int k = 0; k < nPoints; ++k )
+	{
+		Vector screen;
+		if ( ScreenTransform( points[k], screen ) )
+		{
+			rect[0] = x;
+			rect[1] = y;
+			rect[2] = x + w;
+			rect[3] = y + h;
+			return true;
+		}
+
+		const int sx = x + (int)( 0.5f * ( 1.0f + screen.x ) * w );
+		const int sy = y + (int)( 0.5f * ( 1.0f - screen.y ) * h );
+		rect[0] = Min( rect[0], sx - 1 );
+		rect[1] = Min( rect[1], sy - 1 );
+		rect[2] = Max( rect[2], sx + 1 );
+		rect[3] = Max( rect[3], sy + 1 );
+	}
+
+	rect[0] = Max( rect[0], x );
+	rect[1] = Max( rect[1], y );
+	rect[2] = Min( rect[2], x + w );
+	rect[3] = Min( rect[3], y + h );
+	return rect[0] < rect[2] && rect[1] < rect[3];
+}
+
+static bool VolSmokePaneScreenRect( const VolSmokePane_t &pane, int rect[4] )
+{
+	const float uHalf = 1.0f / pane.u.Length();
+	const float vHalf = 1.0f / pane.v.Length();
+	const Vector uAxis = pane.u * uHalf;
+	const Vector vAxis = pane.v * vHalf;
+	const Vector mid = pane.normal * pane.dist - uAxis * ( pane.u0 * uHalf ) - vAxis * ( pane.v0 * vHalf );
+	Vector corners[4];
+	for ( int k = 0; k < 4; ++k )
+	{
+		corners[k] = mid + uAxis * ( ( k & 1 ) ? uHalf : -uHalf ) + vAxis * ( ( k & 2 ) ? vHalf : -vHalf );
+	}
+
+	return VolSmokeScreenRect( corners, 4, rect );
+}
+
+static bool VolSmokeBoxScreenRect( const Vector &mins, const Vector &maxs, int rect[4] )
+{
+	Vector corners[8];
+	for ( int k = 0; k < 8; ++k )
+	{
+		corners[k].Init( ( k & 1 ) ? maxs.x : mins.x, ( k & 2 ) ? maxs.y : mins.y, ( k & 4 ) ? maxs.z : mins.z );
+	}
+
+	return VolSmokeScreenRect( corners, 8, rect );
+}
+
+// The view depth of a pane's farthest corner.
+static float VolSmokePaneFarDepth( const VolSmokePane_t &pane )
+{
+	const float uHalf = 1.0f / pane.u.Length();
+	const float vHalf = 1.0f / pane.v.Length();
+	const Vector uAxis = pane.u * uHalf;
+	const Vector vAxis = pane.v * vHalf;
+	const Vector mid = pane.normal * pane.dist - uAxis * ( pane.u0 * uHalf ) - vAxis * ( pane.v0 * vHalf );
+	float depth = -FLT_MAX;
+	for ( int k = 0; k < 4; ++k )
+	{
+		const Vector corner = mid + uAxis * ( ( k & 1 ) ? uHalf : -uHalf ) + vAxis * ( ( k & 2 ) ? vHalf : -vHalf );
+		depth = Max( depth, DotProduct( corner - CurrentViewOrigin(), CurrentViewForward() ) );
+	}
+
+	return depth;
+}
+
+static bool VolSmokeRectsOverlap( const int a[4], const int b[4] )
+{
+	return a[0] < b[2] && b[0] < a[2] && a[1] < b[3] && b[1] < a[3];
+}
+
 // The panes whose glass this walk held become the volume's layers: a pane's
 // glass draws after the layer numbered by its held leaf's place among them.
 // Without a held pane the volume draws as one layer.
@@ -2389,12 +2478,29 @@ void C_NeoVolSmoke::SetPaneLayers()
 {
 	m_nGlassLayers = 0;
 	m_nLayersDrawn = 0;
+
+	// A held pane counts only where it is on screen in front of the smoke;
+	// elsewhere its glass, drawn after the volume, covers no smoke. A leaf
+	// already drawn can no longer order a layer.
+	int active[NEO_VOLSMOKE_MAX_PANES];
+	int nActive = 0;
 	const bool inWalk = s_bGlassWalk && m_nGlassWalk == s_nGlassWalk;
-	for ( int p = 0; inWalk && p < m_nPanes; ++p )
+	int smokeRect[4];
+	const bool smokeOnScreen = inWalk && VolSmokeBoxScreenRect( m_vecSmokeMin, m_vecSmokeMax, smokeRect );
+	for ( int p = 0; smokeOnScreen && p < m_nPanes; ++p )
 	{
+		int paneRect[4];
+		if ( m_nPaneHeld[p] < s_nHeldHead || !VolSmokePaneScreenRect( m_Panes[p], paneRect ) || !VolSmokeRectsOverlap( paneRect, smokeRect ) )
+		{
+			continue;
+		}
+
+		V_memcpy( m_nPaneRect[nActive], paneRect, sizeof( paneRect ) );
+		m_flPaneDepth[nActive] = VolSmokePaneFarDepth( m_Panes[p] );
+		active[nActive++] = p;
+
 		const int held = m_nPaneHeld[p];
-		// A leaf already drawn can no longer order a layer.
-		bool known = held < s_nHeldHead;
+		bool known = false;
 		for ( int k = 0; k < m_nGlassLayers; ++k )
 		{
 			known = known || m_nLayerAfter[k] == held;
@@ -2408,36 +2514,30 @@ void C_NeoVolSmoke::SetPaneLayers()
 
 	std::sort( m_nLayerAfter, m_nLayerAfter + m_nGlassLayers );
 
-	int nActive = 0;
 	float groups[NEO_VOLSMOKE_MAX_PANES] = { -1.0f, -1.0f, -1.0f, -1.0f };
 	static const char *const s_PaneVars[NEO_VOLSMOKE_MAX_PANES][3] = { { "$pane0plane", "$pane0u", "$pane0v" },
 		{ "$pane1plane", "$pane1u", "$pane1v" }, { "$pane2plane", "$pane2u", "$pane2v" }, { "$pane3plane", "$pane3u", "$pane3v" } };
-	for ( int p = 0; m_nGlassLayers > 0 && p < m_nPanes; ++p )
+	for ( int a = 0; a < nActive; ++a )
 	{
-		if ( m_nPaneHeld[p] < s_nHeldHead )
-		{
-			continue;
-		}
-
+		const VolSmokePane_t &pane = m_Panes[active[a]];
 		for ( int k = 0; k < m_nGlassLayers; ++k )
 		{
-			if ( m_nLayerAfter[k] == m_nPaneHeld[p] )
+			if ( m_nLayerAfter[k] == m_nPaneHeld[active[a]] )
 			{
-				groups[nActive] = (float)( k + 1 );
+				groups[a] = (float)( k + 1 );
+				m_nPaneGroup[a] = k + 1;
 			}
 		}
 
-		const VolSmokePane_t &pane = m_Panes[p];
 		for ( IMaterial *pMat : { (IMaterial *)m_Material, (IMaterial *)m_SlabMaterial } )
 		{
-			SetVec4Var( pMat, s_PaneVars[nActive][0], pane.normal.x, pane.normal.y, pane.normal.z, pane.dist );
-			SetVec4Var( pMat, s_PaneVars[nActive][1], pane.u.x, pane.u.y, pane.u.z, pane.u0 );
-			SetVec4Var( pMat, s_PaneVars[nActive][2], pane.v.x, pane.v.y, pane.v.z, pane.v0 );
+			SetVec4Var( pMat, s_PaneVars[a][0], pane.normal.x, pane.normal.y, pane.normal.z, pane.dist );
+			SetVec4Var( pMat, s_PaneVars[a][1], pane.u.x, pane.u.y, pane.u.z, pane.u0 );
+			SetVec4Var( pMat, s_PaneVars[a][2], pane.v.x, pane.v.y, pane.v.z, pane.v0 );
 		}
-
-		++nActive;
 	}
 
+	m_nActivePanes = nActive;
 	for ( IMaterial *pMat : { (IMaterial *)m_Material, (IMaterial *)m_SlabMaterial } )
 	{
 		SetIntVar( pMat, "$panecount", nActive );
@@ -2446,10 +2546,45 @@ void C_NeoVolSmoke::SetPaneLayers()
 	}
 }
 
+// The view depth of the nearest corner of the smoke box.
+float C_NeoVolSmoke::SmokeNearestDepth() const
+{
+	float zMin = FLT_MAX;
+	for ( int k = 0; k < 8; ++k )
+	{
+		const Vector corner( ( k & 1 ) ? m_vecSmokeMax.x : m_vecSmokeMin.x, ( k & 2 ) ? m_vecSmokeMax.y : m_vecSmokeMin.y,
+			( k & 4 ) ? m_vecSmokeMax.z : m_vecSmokeMin.z );
+		zMin = Min( zMin, DotProduct( corner - CurrentViewOrigin(), CurrentViewForward() ) );
+	}
+
+	return zMin;
+}
+
 // Draws the volume's next layer, after the glass in front of the last one.
+// It holds smoke only on pane rays, so it draws in the panes' rectangle.
 void C_NeoVolSmoke::DrawNextLayer()
 {
 	++m_nLayersDrawn;
+
+	// The layer lies in front of the panes whose glass drew after the
+	// layer before it: inside their screen rectangle, nearer than their far
+	// corner.
+	int rect[4] = { INT_MAX, INT_MAX, INT_MIN, INT_MIN };
+	m_flLayerDepth = 0.0f;
+	for ( int a = 0; a < m_nActivePanes; ++a )
+	{
+		if ( m_nPaneGroup[a] < m_nLayersDrawn )
+		{
+			continue;
+		}
+
+		rect[0] = Min( rect[0], m_nPaneRect[a][0] );
+		rect[1] = Min( rect[1], m_nPaneRect[a][1] );
+		rect[2] = Max( rect[2], m_nPaneRect[a][2] );
+		rect[3] = Max( rect[3], m_nPaneRect[a][3] );
+		m_flLayerDepth = Max( m_flLayerDepth, m_flPaneDepth[a] );
+	}
+
 	SetIntVar( m_Material, "$panelayer", m_nLayersDrawn );
 	SetIntVar( m_SlabMaterial, "$panelayer", m_nLayersDrawn );
 
@@ -2457,8 +2592,17 @@ void C_NeoVolSmoke::DrawNextLayer()
 	pRenderContext->MatrixMode( MATERIAL_MODEL );
 	pRenderContext->PushMatrix();
 	pRenderContext->LoadIdentity();
+	pRenderContext->SetScissorRect( rect[0], rect[1], rect[2], rect[3], true );
 	DrawFarSlabs( pRenderContext );
-	DrawNearPass( pRenderContext );
+
+	// The near pass marches only the view depths up to NEAR_RANGE.
+	if ( SmokeNearestDepth() < NEO_VOLSMOKE_NEAR_RANGE )
+	{
+		DrawNearPass( pRenderContext );
+	}
+
+	pRenderContext->SetScissorRect( -1, -1, -1, -1, false );
+
 	pRenderContext->MatrixMode( MATERIAL_MODEL );
 	pRenderContext->PopMatrix();
 
@@ -3398,6 +3542,14 @@ bool C_NeoVolSmoke::BuildCullGrid( VolSmokeCullGrid_t &grid ) const
 // half a slab along the ray. A slab's tiles behind opaque smoke are left out.
 void C_NeoVolSmoke::DrawFarSlabs( IMatRenderContext *pRenderContext )
 {
+	// The later layers of a draw reuse the first layer's slabs.
+	if ( m_nLayersDrawn > 0 )
+	{
+		DrawSlabQuads( pRenderContext );
+		return;
+	}
+
+	m_SlabQuads.RemoveAll();
 	const Vector &eye = CurrentViewOrigin();
 	const Vector &fwd = CurrentViewForward();
 	const Vector &right = CurrentViewRight();
@@ -3525,23 +3677,57 @@ void C_NeoVolSmoke::DrawFarSlabs( IMatRenderContext *pRenderContext )
 		collect( false );
 	}
 
-	if ( quads.Count() == 0 )
+	for ( const SlabQuad_t &q : quads )
+	{
+		const float quad[NEO_VOLSMOKE_SLAB_QUAD_FLOATS] = { q.xMin, q.xMax, q.yMin, q.yMax, bounds[q.slab], bounds[q.slab + 1] };
+		m_SlabQuads.AddMultipleToTail( NEO_VOLSMOKE_SLAB_QUAD_FLOATS, quad );
+	}
+
+	DrawSlabQuads( pRenderContext );
+}
+
+// Draws the far slabs built for this draw. A later layer draws only those
+// that start in front of its panes.
+void C_NeoVolSmoke::DrawSlabQuads( IMatRenderContext *pRenderContext )
+{
+	const Vector &eye = CurrentViewOrigin();
+	const Vector &fwd = CurrentViewForward();
+	const Vector &right = CurrentViewRight();
+	const Vector &up = CurrentViewUp();
+	const bool laterLayer = m_nLayersDrawn > 0;
+
+	CUtlVectorFixedGrowable< float, 64 * NEO_VOLSMOKE_SLAB_QUAD_FLOATS > kept;
+	for ( int i = 0; i < m_SlabQuads.Count(); i += NEO_VOLSMOKE_SLAB_QUAD_FLOATS )
+	{
+		const float *q = &m_SlabQuads[i];
+		if ( laterLayer && q[4] >= m_flLayerDepth )
+		{
+			continue;
+		}
+
+		kept.AddMultipleToTail( NEO_VOLSMOKE_SLAB_QUAD_FLOATS, q );
+	}
+
+	const int nQuads = kept.Count() / NEO_VOLSMOKE_SLAB_QUAD_FLOATS;
+	if ( nQuads == 0 )
 	{
 		return;
 	}
 
+	pRenderContext->Bind( m_SlabMaterial, (IClientRenderable *)this );
+	IMesh *pMesh = pRenderContext->GetDynamicMesh( true, nullptr, nullptr, m_SlabMaterial );
 	CMeshBuilder meshBuilder;
-	meshBuilder.Begin( pMesh, MATERIAL_TRIANGLES, 4 * quads.Count(), 6 * quads.Count() );
-	int nVert = 0;
-	for ( const SlabQuad_t &q : quads )
+	meshBuilder.Begin( pMesh, MATERIAL_TRIANGLES, 4 * nQuads, 6 * nQuads );
+	for ( int n = 0; n < nQuads; ++n )
 	{
-		const float lo = bounds[q.slab];
-		const float hi = bounds[q.slab + 1];
+		const float *q = &kept[n * NEO_VOLSMOKE_SLAB_QUAD_FLOATS];
+		const float lo = q[4];
+		const float hi = q[5];
 		const float zc = 0.5f * ( lo + hi ); // depth-tested at its middle
 		const Vector center = eye + fwd * zc;
 
-		const float xs[4] = { q.xMin, q.xMax, q.xMax, q.xMin };
-		const float ys[4] = { q.yMin, q.yMin, q.yMax, q.yMax };
+		const float xs[4] = { q[0], q[1], q[1], q[0] };
+		const float ys[4] = { q[2], q[2], q[3], q[3] };
 		for ( int i = 0; i < 4; ++i )
 		{
 			const Vector pos = center + right * ( xs[i] * zc ) + up * ( ys[i] * zc );
@@ -3553,11 +3739,11 @@ void C_NeoVolSmoke::DrawFarSlabs( IMatRenderContext *pRenderContext )
 		static const int quad[6] = { 0, 1, 2, 0, 2, 3 };
 		for ( int i = 0; i < 6; ++i )
 		{
-			meshBuilder.Index( nVert + quad[i] );
+			meshBuilder.Index( 4 * n + quad[i] );
 			meshBuilder.AdvanceIndex();
 		}
-		nVert += 4;
 	}
+
 	meshBuilder.End();
 	pMesh->Draw();
 }

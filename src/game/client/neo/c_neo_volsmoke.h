@@ -179,6 +179,8 @@ private:
 	static float SheetOpaqueDepth( const VolSmokeSheetVolume_t *vols, int nVols, const Vector &eye, const Vector &dir, float *own );
 	static void BuildOpaqueSheet( IMatRenderContext *pRenderContext );
 	void DrawFarSlabs( IMatRenderContext *pRenderContext );
+	void DrawSlabQuads( IMatRenderContext *pRenderContext );
+	float SmokeNearestDepth() const;
 	void DrawNearPass( IMatRenderContext *pRenderContext );
 	static bool UsesCoverBoxes();
 	void BuildCoverReach();
@@ -274,6 +276,12 @@ private:
 	int    m_nLayerAfter[NEO_VOLSMOKE_MAX_PANES]; // per layer from the second, the held leaf it draws after
 	int    m_nGlassLayers;     // layers after the first in this walk
 	int    m_nLayersDrawn;     // of those
+	CUtlVector< float > m_SlabQuads; // the far slabs of the current draw, for its later layers
+	int    m_nActivePanes;     // panes the current draw is layered around
+	int    m_nPaneGroup[NEO_VOLSMOKE_MAX_PANES]; // per active pane: the layer after which its glass draws
+	int    m_nPaneRect[NEO_VOLSMOKE_MAX_PANES][4]; // per active pane: screen rectangle, left, top, right, bottom
+	float  m_flPaneDepth[NEO_VOLSMOKE_MAX_PANES]; // per active pane: view depth of its farthest corner
+	float  m_flLayerDepth;     // the current layer's slabs start nearer than this
 };
 
 #endif // C_NEO_VOLSMOKE_H
