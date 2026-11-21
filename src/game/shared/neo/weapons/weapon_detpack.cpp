@@ -273,6 +273,39 @@ bool CWeaponDetpack::CanDrop()
 	return m_bThisDetpackHasBeenThrown && owner && !GetOwner()->IsAlive();
 }
 
+#ifdef GAME_DLL
+// Finds the static surface (world or static prop) within reach that the player is looking at.
+static bool FindDetpackAttachSurface(CBasePlayer* pPlayer, trace_t& tr)
+{
+	constexpr float ATTACH_REACH = 48.f;
+
+	Vector vForward;
+	pPlayer->EyeVectors(&vForward);
+
+	const Vector vecStart = pPlayer->EyePosition();
+	const Vector vecEnd = vecStart + (vForward * ATTACH_REACH);
+	UTIL_TraceLine(vecStart, vecEnd, MASK_SOLID, pPlayer, COLLISION_GROUP_NONE, &tr);
+
+	if (!tr.DidHit() || tr.startsolid)
+	{
+		return false;
+	}
+
+	// An attached detpack never moves, so anything that can move is not a valid surface
+	if (!tr.DidHitWorld())
+	{
+		return false;
+	}
+
+	if (tr.surface.flags & SURF_SKY)
+	{
+		return false;
+	}
+
+	return true;
+}
+#endif
+
 extern ConVar sv_neo_exp_dmg_modifier;
 void CWeaponDetpack::TossDetpack(CBasePlayer* pPlayer)
 {
@@ -295,10 +328,24 @@ void CWeaponDetpack::TossDetpack(CBasePlayer* pPlayer)
 
 	Vector vecThrow = vForward + pPlayer->GetAbsVelocity();
 
-	m_pDetpack = static_cast<CNEODeployedDetpack*>(NEODeployedDetpack_Create(vecSrc, vec3_angle, vecThrow, AngularImpulse(600, random->RandomInt(-1200, 1200), 0), pPlayer));
+	trace_t attachTrace;
+	const bool attachToSurface = FindDetpackAttachSurface(pPlayer, attachTrace);
+	if (attachToSurface)
+	{
+		m_pDetpack = static_cast<CNEODeployedDetpack*>(NEODeployedDetpack_Create(attachTrace.endpos, vec3_angle, vec3_origin, AngularImpulse(0, 0, 0), pPlayer));
+	}
+	else
+	{
+		m_pDetpack = static_cast<CNEODeployedDetpack*>(NEODeployedDetpack_Create(vecSrc, vec3_angle, vecThrow, AngularImpulse(600, random->RandomInt(-1200, 1200), 0), pPlayer));
+	}
 
 	if (m_pDetpack)
 	{
+		if (attachToSurface)
+		{
+			m_pDetpack->AttachToSurface(attachTrace.endpos, attachTrace.plane.normal, pPlayer->EyeAngles()[YAW]);
+		}
+
 		m_pDetpack->SetDamage(NEO_DETPACK_DAMAGE * sv_neo_exp_dmg_modifier.GetFloat());
 		m_pDetpack->SetDamageRadius(NEO_DETPACK_DAMAGE_RADIUS);
 	}
