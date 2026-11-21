@@ -5021,7 +5021,15 @@ void CGameMovement::Duck( void )
 						{
 							// Calc parametric time
 							float flDuckFraction = SimpleSpline( 1.0f - ( flDuckSeconds / TIME_TO_UNDUCK ) );
+#ifdef NEO
+							// Standing up only raises the eye, so a release while the view still eases down keeps it still
+							Vector viewOffset = player->GetViewOffset();
 							SetDuckedEyeOffset( flDuckFraction );
+							viewOffset.z = Max( viewOffset.z, player->GetViewOffset().z );
+							player->SetViewOffset( viewOffset );
+#else
+							SetDuckedEyeOffset( flDuckFraction );
+#endif
 							player->m_Local.m_bDucking = true;
 						}
 					}
