@@ -4570,9 +4570,14 @@ void CGameMovement::FinishUnDuck( void )
 
 	mv->SetAbsOrigin( newOrigin );
 
+#ifdef NEO
+	// No latch reset: it stores the predicted view offset as the last networked value,
+	// and the next server update restores it as the server's, so a re-prediction would start from it
+#else
 #ifdef CLIENT_DLL
 	player->ResetLatched();
 #endif // CLIENT_DLL
+#endif
 
 	// Recategorize position since ducking can change origin
 	CategorizePosition();
@@ -4713,9 +4718,13 @@ void CGameMovement::FinishDuck( void )
 		player->SetViewOffset( viewOffset );
 #endif
 
+#ifdef NEO
+		// No latch reset, see FinishUnDuck
+#else
 #ifdef CLIENT_DLL
 		player->ResetLatched();
 #endif // CLIENT_DLL
+#endif
 	}
 
 	// See if we are stuck?
