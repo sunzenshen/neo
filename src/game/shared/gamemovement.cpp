@@ -4553,12 +4553,19 @@ void CGameMovement::FinishUnDuck( void )
 	player->m_Local.m_bDucking  = false;
 	player->m_Local.m_bInDuckJump  = false;
 
+#ifdef NEO
+	// Keep the eye still while the hull changes; lean then eases the view to the standing height
+	Vector viewOffset = player->GetViewOffset();
+	viewOffset.z -= newOrigin.z - mv->GetAbsOrigin().z;
+	player->SetViewOffset( viewOffset );
+#else
 	Vector currentOffset = player->GetViewOffset();
 	Vector finalOffset = GetPlayerViewOffset(false);
 	finalOffset.x = currentOffset.x;
 	finalOffset.y = currentOffset.y;
 
 	player->SetViewOffset( finalOffset );
+#endif
 	player->m_Local.m_flDucktime = 0;
 
 	mv->SetAbsOrigin( newOrigin );
@@ -4653,12 +4660,14 @@ void CGameMovement::FinishDuck( void )
 	player->m_Local.m_bDucked = true;
 	player->m_Local.m_bDucking = false;
 
+#ifndef NEO
 	Vector currentOffset = player->GetViewOffset();
 	Vector finalOffset = GetPlayerViewOffset(true);
 	finalOffset.x = currentOffset.x;
 	finalOffset.y = currentOffset.y;
 
 	player->SetViewOffset( finalOffset );
+#endif
 
 	// HACKHACK - Fudge for collision bug - no time to fix this properly
 	if ( player->GetGroundEntity() != NULL )
@@ -4696,6 +4705,13 @@ void CGameMovement::FinishDuck( void )
 		Vector out;
    		VectorAdd( mv->GetAbsOrigin(), viewDelta, out );
 		mv->SetAbsOrigin( out );
+
+#ifdef NEO
+		// Keep the eye still while the hull changes; lean then eases the view to the ducked height
+		Vector viewOffset = player->GetViewOffset();
+		viewOffset.z -= viewDelta.z;
+		player->SetViewOffset( viewOffset );
+#endif
 
 #ifdef CLIENT_DLL
 		player->ResetLatched();
