@@ -492,7 +492,20 @@ float CNEOPredictedViewModel::lean(CNEO_Player *player){
 	VectorYawRotate(viewOffset, viewAng.y, viewOffset);
 
 	const float absLeanRatio = fabs(m_flLeanRatio);
-	viewOffset.z = ((player->GetFlags() & FL_DUCKING) ? (VEC_DUCK_VIEW_SCALED(player).z) : VEC_VIEW_SCALED(player).z) - (neo_lean_fp_lower_eyes.GetFloat() * absLeanRatio);
+	const float targetViewZ = ((player->GetFlags() & FL_DUCKING) ? (VEC_DUCK_VIEW_SCALED(player).z) : VEC_VIEW_SCALED(player).z) - (neo_lean_fp_lower_eyes.GetFloat() * absLeanRatio);
+
+	// A duck transition sets the view height itself. Otherwise ease toward the target at the crouch pace,
+	// because finishing a duck keeps the eye still instead of jumping to the new height.
+	const float currentViewZ = player->GetViewOffset().z;
+	if (player->m_Local.m_bDucking)
+	{
+		viewOffset.z = currentViewZ;
+	}
+	else
+	{
+		const float crouchSpeed = (VEC_VIEW_SCALED(player).z - VEC_DUCK_VIEW_SCALED(player).z) / TIME_TO_DUCK;
+		viewOffset.z = Approach(targetViewZ, currentViewZ, crouchSpeed * gpGlobals->frametime);
+	}
 
 	player->m_vecLean = Vector(0, viewOffset.y, -(neo_lean_fp_lower_eyes.GetFloat() * absLeanRatio));
 	player->SetViewOffset(viewOffset);
