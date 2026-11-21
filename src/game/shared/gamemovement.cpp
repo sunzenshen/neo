@@ -4472,6 +4472,13 @@ bool CGameMovement::CanUnduck()
 
 #ifdef NEO
 		Vector hullSizeCrouch = VEC_DUCK_HULL_MAX_SCALED(static_cast<CNEO_Player*>(player)) - VEC_DUCK_HULL_MIN_SCALED(static_cast<CNEO_Player*>(player));
+		// Same class correction as FinishDuck, so the origin drops by what the air duck raised it
+		auto playerClass = static_cast<CNEO_Player*>(player)->GetClass();
+		if (playerClass != NEO_CLASS_SUPPORT)
+		{
+			hullSizeNormal -= playerClass == NEO_CLASS_RECON ? NEO_RECON_MAXHULL_OFFSET : NEO_ASSAULT_MAXHULL_OFFSET;
+			hullSizeCrouch -= playerClass == NEO_CLASS_RECON ? NEO_RECON_DUCK_MAXHULL_OFFSET : NEO_ASSAULT_DUCK_MAXHULL_OFFSET;
+		}
 #else
 		Vector hullSizeCrouch = VEC_DUCK_HULL_MAX_SCALED(player) - VEC_DUCK_HULL_MIN_SCALED(player);
 #endif
@@ -4524,6 +4531,13 @@ void CGameMovement::FinishUnDuck( void )
 #ifdef NEO
 		Vector hullSizeNormal = VEC_HULL_MAX_SCALED(static_cast<CNEO_Player*>(player)) - VEC_HULL_MIN_SCALED(static_cast<CNEO_Player*>(player));
 		Vector hullSizeCrouch = VEC_DUCK_HULL_MAX_SCALED(static_cast<CNEO_Player*>(player)) - VEC_DUCK_HULL_MIN_SCALED(static_cast<CNEO_Player*>(player));
+		// Same class correction as FinishDuck, so the origin drops by what the air duck raised it
+		auto playerClass = static_cast<CNEO_Player*>(player)->GetClass();
+		if (playerClass != NEO_CLASS_SUPPORT)
+		{
+			hullSizeNormal -= playerClass == NEO_CLASS_RECON ? NEO_RECON_MAXHULL_OFFSET : NEO_ASSAULT_MAXHULL_OFFSET;
+			hullSizeCrouch -= playerClass == NEO_CLASS_RECON ? NEO_RECON_DUCK_MAXHULL_OFFSET : NEO_ASSAULT_DUCK_MAXHULL_OFFSET;
+		}
 #else
 		Vector hullSizeNormal = VEC_HULL_MAX_SCALED(player) - VEC_HULL_MIN_SCALED(player);
 		Vector hullSizeCrouch = VEC_DUCK_HULL_MAX_SCALED(player) - VEC_DUCK_HULL_MIN_SCALED(player);
@@ -4539,19 +4553,31 @@ void CGameMovement::FinishUnDuck( void )
 	player->m_Local.m_bDucking  = false;
 	player->m_Local.m_bInDuckJump  = false;
 
+#ifdef NEO
+	// Keep the eye still while the hull changes; lean then eases the view to the standing height
+	Vector viewOffset = player->GetViewOffset();
+	viewOffset.z -= newOrigin.z - mv->GetAbsOrigin().z;
+	player->SetViewOffset( viewOffset );
+#else
 	Vector currentOffset = player->GetViewOffset();
 	Vector finalOffset = GetPlayerViewOffset(false);
 	finalOffset.x = currentOffset.x;
 	finalOffset.y = currentOffset.y;
 
 	player->SetViewOffset( finalOffset );
+#endif
 	player->m_Local.m_flDucktime = 0;
 
 	mv->SetAbsOrigin( newOrigin );
 
+#ifdef NEO
+	// No latch reset: it stores the predicted view offset as the last networked value,
+	// and the next server update restores it as the server's, so a re-prediction would start from it
+#else
 #ifdef CLIENT_DLL
 	player->ResetLatched();
 #endif // CLIENT_DLL
+#endif
 
 	// Recategorize position since ducking can change origin
 	CategorizePosition();
@@ -4639,12 +4665,14 @@ void CGameMovement::FinishDuck( void )
 	player->m_Local.m_bDucked = true;
 	player->m_Local.m_bDucking = false;
 
+#ifndef NEO
 	Vector currentOffset = player->GetViewOffset();
 	Vector finalOffset = GetPlayerViewOffset(true);
 	finalOffset.x = currentOffset.x;
 	finalOffset.y = currentOffset.y;
 
 	player->SetViewOffset( finalOffset );
+#endif
 
 	// HACKHACK - Fudge for collision bug - no time to fix this properly
 	if ( player->GetGroundEntity() != NULL )
@@ -4683,9 +4711,20 @@ void CGameMovement::FinishDuck( void )
    		VectorAdd( mv->GetAbsOrigin(), viewDelta, out );
 		mv->SetAbsOrigin( out );
 
+#ifdef NEO
+		// Keep the eye still while the hull changes; lean then eases the view to the ducked height
+		Vector viewOffset = player->GetViewOffset();
+		viewOffset.z -= viewDelta.z;
+		player->SetViewOffset( viewOffset );
+#endif
+
+#ifdef NEO
+		// No latch reset, see FinishUnDuck
+#else
 #ifdef CLIENT_DLL
 		player->ResetLatched();
 #endif // CLIENT_DLL
+#endif
 	}
 
 	// See if we are stuck?
@@ -4991,7 +5030,15 @@ void CGameMovement::Duck( void )
 						{
 							// Calc parametric time
 							float flDuckFraction = SimpleSpline( 1.0f - ( flDuckSeconds / TIME_TO_UNDUCK ) );
+#ifdef NEO
+							// Standing up only raises the eye, so a release while the view still eases down keeps it still
+							Vector viewOffset = player->GetViewOffset();
 							SetDuckedEyeOffset( flDuckFraction );
+							viewOffset.z = Max( viewOffset.z, player->GetViewOffset().z );
+							player->SetViewOffset( viewOffset );
+#else
+							SetDuckedEyeOffset( flDuckFraction );
+#endif
 							player->m_Local.m_bDucking = true;
 						}
 					}
