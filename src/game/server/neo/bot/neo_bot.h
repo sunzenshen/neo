@@ -477,6 +477,10 @@ public:
 
 	CNEOBotSuppressiveFire *GetSuppressiveFire( void ) { return &m_suppressiveFire; }
 
+	bool IsLadderHandicapReady() const { return m_ladderHandicapCooldown.IsElapsed(); }
+	void StartLadderHandicapCooldown() { m_ladderHandicapCooldown.Start( LADDER_HANDICAP_COOLDOWN ); }
+	void InvalidateCurrentPath();
+
 private:
 	void ToggleCloak(void);
 	void UpdateVisionMode(void);
@@ -485,6 +489,9 @@ private:
 	CountdownTimer m_visionCheckTimer;
 	CountdownTimer m_visionHoldTimer;
 	CountdownTimer m_smokeThermalTimer;
+
+	CountdownTimer m_ladderHandicapCooldown;
+	static constexpr float LADDER_HANDICAP_COOLDOWN = 10.0f;	// least time between two ladder handicaps of one bot
 
 	CNEOBotSuppressiveFire m_suppressiveFire;
 

@@ -10,7 +10,7 @@ class PathFollower;
 /**
  * Implementation based on ladder climbing logic in https://github.com/Dragoteryx/drgbase/
  * Behavior that handles the actual ladder climbing.
- * DOES disable enemy awareness while climbing.
+ * Stops looking around while climbing, but leaves the ladder for any threat it knows of.
  * Checks if still on ladder - returns Done if knocked off to reevaluate situation.
  */
 class CNEOBotLadderClimb : public Action<CNEOBot>
@@ -27,10 +27,11 @@ public:
 	virtual ActionResult<CNEOBot> OnSuspend( CNEOBot *me, Action<CNEOBot> *interruptingAction ) override;
 	virtual ActionResult<CNEOBot> OnResume( CNEOBot *me, Action<CNEOBot> *interruptingAction ) override;
 
-	static bool TeleportPastLadder( CNEOBot *me, const CNavLadder *ladder, bool goingUp, const CNavArea *exitArea, const char *reason );
+	enum HandicapPhase { HANDICAP_APPROACH, HANDICAP_CLIMB };
+	static bool TryHandicap( CNEOBot *me, const CNavLadder *ladder, bool goingUp, HandicapPhase phase, const char *reason );
 
 private:
-	bool TryHandicap( CNEOBot *me, const char *reason ) const;
+	static const CNavArea *FindArrivalArea( CNEOBot *me, const CNavLadder *ladder, bool goingUp, const CNavArea **next );
 	bool IsWrongGround( CNEOBot *me ) const;
 	void EnterDismountPhase( CNEOBot *me );
 	void ResolveExitArea( CNEOBot *me );
@@ -47,6 +48,8 @@ private:
 
 	const CNavLadder *m_ladder;
 	const CNavArea *m_pExitArea;
+	const CNavArea *m_pArrivalArea;	// the area the path reaches through this ladder
+	const CNavArea *m_pArrivalNext;	// and the path's next area after it, a landing as good
 
 	bool m_bGoingUp;
 	bool m_bDismountPhase;
