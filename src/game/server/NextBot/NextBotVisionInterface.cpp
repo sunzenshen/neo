@@ -779,62 +779,6 @@ bool IVision::IsLineOfSightClear( const Vector &pos ) const
 }
 
 
-#ifdef NEO
-// A smoke blocker stops a trace at fraction zero, so leave the target cloud out of its own sight test.
-class CSmokeSightFilter : public NextBotVisionTraceFilter
-{
-public:
-	CSmokeSightFilter( const CBaseEntity *pObserver, const Vector &vecCenter )
-		: NextBotVisionTraceFilter( pObserver, COLLISION_GROUP_NONE ), m_vecCenter( vecCenter )
-	{
-	}
-
-	bool ShouldHitEntity( IHandleEntity *pHandle, int nContentsMask ) override
-	{
-		CBaseEntity *pEntity = EntityFromEntityHandle( pHandle );
-		if ( pEntity && FStrEq( pEntity->GetClassname(), SMOKELINEOFSIGHTBLOCKER_ENTITYNAME ) && pEntity->GetAbsOrigin() == m_vecCenter )
-		{
-			return false;
-		}
-
-		return NextBotVisionTraceFilter::ShouldHitEntity( pHandle, nContentsMask );
-	}
-
-private:
-	const Vector &m_vecCenter;
-};
-
-//------------------------------------------------------------------------------------------
-bool IVision::NoticeSmoke( CNEOSmokeLineOfSightBlocker *pSmoke ) const
-{
-	CBaseCombatCharacter *pObserver = GetBot()->GetEntity();
-	if ( pSmoke->HasBeenSeenBy( pObserver ) )
-	{
-		return true;
-	}
-
-	const Vector &vecCenter = pSmoke->GetAbsOrigin();
-	if ( nb_blind.GetBool() || GetBot()->IsRangeGreaterThan( vecCenter, GetMaxVisionRange() ) ||
-		pObserver->IsHiddenByFog( vecCenter ) || !IsInFieldOfView( vecCenter ) )
-	{
-		return false;
-	}
-
-	ScopedSmokeLOS smokeGuard( false );
-	CSmokeSightFilter filter( pObserver, vecCenter );
-	trace_t tr;
-	UTIL_TraceLine( GetBot()->GetBodyInterface()->GetEyePosition(), vecCenter, MASK_BLOCKLOS_AND_NPCS | CONTENTS_IGNORE_NODRAW_OPAQUE, &filter, &tr );
-	if ( tr.DidHit() )
-	{
-		return false;
-	}
-
-	pSmoke->NoteSeenBy( pObserver );
-	return true;
-}
-#endif // NEO
-
-
 //------------------------------------------------------------------------------------------
 bool IVision::IsLineOfSightClearToEntity( const CBaseEntity *subject, Vector *visibleSpot ) const
 {
@@ -907,7 +851,6 @@ bool IVision::IsLineOfSightClearToEntity( const CBaseEntity *subject, Vector *vi
 		const bool hitSmoke = result.m_pEnt && FStrEq(result.m_pEnt->GetClassname(), SMOKELINEOFSIGHTBLOCKER_ENTITYNAME);
 		if (supportBot && hitSmoke)
 		{
-			NoticeSmoke( static_cast< CNEOSmokeLineOfSightBlocker * >( result.m_pEnt ) );
 			neoBot->OnSmokeBlockedSight();
 			ScopedSmokeLOS supportSmokeGuard(true);
 			UTIL_TraceLine( GetBot()->GetBodyInterface()->GetEyePosition(), to, MASK_BLOCKLOS_AND_NPCS|CONTENTS_IGNORE_NODRAW_OPAQUE, &filter, &result );

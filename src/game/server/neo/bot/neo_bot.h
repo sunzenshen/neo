@@ -250,7 +250,7 @@ public:
 	Vector FindVisibleThrowPointNear( const Vector &vecPos ) const;
 	bool IsThrowLineClear(const Vector& where) const;
 	bool IsThrowLineClear(const Vector& from, const Vector& to) const;
-	bool IsCoveredByKnownSmoke( const Vector &vecPos ) const;
+	bool IsCoveredByFriendlySmoke( const Vector &vecPos ) const;
 
 	bool IsEntityBetweenTargetAndSelf(CBaseEntity* other, CBaseEntity* target);	// return true if "other" is positioned inbetween us and "target"
 

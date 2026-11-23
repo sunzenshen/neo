@@ -67,7 +67,7 @@ CNEOBotGrenadeThrow::ThrowTargetResult CNEOBotGrenadeThrowSmoke::UpdateGrenadeTa
 			m_vecTarget = me->GetAbsOrigin();
 		}
 
-		if ( me->IsCoveredByKnownSmoke( m_vecTarget ) )
+		if ( me->IsCoveredByFriendlySmoke( m_vecTarget ) )
 		{
 			return THROW_TARGET_CANCEL;
 		}

@@ -1359,7 +1359,8 @@ Vector CNEOBot::FindVisibleThrowPointNear( const Vector &vecPos ) const
 }
 
 //-----------------------------------------------------------------------------------------------------
-bool CNEOBot::IsCoveredByKnownSmoke( const Vector &vecPos ) const
+// Return true if a friendly smoke cloud already conceals the given spot, so another smoke there is wasted
+bool CNEOBot::IsCoveredByFriendlySmoke( const Vector &vecPos ) const
 {
 	const Vector vecLift( 0.0f, 0.0f, StepHeight );
 	const bool bTeamplay = NEORules()->IsTeamplay();
@@ -1367,22 +1368,24 @@ bool CNEOBot::IsCoveredByKnownSmoke( const Vector &vecPos ) const
 	CBaseEntity *pEntity = nullptr;
 	while ( ( pEntity = gEntList.FindEntityByClassname( pEntity, SMOKELINEOFSIGHTBLOCKER_ENTITYNAME ) ) )
 	{
+		// A blocker turns solid when its cloud starts to conceal and is removed when the cloud thins out
 		auto *pSmoke = static_cast< CNEOSmokeLineOfSightBlocker * >( pEntity );
-		if ( !pSmoke->IsActive() || !pSmoke->CollisionProp()->IsPointInBounds( vecPos ) )
+		if ( !pSmoke->IsSolid() || pSmoke->IsMarkedForDeletion() || !pSmoke->CollisionProp()->IsPointInBounds( vecPos ) )
 		{
 			continue;
 		}
 
-		// A blocker's bounds can extend through walls and floors.
-		trace_t tr;
-		UTIL_TraceLine( pSmoke->GetAbsOrigin() + vecLift, vecPos + vecLift, MASK_SOLID_BRUSHONLY, nullptr, COLLISION_GROUP_NONE, &tr );
-		if ( tr.DidHit() )
-		{
-			continue;
-		}
-
+		// The team knows where its own smoke went; an enemy cloud is left to what the bot sees
 		const bool bFriendly = pSmoke->GetThrower() == this || ( bTeamplay && pSmoke->GetTeamNumber() == GetTeamNumber() );
-		if ( bFriendly || m_vision->NoticeSmoke( pSmoke ) )
+		if ( !bFriendly )
+		{
+			continue;
+		}
+
+		// A blocker's bounds can extend through walls and floors
+		trace_t tr;
+		UTIL_TraceLine( pSmoke->GetAbsOrigin() + vecLift, vecPos + vecLift, MASK_SOLID_BRUSHONLY, NULL, COLLISION_GROUP_NONE, &tr );
+		if ( !tr.DidHit() )
 		{
 			return true;
 		}
