@@ -1371,6 +1371,26 @@ void CNEOBot::UpdateLookingAroundForIncomingPlayers(bool lookForEnemies)
 
 
 //-----------------------------------------------------------------------------------------------------
+namespace
+{
+class CCheckForVisibleEnemy : public IVision::IForEachKnownEntity
+{
+public:
+	explicit CCheckForVisibleEnemy( const CNEOBot *me ) : m_me( me )
+	{
+	}
+
+	bool Inspect( const CKnownEntity &known ) override
+	{
+		return !known.IsVisibleInFOVNow() || !m_me->IsEnemy( known.GetEntity() );
+	}
+
+private:
+	const CNEOBot *m_me;
+};
+}
+
+//-----------------------------------------------------------------------------------------------------
 /**
  * Update our view to keep an eye on areas where the enemy will be coming from
  */
@@ -1386,23 +1406,35 @@ void CNEOBot::UpdateLookingAroundForEnemies(void)
 
 	const CKnownEntity* known = GetVisionInterface()->GetPrimaryKnownThreat();
 
-	if (known)
+	if ( known && known->IsVisibleInFOVNow() )
 	{
-		if (known->IsVisibleInFOVNow())
+		// A threat only the ghost shows through a wall is not one to aim at,
+		// so the ghost carrier behavior chooses which beacon to look at
+		CBaseEntity *pThreat = known->GetEntity();
+		if ( IsRevealedByMyGhost( pThreat ) && !GetVisionInterface()->IsLineOfSightClear( pThreat->WorldSpaceCenter() ) )
 		{
-			// A threat only the ghost shows through a wall is not one to aim at,
-			// so the ghost carrier behavior chooses which beacon to look at
-			CBaseEntity *pThreat = known->GetEntity();
-			if (IsRevealedByMyGhost(pThreat) && !GetVisionInterface()->IsLineOfSightClear(pThreat->WorldSpaceCenter()))
-			{
-				return;
-			}
-
-			// I see you!
-			GetBodyInterface()->AimHeadTowards(known->GetEntity(), IBody::CRITICAL, 1.0f, NULL, "Aiming at a visible threat");
 			return;
 		}
 
+		GetBodyInterface()->AimHeadTowards( pThreat, IBody::CRITICAL, maxLookInterval, nullptr, "Aiming at a visible threat" );
+		return;
+	}
+
+	Vector hitAim;
+	float hitLookDuration;
+	if ( m_suppressiveFire.GetHitAim( hitAim, hitLookDuration ) )
+	{
+		// A visible enemy can still matter when another threat is ranked first.
+		CCheckForVisibleEnemy check( this );
+		if ( GetVisionInterface()->ForEachKnownEntity( check ) )
+		{
+			GetBodyInterface()->AimHeadTowards( hitAim, IBody::IMPORTANT, hitLookDuration, nullptr, "Looking toward incoming fire" );
+			return;
+		}
+	}
+
+	if (known)
+	{
 		/*
 		if ( known->WasEverVisible() && known->GetTimeSinceLastSeen() < 3.0f )
 		{

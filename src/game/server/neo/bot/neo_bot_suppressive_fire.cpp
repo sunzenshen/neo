@@ -14,6 +14,8 @@ ConVar neo_bot_suppressive_fire( "neo_bot_suppressive_fire", "1", FCVAR_NONE,
 
 namespace
 {
+constexpr float HIT_AIM_DURATION = 1.8f;
+constexpr float HIT_AIM_DISTANCE = 512.0f;
 // Randomised so a team caught by the same burst does not stop shooting in unison
 constexpr float SUPPRESS_WINDOW_MIN = 2.0f;
 constexpr float SUPPRESS_WINDOW_MAX = 3.0f;
@@ -35,6 +37,12 @@ constexpr float SUPPRESS_SWEEP_MAX_DEG = 12.0f;
 constexpr float SUPPRESS_SWEEP_PERIOD = 1.5f;
 // Keep sweeping through a stretch of the arc that is not worth firing down
 constexpr float SUPRESS_HOLD_AIM_TIME = 0.5f;
+
+float GetBearingErrorScale( const CNEOBot *me )
+{
+	static constexpr float errorScaleByDifficulty[ CNEOBot::NUM_DIFFICULTY_LEVELS ] = { 2.5f, 2.0f, 1.5f, 1.0f };
+	return errorScaleByDifficulty[ clamp( me->GetDifficulty(), CNEOBot::EASY, CNEOBot::EXPERT ) ];
+}
 }
 
 //---------------------------------------------------------------------------------------------
@@ -138,6 +146,8 @@ void CNEOBotSuppressiveFire::Reset()
 	m_vecBelievedPos = vec3_origin;
 	m_fireWindowTimer.Invalidate();
 	m_holdAimTimer.Invalidate();
+	m_hitAimTimer.Invalidate();
+	m_vecHitAim.Invalidate();
 	m_sweepPhase = 0.0f;
 	m_bearingErrorDeg = 0.0f;
 	m_rangeScale = 1.0f;
@@ -149,8 +159,7 @@ void CNEOBotSuppressiveFire::Reset()
 // The error is kept for the whole window, so following a moving sound does not jump the aim.
 void CNEOBotSuppressiveFire::OpenFireWindow( CNEOBot *me, CBaseEntity *target, const Vector &pos, bool bSeen )
 {
-	static constexpr float errorScaleByDifficulty[ CNEOBot::NUM_DIFFICULTY_LEVELS ] = { 2.5f, 2.0f, 1.5f, 1.0f };
-	const float errorScale = bSeen ? 0.0f : errorScaleByDifficulty[ clamp( me->GetDifficulty(), CNEOBot::EASY, CNEOBot::EXPERT ) ];
+	const float errorScale = bSeen ? 0.0f : GetBearingErrorScale( me );
 
 	m_hTarget = target;
 	m_bearingErrorDeg = RandomFloat( -SUPPRESS_BEARING_ERROR_DEG, SUPPRESS_BEARING_ERROR_DEG ) * errorScale;
@@ -189,7 +198,7 @@ Vector CNEOBotSuppressiveFire::GetSweptAimSpot( const Vector &from, const Vector
 void CNEOBotSuppressiveFire::OnInjured( CNEOBot *me, const CTakeDamageInfo &info )
 {
 	CBaseEntity *attacker = info.GetAttacker();
-	if ( !neo_bot_suppressive_fire.GetBool() || !attacker || !attacker->IsPlayer() || !me->IsEnemy( attacker ) )
+	if ( !attacker || !attacker->IsPlayer() || !me->IsEnemy( attacker ) )
 	{
 		return;
 	}
@@ -200,12 +209,42 @@ void CNEOBotSuppressiveFire::OnInjured( CNEOBot *me, const CTakeDamageInfo &info
 	}
 
 	const CKnownEntity *known = me->GetVisionInterface()->GetKnown( attacker );
-	if ( known && known->IsVisibleInFOVNow() )
+	const bool bHidden = !known || !known->IsVisibleInFOVNow();
+	const bool bOpenFireWindow = bHidden && neo_bot_suppressive_fire.GetBool();
+	if ( bOpenFireWindow )
 	{
-		return; // FireWeaponAtEnemy owns threats I can see
+		OpenFireWindow( me, attacker, attacker->GetAbsOrigin(), false );
 	}
 
-	OpenFireWindow( me, attacker, attacker->GetAbsOrigin(), false );
+	const Vector eyes = me->EyePosition();
+	const Vector &force = info.GetDamageForce();
+	const Vector towardShooter = force.LengthSqr() > 0.0f ? -force : attacker->EyePosition() - eyes;
+	// Share the bearing error so the turn leads into the same sweep.
+	const float bearingError = bOpenFireWindow ? m_bearingErrorDeg
+		: RandomFloat( -SUPPRESS_BEARING_ERROR_DEG, SUPPRESS_BEARING_ERROR_DEG ) * GetBearingErrorScale( me );
+	RecordHitAim( eyes, towardShooter, bearingError );
+}
+
+
+//---------------------------------------------------------------------------------------------
+void CNEOBotSuppressiveFire::RecordHitAim( const Vector &eyes, const Vector &towardShooter, float bearingError )
+{
+	m_vecHitAim = RotateBearing( eyes, eyes + towardShooter.Normalized() * HIT_AIM_DISTANCE, bearingError );
+	m_hitAimTimer.Start( HIT_AIM_DURATION );
+}
+
+
+//---------------------------------------------------------------------------------------------
+bool CNEOBotSuppressiveFire::GetHitAim( Vector &spot, float &duration ) const
+{
+	if ( m_hitAimTimer.IsElapsed() || !m_vecHitAim.IsValid() )
+	{
+		return false;
+	}
+
+	duration = m_hitAimTimer.GetRemainingTime();
+	spot = m_vecHitAim;
+	return duration > 0.0f;
 }
 
 
