@@ -148,6 +148,8 @@ public:
 	void OnSmokeBlockedSight(void);
 	void EnableCloak(float threshold);
 	void DisableCloak(void);
+	void RequestSearchCloak( const PathFollower &path, float flHeard );
+	bool HasSearchCloak() const;
 
 	void UpdateLookingAroundForEnemies(void);						// update our view to keep an eye on enemies, and where enemies come from
 
@@ -479,7 +481,13 @@ public:
 
 private:
 	void ToggleCloak(void);
+	void UpdateSearchCloak();
 	void UpdateVisionMode(void);
+
+	float m_flSearchHeard = -1.0f;
+	float m_flSearchCloakHeard = -1.0f;
+	CountdownTimer m_searchCloakTimer;
+	float m_flSearchCloakETA = FLT_MAX;
 
 	int m_visionClass = NEO_CLASS_RANDOM;
 	CountdownTimer m_visionCheckTimer;

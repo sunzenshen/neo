@@ -5,6 +5,7 @@
 #include "team_train_watcher.h"
 #include "neo_bot.h"
 #include "neo_bot_manager.h"
+#include "neo_bot_path_compute.h"
 #include "neo_bot_path_reservation.h"
 #include "neo_bot_vision.h"
 #include "trigger_area_capture.h"
@@ -657,6 +658,8 @@ void CNEOBot::Spawn()
 
 	m_spawnArea = NULL;
 	m_suppressiveFire.Reset();
+	m_searchCloakTimer.Invalidate();
+	m_flSearchCloakHeard = -1.0f;
 	m_justLostPointTimer.Invalidate();
 	m_squad = NULL;
 	m_didReselectClass = false;
@@ -906,7 +909,10 @@ void CNEOBot::Update()
 	}
 
 	UpdateVisionMode();
+	m_flSearchHeard = -1.0f;
 	BaseClass::Update();
+	// Vision and combat get first claim on the cloak.
+	UpdateSearchCloak();
 }
 
 //-----------------------------------------------------------------------------------------------------
@@ -1183,6 +1189,11 @@ void CNEOBot::EnableCloak(float threshold)
 		return;
 	}
 
+	if ( m_searchCloakTimer.HasStarted() )
+	{
+		m_searchCloakTimer.Invalidate();
+	}
+
 	if ( (GetCloakPower() >= threshold)
 		&& !IsCloakEnabled() )
 	{
@@ -1195,6 +1206,10 @@ void CNEOBot::DisableCloak(void)
 	if ( IsCloakEnabled() )
 	{
 		ToggleCloak();
+		if ( m_inputButtons & IN_THERMOPTIC )
+		{
+			m_searchCloakTimer.Invalidate();
+		}
 	}
 }
 
@@ -1208,6 +1223,79 @@ void CNEOBot::ToggleCloak(void)
 	}
 
 	PressThermopticButton();
+}
+
+
+bool CNEOBot::HasSearchCloak() const
+{
+	return m_searchCloakTimer.HasStarted();
+}
+
+
+// Use the sound timestamp so repathing to the same gunfire does not rearm the cloak.
+void CNEOBot::RequestSearchCloak( const PathFollower &path, float flHeard )
+{
+	if ( !CNEOBotPathReachesGoal( path ) || GetLocomotionInterface()->IsStuck() )
+	{
+		return;
+	}
+
+	// Keep the cue during corner turns so an active cloak can stay on.
+	const auto *goal = path.GetCurrentGoal();
+	const Vector toGoal = goal->pos - GetAbsOrigin();
+	const float remaining = toGoal.Length() + path.GetLength() - goal->distanceFromStart;
+	m_flSearchHeard = flHeard;
+	m_flSearchCloakETA = DotProduct( GetAbsVelocity(), toGoal ) > 0.0f
+		? remaining / GetNormSpeed_WithActiveWepEncumberment() : FLT_MAX;
+}
+
+
+void CNEOBot::UpdateSearchCloak()
+{
+	constexpr float SEARCH_CLOAK_WINDOW = 3.0f;
+	constexpr float SEARCH_CLOAK_RESERVE = 4.0f; // Leave charge for combat on arrival.
+
+	const bool bOwned = HasSearchCloak();
+	if ( !bOwned && ( m_flSearchHeard < 0.0f || m_flSearchHeard == m_flSearchCloakHeard
+		|| m_flSearchCloakETA > SEARCH_CLOAK_WINDOW || IsCloakEnabled() || ( m_inputButtons & IN_THERMOPTIC ) ) )
+	{
+		return;
+	}
+
+	// Sight and combat own the cloak from here
+	if ( !IsAlive() || ( bOwned && !IsCloakEnabled() ) || IsFiring() || ( m_inputButtons & IN_ATTACK )
+		|| GetVisionInterface()->GetPrimaryKnownThreat( true ) )
+	{
+		m_searchCloakTimer.Invalidate();
+		return;
+	}
+
+	if ( bOwned && m_flSearchHeard >= 0.0f && m_flSearchHeard != m_flSearchCloakHeard )
+	{
+		m_flSearchCloakHeard = m_flSearchHeard;
+		m_searchCloakTimer.Start( SEARCH_CLOAK_WINDOW );
+	}
+
+	if ( bOwned )
+	{
+		if ( m_flSearchHeard < 0.0f || m_searchCloakTimer.IsElapsed() || GetCloakPower() <= SEARCH_CLOAK_RESERVE )
+		{
+			DisableCloak();
+		}
+		return;
+	}
+
+	if ( GetClass() != NEO_CLASS_RECON && GetClass() != NEO_CLASS_ASSAULT )
+	{
+		return;
+	}
+
+	EnableCloak( SEARCH_CLOAK_RESERVE + m_flSearchCloakETA * CLOAK_AUX_COST );
+	if ( m_inputButtons & IN_THERMOPTIC )
+	{
+		m_flSearchCloakHeard = m_flSearchHeard;
+		m_searchCloakTimer.Start( SEARCH_CLOAK_WINDOW );
+	}
 }
 
 

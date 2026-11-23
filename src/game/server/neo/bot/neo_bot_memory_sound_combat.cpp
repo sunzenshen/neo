@@ -71,7 +71,7 @@ namespace NEOMemorySoundCombat
 		}
 	}
 
-	bool FindNearestFight( const Vector &vEar, int iMyTeam, int iMyEnt, Vector &vFight )
+	bool FindNearestFight( const Vector &vEar, int iMyTeam, int iMyEnt, Vector &vFight, float &flLastHeard )
 	{
 		const float flNow = gpGlobals->curtime;
 		const bool bTeamplay = NEORules() && NEORules()->IsTeamplay();
@@ -80,7 +80,7 @@ namespace NEOMemorySoundCombat
 
 		// Gather the sources this listener would have heard, with a linear recency weight:
 		// full while the sound is still live, fading to nothing after it stops.
-		Vector pos[ MAX_PLAYERS + 1 ];
+		const Source *heard[ MAX_PLAYERS + 1 ];
 		float weight[ MAX_PLAYERS + 1 ];
 		int nHeard = 0;
 		int iNearest = -1;
@@ -111,7 +111,7 @@ namespace NEOMemorySoundCombat
 				iNearest = nHeard;
 			}
 
-			pos[ nHeard ] = s.pos;
+			heard[ nHeard ] = &s;
 			weight[ nHeard ] = ( flAge > 0.0f ) ? ( 1.0f - flAge / flMemoryWindow ) : 1.0f;
 			++nHeard;
 		}
@@ -125,12 +125,14 @@ namespace NEOMemorySoundCombat
 		const float flClusterSqr = flClusterRadius * flClusterRadius;
 		Vector vSum( 0, 0, 0 );
 		float flWsum = 0.0f;
+		flLastHeard = heard[ iNearest ]->lastHeard;
 		for ( int j = 0; j < nHeard; ++j )
 		{
-			if ( pos[ iNearest ].DistToSqr( pos[ j ] ) <= flClusterSqr )
+			if ( heard[ iNearest ]->pos.DistToSqr( heard[ j ]->pos ) <= flClusterSqr )
 			{
-				vSum += pos[ j ] * weight[ j ];
+				vSum += heard[ j ]->pos * weight[ j ];
 				flWsum += weight[ j ];
+				flLastHeard = Max( flLastHeard, heard[ j ]->lastHeard );
 			}
 		}
 

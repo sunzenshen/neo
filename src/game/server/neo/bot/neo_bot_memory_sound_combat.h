@@ -14,5 +14,5 @@ namespace NEOMemorySoundCombat
 
 	// Find the nearest recently heard fight: enemy combat sounds around the nearest source.
 	// Only counts sources within their own audible radius of vEar, as CSoundEnt::Listen does.
-	bool FindNearestFight( const Vector &vEar, int iMyTeam, int iMyEnt, Vector &vFight );
+	bool FindNearestFight( const Vector &vEar, int iMyTeam, int iMyEnt, Vector &vFight, float &flLastHeard );
 }

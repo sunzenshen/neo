@@ -36,6 +36,7 @@ protected:
 	virtual void RecomputeSeekPath( CNEOBot *me );
 
 	bool TryPathToCombatSound( CNEOBot *me );
+	void RequestSoundCloak( CNEOBot *me );
 	bool TryPathToRoamGoal( CNEOBot *me, const Vector &vGoal );
 	virtual bool IsSeekGoalAnObjective() const	{ return false; }
 
@@ -45,6 +46,7 @@ protected:
 	CountdownTimer m_soundSearchTimer;
 	CountdownTimer m_combatSoundCommitTimer;
 	Vector m_vCombatSoundSpot = vec3_origin;
+	float m_flCombatSoundHeard = 0.0f;
 	CountdownTimer m_itemStolenTimer;
 	EHANDLE m_hTargetEntity;
 	bool m_bGoingToTargetEntity = false;

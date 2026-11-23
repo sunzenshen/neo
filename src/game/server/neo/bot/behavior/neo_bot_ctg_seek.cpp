@@ -140,6 +140,8 @@ ActionResult< CNEOBot > CNEOBotCtgSeek::Update( CNEOBot *me, float interval )
 		}
 	}
 
+	RequestSoundCloak( me );
+
 	return Continue();
 }
 
