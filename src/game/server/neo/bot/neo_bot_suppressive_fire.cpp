@@ -16,6 +16,7 @@ namespace
 {
 constexpr float HIT_AIM_DURATION = 1.8f;
 constexpr float HIT_AIM_DISTANCE = 512.0f;
+constexpr float HIT_CLOAK_THRESHOLD = 3.0f;
 // Randomised so a team caught by the same burst does not stop shooting in unison
 constexpr float SUPPRESS_WINDOW_MIN = 2.0f;
 constexpr float SUPPRESS_WINDOW_MAX = 3.0f;
@@ -223,6 +224,11 @@ void CNEOBotSuppressiveFire::OnInjured( CNEOBot *me, const CTakeDamageInfo &info
 	const float bearingError = bOpenFireWindow ? m_bearingErrorDeg
 		: RandomFloat( -SUPPRESS_BEARING_ERROR_DEG, SUPPRESS_BEARING_ERROR_DEG ) * GetBearingErrorScale( me );
 	RecordHitAim( eyes, towardShooter, bearingError );
+
+	if ( bHidden )
+	{
+		me->EnableCloak( HIT_CLOAK_THRESHOLD );
+	}
 }
 
 
