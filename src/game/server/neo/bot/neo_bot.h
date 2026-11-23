@@ -248,6 +248,7 @@ public:
 	bool IsFriendlyNearBarrel(float range) const;			// return true if a teammate is near where my weapon points
 
 	Vector FindVisibleThrowPointNear( const Vector &vecPos ) const;
+	Vector FindVisibleThrowPointNear( const Vector &vecPos, CNavArea *pFromArea, const Vector &vecEye ) const;
 	bool IsThrowLineClear(const Vector& where) const;
 	bool IsThrowLineClear(const Vector& from, const Vector& to) const;
 

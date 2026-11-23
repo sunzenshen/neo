@@ -1333,14 +1333,18 @@ public:
 //-----------------------------------------------------------------------------------------------------
 Vector CNEOBot::FindVisibleThrowPointNear( const Vector &vecPos ) const
 {
-	CNavArea *myArea = GetLastKnownArea();
-	if ( !myArea )
+	return FindVisibleThrowPointNear( vecPos, GetLastKnownArea(), const_cast<CNEOBot*>(this)->EyePosition() );
+}
+
+Vector CNEOBot::FindVisibleThrowPointNear( const Vector &vecPos, CNavArea *pFromArea, const Vector &vecEye ) const
+{
+	if ( !pFromArea )
 	{
 		return vec3_invalid;
 	}
 
 	CNEOFindClosestPotentiallyVisibleAreaToPos find( vecPos );
-	myArea->ForAllPotentiallyVisibleAreas( find );
+	pFromArea->ForAllPotentiallyVisibleAreas( find );
 	if ( !find.m_closeArea )
 	{
 		return vec3_invalid;
@@ -1348,13 +1352,13 @@ Vector CNEOBot::FindVisibleThrowPointNear( const Vector &vecPos ) const
 
 	Vector vecPoint;
 	find.m_closeArea->GetClosestPointOnArea( vecPos, &vecPoint );
-	if ( IsThrowLineClear( vecPoint ) )
+	if ( IsThrowLineClear( vecEye, vecPoint ) )
 	{
 		return vecPoint;
 	}
 
 	const Vector &vecCenter = find.m_closeArea->GetCenter();
-	return IsThrowLineClear( vecCenter ) ? vecCenter : vec3_invalid;
+	return IsThrowLineClear( vecEye, vecCenter ) ? vecCenter : vec3_invalid;
 }
 
 
