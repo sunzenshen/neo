@@ -7,6 +7,7 @@
 #include "neo_bot_manager.h"
 #include "neo_bot_path_reservation.h"
 #include "neo_bot_vision.h"
+#include "neo_smokelineofsightblocker.h"
 #include "trigger_area_capture.h"
 #include "GameEventListener.h"
 #include "NextBotUtil.h"
@@ -44,9 +45,6 @@ extern ConVar neo_bot_path_lookahead_range;
 extern ConVar sv_neo_ctg_ghost_beacons_when_inactive;
 extern ConVar neo_bot_path_around_friendly_cooldown;
 extern ConVar sv_neo_smoke_blocker_duration;
-extern ConVar sv_neo_smoke_blocker_delay;
-extern ConVar sv_neo_smoke_blocker_size;
-extern ConVar sv_neo_grenade_fuse_timer;
 
 
 
@@ -687,7 +685,6 @@ void CNEOBot::Spawn()
 	m_visionCheckTimer.Invalidate();
 	m_visionHoldTimer.Invalidate();
 	m_smokeThermalTimer.Invalidate();
-	m_ownSmokeTimer.Invalidate();
 }
 
 int CNEOBot::ChooseRandomWeaponIndex() const
@@ -1362,34 +1359,36 @@ Vector CNEOBot::FindVisibleThrowPointNear( const Vector &vecPos ) const
 }
 
 //-----------------------------------------------------------------------------------------------------
-void CNEOBot::RememberSmokeTarget( const Vector &vecTarget )
+bool CNEOBot::IsCoveredByKnownSmoke( const Vector &vecPos ) const
 {
-	// The cloud blooms after the fuse and conceals until its blockers expire
-	m_vecOwnSmokeTarget = vecTarget;
-	m_ownSmokeTimer.Start( sv_neo_grenade_fuse_timer.GetFloat() + sv_neo_smoke_blocker_delay.GetFloat() + sv_neo_smoke_blocker_duration.GetFloat() );
-}
-
-//-----------------------------------------------------------------------------------------------------
-// Return true if my last smoke should still conceal the given spot, so another smoke there is wasted
-bool CNEOBot::IsCoveredByOwnSmoke( const Vector &vecPos ) const
-{
-	if ( m_ownSmokeTimer.IsElapsed() )
-	{
-		return false;
-	}
-
-	// Well inside the cloud; a point farther out can still extend the screen along a lane
-	const float flCoveredRadius = sv_neo_smoke_blocker_size.GetFloat() * 0.5f;
-	if ( m_vecOwnSmokeTarget.DistToSqr( vecPos ) > Square( flCoveredRadius ) )
-	{
-		return false;
-	}
-
-	// A wall or floor between the two points keeps the old cloud away from the new spot
 	const Vector vecLift( 0.0f, 0.0f, StepHeight );
-	trace_t tr;
-	UTIL_TraceLine( m_vecOwnSmokeTarget + vecLift, vecPos + vecLift, MASK_SOLID_BRUSHONLY, NULL, COLLISION_GROUP_NONE, &tr );
-	return !tr.DidHit();
+	const bool bTeamplay = NEORules()->IsTeamplay();
+
+	CBaseEntity *pEntity = nullptr;
+	while ( ( pEntity = gEntList.FindEntityByClassname( pEntity, SMOKELINEOFSIGHTBLOCKER_ENTITYNAME ) ) )
+	{
+		auto *pSmoke = static_cast< CNEOSmokeLineOfSightBlocker * >( pEntity );
+		if ( !pSmoke->IsActive() || !pSmoke->CollisionProp()->IsPointInBounds( vecPos ) )
+		{
+			continue;
+		}
+
+		// A blocker's bounds can extend through walls and floors.
+		trace_t tr;
+		UTIL_TraceLine( pSmoke->GetAbsOrigin() + vecLift, vecPos + vecLift, MASK_SOLID_BRUSHONLY, nullptr, COLLISION_GROUP_NONE, &tr );
+		if ( tr.DidHit() )
+		{
+			continue;
+		}
+
+		const bool bFriendly = pSmoke->GetThrower() == this || ( bTeamplay && pSmoke->GetTeamNumber() == GetTeamNumber() );
+		if ( bFriendly || m_vision->NoticeSmoke( pSmoke ) )
+		{
+			return true;
+		}
+	}
+
+	return false;
 }
 
 

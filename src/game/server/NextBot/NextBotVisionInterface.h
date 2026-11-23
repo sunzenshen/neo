@@ -11,6 +11,9 @@
 
 class IBody;
 class INextBotEntityFilter;
+#ifdef NEO
+class CNEOSmokeLineOfSightBlocker;
+#endif
 
 
 //----------------------------------------------------------------------------------------------------------------
@@ -87,6 +90,9 @@ public:
 	enum FieldOfViewCheckType { USE_FOV, DISREGARD_FOV };
 	virtual bool IsAbleToSee( CBaseEntity *subject, FieldOfViewCheckType checkFOV, Vector *visibleSpot = NULL ) const;
 	virtual bool IsAbleToSee( const Vector &pos, FieldOfViewCheckType checkFOV ) const;
+#ifdef NEO
+	bool NoticeSmoke( CNEOSmokeLineOfSightBlocker *pSmoke ) const;
+#endif // NEO
 
 	virtual bool IsIgnored( CBaseEntity *subject ) const;		// return true to completely ignore this entity (may not be in sight when this is called)
 	virtual bool IsVisibleEntityNoticed( CBaseEntity *subject ) const;		// return true if we 'notice' the subject, even though we have LOS to it

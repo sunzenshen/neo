@@ -172,6 +172,8 @@ void CNEOGrenadeSmoke::SetupParticles(size_t number)
 			// Overlap with each particle's position
 			blocker->SetAbsOrigin(ptr->GetAbsOrigin());
 			blocker->SetBounds(Vector(-blockerSize), Vector(blockerSize));
+			blocker->ChangeTeam( GetTeamNumber() );
+			blocker->SetThrower( GetOriginalThrower() );
 			// Schedule activation of LOS blocking
 			blocker->SetThink(&CNEOSmokeLineOfSightBlocker::ActivateLOSBlocker);
 			blocker->SetNextThink(gpGlobals->curtime + sv_neo_smoke_blocker_delay.GetFloat());

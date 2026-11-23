@@ -17,6 +17,12 @@ public:
 
 	// Starts LOS interception after scheduled delay when smoke particles are practically occluded
 	void ActivateLOSBlocker();
+	bool IsActive();
+
+	void SetThrower( CBaseEntity *pThrower ) { m_hThrower = pThrower; }
+	CBaseEntity *GetThrower() const { return m_hThrower.Get(); }
+	void NoteSeenBy( CBaseEntity *pObserver );
+	bool HasBeenSeenBy( const CBaseEntity *pObserver ) const;
 
 	void Spawn() override {
 		BaseClass::Spawn();
@@ -44,6 +50,8 @@ public:
 
 private:
 	Vector m_mins, m_maxs;
+	EHANDLE m_hThrower;
+	CUtlVector< EHANDLE > m_seenBy;
 
 	// for smoke LOS transparency toggle
 	static bool m_bNextEntitySeesThroughSmoke;
