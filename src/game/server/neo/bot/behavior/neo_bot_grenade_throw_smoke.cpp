@@ -23,23 +23,24 @@ ActionResult< CNEOBot >	CNEOBotGrenadeThrowSmoke::OnStart( CNEOBot *me, Action< 
 CNEOBotGrenadeThrow::ThrowTargetResult CNEOBotGrenadeThrowSmoke::UpdateGrenadeTargeting( CNEOBot *me, CNEOBaseCombatWeapon *pWeapon )
 {
 	Assert( m_vecThreatLastKnownPos != vec3_invalid );
-	
-	if (m_vecTarget == vec3_invalid)
-	{
-		const Vector vecThrowTarget = me->FindVisibleThrowPointNear( m_vecThreatLastKnownPos );
 
-		if (vecThrowTarget != vec3_invalid)
-		{
-			m_vecTarget = vecThrowTarget;
-		}
-		else
-		{
-			// throw smoke at feet as fallback
-			m_vecTarget = me->GetAbsOrigin();
-		}
+	if ( m_vecTarget != vec3_invalid )
+	{
+		return THROW_TARGET_READY;
 	}
-	
-	Assert( m_vecTarget != vec3_invalid );
+
+	if ( !m_scanTimer.IsElapsed() )
+	{
+		return THROW_TARGET_WAIT;
+	}
+
+	m_vecTarget = me->FindVisibleThrowPointNear( m_vecThreatLastKnownPos );
+	if ( m_vecTarget == vec3_invalid )
+	{
+		m_scanTimer.Start( 0.2f );
+		return THROW_TARGET_WAIT;
+	}
+
 	return THROW_TARGET_READY;
 }
 
