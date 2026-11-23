@@ -37,6 +37,7 @@ constexpr float SUPPRESS_SWEEP_PERIOD = 1.5f;
 constexpr float SUPRESS_HOLD_AIM_TIME = 0.5f;
 
 constexpr float HIT_LOOK_DISTANCE = 512.0f;
+constexpr float HIT_CLOAK_THRESHOLD = 3.0f;
 
 float GetBearingErrorScale( const CNEOBot *me )
 {
@@ -211,6 +212,8 @@ void CNEOBotSuppressiveFire::OnInjured( CNEOBot *me, const CTakeDamageInfo &info
 	{
 		return; // FireWeaponAtEnemy owns threats I can see
 	}
+
+	me->EnableCloak( HIT_CLOAK_THRESHOLD );
 
 	const bool bOpenFireWindow = neo_bot_suppressive_fire.GetBool();
 	if ( bOpenFireWindow )
