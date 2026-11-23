@@ -1,6 +1,7 @@
 #include "cbase.h"
 #include "neo_player.h"
 #include "bot/neo_bot.h"
+#include "bot/behavior/neo_bot_grenade_dispatch.h"
 #include "bot/behavior/neo_bot_grenade_throw.h"
 #include "bot/behavior/neo_bot_retreat_from_grenade.h"
 #include "weapon_neobasecombatweapon.h"
@@ -16,6 +17,8 @@ extern ConVar sv_neo_grenade_gravity;
 extern ConVar sv_neo_grenade_throw_intensity;
 extern ConVar sv_neo_grenade_fuse_timer;
 extern ConVar sv_neo_grenade_cor;
+extern ConVar sv_neo_smoke_blocker_delay;
+extern ConVar sv_neo_smoke_blocker_duration;
 
 namespace
 {
@@ -617,10 +620,15 @@ ActionResult< CNEOBot >	CNEOBotGrenadeThrow::Update( CNEOBot *me, float interval
 		if ( pWep->GetNeoWepBits() & NEO_WEP_FRAG_GRENADE )
 		{
 			static_cast<CWeaponGrenade*>(pWep)->ThrowGrenade( me );
+			me->StartGrenadeThrowCooldown( sv_neo_bot_grenade_throw_cooldown.GetFloat() );
 		}
 		else if ( pWep->GetNeoWepBits() & NEO_WEP_SMOKE_GRENADE )
 		{
 			static_cast<CWeaponSmokeGrenade*>(pWep)->ThrowGrenade( me );
+			const float flTimeUntilSmokeClears = sv_neo_grenade_fuse_timer.GetFloat()
+				+ sv_neo_smoke_blocker_delay.GetFloat()
+				+ sv_neo_smoke_blocker_duration.GetFloat();
+			me->StartGrenadeThrowCooldown( Max( sv_neo_bot_grenade_throw_cooldown.GetFloat(), flTimeUntilSmokeClears ) );
 		}
 		else
 		{
