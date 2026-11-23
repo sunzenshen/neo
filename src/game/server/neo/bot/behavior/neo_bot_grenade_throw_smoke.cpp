@@ -1,4 +1,5 @@
 #include "cbase.h"
+#include "nav.h"
 #include "neo_player.h"
 #include "bot/neo_bot.h"
 #include "bot/behavior/neo_bot_grenade_throw_smoke.h"
@@ -34,6 +35,15 @@ CNEOBotGrenadeThrow::ThrowTargetResult CNEOBotGrenadeThrowSmoke::UpdateGrenadeTa
 		}
 		else
 		{
+			// A wall already hides the bot from the threat, so smoke here would conceal nothing
+			CTraceFilterWorldOnly filter;
+			trace_t tr;
+			UTIL_TraceLine( m_vecThreatLastKnownPos + Vector( 0.0f, 0.0f, HumanEyeHeight ), me->EyePosition(), MASK_BLOCKLOS, &filter, &tr );
+			if ( tr.DidHit() )
+			{
+				return THROW_TARGET_CANCEL;
+			}
+
 			// throw smoke at feet as fallback
 			m_vecTarget = me->GetAbsOrigin();
 		}
