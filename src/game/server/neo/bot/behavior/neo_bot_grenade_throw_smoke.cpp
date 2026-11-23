@@ -34,7 +34,9 @@ CNEOBotGrenadeThrow::ThrowTargetResult CNEOBotGrenadeThrowSmoke::UpdateGrenadeTa
 		return THROW_TARGET_WAIT;
 	}
 
-	m_vecTarget = me->FindVisibleThrowPointNear( m_vecThreatLastKnownPos );
+	const Vector vecVelocity = me->GetAbsVelocity();
+	m_vecTarget = me->FindVisibleThrowPointNear( m_vecThreatLastKnownPos, me->GetLastKnownArea(),
+		me->EyePosition(), &vecVelocity );
 	if ( m_vecTarget == vec3_invalid )
 	{
 		m_scanTimer.Start( 0.2f );

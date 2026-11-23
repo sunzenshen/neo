@@ -10,6 +10,8 @@
 class CNEOBaseCombatWeapon;
 class CKnownEntity;
 
+bool IsGrenadeThrowOutOfRange( const Vector &vecEye, const Vector &vecVel, const Vector &vecTarget, QAngle &angOut );
+
 class CNEOBotGrenadeThrow : public Action< CNEOBot >
 {
 public:
