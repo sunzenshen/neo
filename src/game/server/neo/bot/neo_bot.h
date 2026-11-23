@@ -250,6 +250,7 @@ public:
 	Vector FindVisibleThrowPointNear( const Vector &vecPos ) const;
 	bool IsThrowLineClear(const Vector& where) const;
 	bool IsThrowLineClear(const Vector& from, const Vector& to) const;
+	void RememberSmokeTarget( const Vector &vecTarget );
 	bool IsCoveredByFriendlySmoke( const Vector &vecPos ) const;
 
 	bool IsEntityBetweenTargetAndSelf(CBaseEntity* other, CBaseEntity* target);	// return true if "other" is positioned inbetween us and "target"
@@ -486,6 +487,9 @@ private:
 	CountdownTimer m_visionCheckTimer;
 	CountdownTimer m_visionHoldTimer;
 	CountdownTimer m_smokeThermalTimer;
+
+	Vector m_vecSmokeInFlight;
+	CountdownTimer m_smokeInFlightTimer; // runs until my last released smoke starts to conceal
 
 	CNEOBotSuppressiveFire m_suppressiveFire;
 

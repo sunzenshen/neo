@@ -81,3 +81,8 @@ CNEOBotGrenadeThrow::ThrowTargetResult CNEOBotGrenadeThrowSmoke::UpdateGrenadeTa
 	}
 	return THROW_TARGET_READY;
 }
+
+void CNEOBotGrenadeThrowSmoke::OnThrowReleased( CNEOBot *me )
+{
+	me->RememberSmokeTarget( m_vecTarget );
+}
