@@ -16,6 +16,8 @@ public:
 	void OnInjured( CNEOBot *me, const CTakeDamageInfo &info );
 	void OnHeardGunfire( CNEOBot *me, CBaseEntity *shooter );
 	bool Update( CNEOBot *me, const CKnownEntity *threat );
+	bool GetBelievedPos( const CBaseEntity *target, Vector &pos ) const;
+	bool IsSuppressing( const CBaseEntity *target ) const;
 
 private:
 	static Vector RotateBearing( const Vector &from, const Vector &to, float degrees, float rangeScale = 1.0f );
@@ -31,6 +33,7 @@ private:
 	Vector m_vecBelievedPos;
 	CountdownTimer m_fireWindowTimer;
 	CountdownTimer m_holdAimTimer;
+	IntervalTimer m_aimTakenTimer;
 	float m_sweepPhase;
 	float m_bearingErrorDeg;
 	float m_rangeScale;

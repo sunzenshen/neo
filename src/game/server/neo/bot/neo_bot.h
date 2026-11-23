@@ -478,6 +478,7 @@ public:
 	bool m_bRespawnCopyCorpse = false;
 
 	CNEOBotSuppressiveFire *GetSuppressiveFire( void ) { return &m_suppressiveFire; }
+	const CNEOBotSuppressiveFire *GetSuppressiveFire( void ) const { return &m_suppressiveFire; }
 
 private:
 	void ToggleCloak(void);

@@ -10,6 +10,8 @@
 #include "bot/neo_bot_path_reservation.h"
 
 #include "bot/behavior/neo_bot_detpack_trigger.h"
+#include "bot/behavior/neo_bot_grenade_dispatch.h"
+#include "bot/behavior/neo_bot_grenade_throw_frag.h"
 #include "bot/behavior/neo_bot_tactical_monitor.h"
 #include "bot/behavior/neo_bot_scenario_monitor.h"
 
@@ -450,6 +452,32 @@ void CNEOBotTacticalMonitor::RepathAroundNewDetpackMark( CNEOBot *me )
 
 
 //-----------------------------------------------------------------------------------------
+Action< CNEOBot > *CNEOBotTacticalMonitor::ChooseSmokeFrag( CNEOBot *me )
+{
+	if ( !m_smokeFragTimer.IsElapsed() )
+	{
+		return nullptr;
+	}
+
+	const CKnownEntity *threat = me->GetVisionInterface()->GetPrimaryKnownThreat();
+	if ( !threat || !me->GetSuppressiveFire()->IsSuppressing( threat->GetEntity() ) )
+	{
+		return nullptr;
+	}
+
+	Vector vecSmokeTarget;
+	if ( !CNEOBotGrenadeDispatch::GetSmokeHiddenThreatPos( me, threat, vecSmokeTarget )
+		|| me->IsRangeLessThan( vecSmokeTarget, CNEOBotGrenadeThrowFrag::GetFragSafetyRadius() ) )
+	{
+		return nullptr;
+	}
+
+	m_smokeFragTimer.Start( sv_neo_bot_grenade_throw_cooldown.GetFloat() );
+	return CNEOBotGrenadeDispatch::ChooseGrenadeThrowBehavior( me, threat );
+}
+
+
+//-----------------------------------------------------------------------------------------
 ActionResult< CNEOBot >	CNEOBotTacticalMonitor::Update( CNEOBot *me, float interval )
 {
 	if ( neo_bot_force_jump.GetBool() )
@@ -507,6 +535,11 @@ ActionResult< CNEOBot >	CNEOBotTacticalMonitor::Update( CNEOBot *me, float inter
 					}
 				}
 			}
+		}
+
+		if ( Action< CNEOBot > *pSmokeFrag = ChooseSmokeFrag( me ) )
+		{
+			return SuspendFor( pSmokeFrag, "Fragging a threat hidden in smoke" );
 		}
 
 		// Don't want to interfere with human squad leader's control just to ignore hazards

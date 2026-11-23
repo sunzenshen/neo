@@ -10,6 +10,7 @@ class CNEOBotGrenadeThrowFrag : public CNEOBotGrenadeThrow
 {
 public:
 	CNEOBotGrenadeThrowFrag( CNEOBaseCombatWeapon *pWeapon, const CKnownEntity *threat );
+	CNEOBotGrenadeThrowFrag( CNEOBaseCombatWeapon *pWeapon, const CKnownEntity *threat, const Vector &vecSmokeTarget );
 	virtual ~CNEOBotGrenadeThrowFrag() override { }
 
 	virtual const char *GetName( void ) const override final { return "GrenadeThrowFrag"; }
@@ -23,6 +24,12 @@ public:
 protected:
 	virtual ThrowTargetResult UpdateGrenadeTargeting( CNEOBot *me, CNEOBaseCombatWeapon *pWeapon ) override;
 	virtual void OnThrowReleased( CNEOBot *me ) override;
+	virtual Action< CNEOBot > *CreateRetreatAfterThrow( CNEOBot *me ) override;
+
+private:
+	bool IsImmediateThreat( CNEOBot *me, const CKnownEntity *threat ) const;
+
+	bool m_bSmokeTarget = false;
 };
 
 #endif // NEO_BOT_GRENADE_THROW_FRAG_H

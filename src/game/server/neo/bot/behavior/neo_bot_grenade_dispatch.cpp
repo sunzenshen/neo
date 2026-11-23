@@ -5,6 +5,8 @@
 #include "bot/behavior/neo_bot_grenade_dispatch.h"
 #include "bot/behavior/neo_bot_grenade_throw_frag.h"
 #include "bot/behavior/neo_bot_grenade_throw_smoke.h"
+#include "neo/neo_smokelineofsightblocker.h"
+#include "nav_mesh.h"
 #include "weapon_neobasecombatweapon.h"
 #include "weapon_grenade.h"
 #include "weapon_smokegrenade.h"
@@ -16,6 +18,61 @@ ConVar sv_neo_bot_grenade_use_smoke("sv_neo_bot_grenade_use_smoke", "1", FCVAR_N
 ConVar sv_neo_bot_grenade_throw_cooldown("sv_neo_bot_grenade_throw_cooldown", "10", FCVAR_NONE, "Cooldown in seconds between grenade throws for bots");
 
 extern ConVar neo_bot_fire_weapon_allowed;
+
+namespace
+{
+// Trace to the torso, so a low ledge in front of the feet does not count as cover
+constexpr float SMOKE_FRAG_TORSO_HEIGHT = 36.0f;
+}
+
+//---------------------------------------------------------------------------------------------
+bool CNEOBotGrenadeDispatch::GetSmokeHiddenThreatPos( const CNEOBot *me, const CKnownEntity *threat, Vector &pos )
+{
+	// Support thermal vision sees through smoke.
+	if ( me->GetClass() == NEO_CLASS_SUPPORT )
+	{
+		return false;
+	}
+
+	if ( !threat || !threat->GetEntity() || threat->IsVisibleInFOVNow() )
+	{
+		return false;
+	}
+
+	// Throw planning needs a nav area, which the rough position from suppression may lack.
+	Vector vecBelieved = threat->GetLastKnownPosition();
+	Vector vecHeard;
+	if ( me->GetSuppressiveFire()->GetBelievedPos( threat->GetEntity(), vecHeard ) && TheNavMesh->GetNavArea( vecHeard ) )
+	{
+		vecBelieved = vecHeard;
+	}
+
+	const Vector vecEyes = me->GetBodyInterface()->GetEyePosition();
+	const Vector vecTorso = vecBelieved + Vector( 0, 0, SMOKE_FRAG_TORSO_HEIGHT );
+
+	NextBotTraceFilterIgnoreActors filter( nullptr, COLLISION_GROUP_NONE );
+	trace_t trWorld;
+	UTIL_TraceLine( vecEyes, vecTorso, MASK_SOLID, &filter, &trWorld );
+	if ( trWorld.DidHit() )
+	{
+		return false;
+	}
+
+	trace_t trSmoke;
+	{
+		ScopedSmokeLOS smokeGuard( false );
+		// The trace filter needs CONTENTS_MONSTER to hit the smoke blocker's bounding box.
+		UTIL_TraceLine( vecEyes, vecTorso, MASK_BLOCKLOS_AND_NPCS, &filter, &trSmoke );
+	}
+
+	if ( !trSmoke.DidHit() || !trSmoke.m_pEnt || !FStrEq( trSmoke.m_pEnt->GetClassname(), SMOKELINEOFSIGHTBLOCKER_ENTITYNAME ) )
+	{
+		return false;
+	}
+
+	pos = vecBelieved;
+	return true;
+}
 
 //---------------------------------------------------------------------------------------------
 Action< CNEOBot > *CNEOBotGrenadeDispatch::ChooseGrenadeThrowBehavior( const CNEOBot *me, const CKnownEntity *threat )
@@ -35,8 +92,11 @@ Action< CNEOBot > *CNEOBotGrenadeDispatch::ChooseGrenadeThrowBehavior( const CNE
 		return nullptr;
 	}
 
-	// Prefer shooting if we have a clear line of fire
-	if ( me->IsLineOfFireClear( threat->GetEntity(), CNEOBot::LINE_OF_FIRE_FLAGS_DEFAULT ) )
+	Vector vecSmokeTarget;
+	const bool bBehindSmoke = GetSmokeHiddenThreatPos( me, threat, vecSmokeTarget );
+
+	// A clear line of fire through smoke does not give us a visible target.
+	if ( !bBehindSmoke && me->IsLineOfFireClear( threat->GetEntity(), CNEOBot::LINE_OF_FIRE_FLAGS_DEFAULT ) )
 	{
 		return nullptr;
 	}
@@ -123,12 +183,18 @@ Action< CNEOBot > *CNEOBotGrenadeDispatch::ChooseGrenadeThrowBehavior( const CNE
 	// Should I toss a frag grenade? 
 	if ( pFragGrenade )
 	{
+		const Vector vecFragTarget = bBehindSmoke ? vecSmokeTarget : threat->GetLastKnownPosition();
 		const bool bFragSafe = sv_neo_bot_grenade_polite_frag.GetBool()
-			? CNEOBotGrenadeThrowFrag::IsFragSafe( me, threat->GetLastKnownPosition() )
-			: CNEOBotGrenadeThrowFrag::IsFragPolite( me, threat->GetLastKnownPosition() );
+			? CNEOBotGrenadeThrowFrag::IsFragSafe( me, vecFragTarget )
+			: CNEOBotGrenadeThrowFrag::IsFragPolite( me, vecFragTarget );
 		if ( !bFragSafe )
 		{
 			return nullptr;
+		}
+
+		if ( bBehindSmoke )
+		{
+			return new CNEOBotGrenadeThrowFrag( pFragGrenade, threat, vecSmokeTarget );
 		}
 
 		return new CNEOBotGrenadeThrowFrag( pFragGrenade, threat );
