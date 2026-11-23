@@ -66,6 +66,11 @@ CNEOBotGrenadeThrow::ThrowTargetResult CNEOBotGrenadeThrowSmoke::UpdateGrenadeTa
 			// throw smoke at feet as fallback
 			m_vecTarget = me->GetAbsOrigin();
 		}
+
+		if ( me->IsCoveredByOwnSmoke( m_vecTarget ) )
+		{
+			return THROW_TARGET_CANCEL;
+		}
 	}
 	
 	Assert( m_vecTarget != vec3_invalid );
@@ -77,3 +82,7 @@ CNEOBotGrenadeThrow::ThrowTargetResult CNEOBotGrenadeThrowSmoke::UpdateGrenadeTa
 	return THROW_TARGET_READY;
 }
 
+void CNEOBotGrenadeThrowSmoke::OnThrowReleased( CNEOBot *me )
+{
+	me->RememberSmokeTarget( m_vecTarget );
+}
