@@ -52,28 +52,28 @@ ActionResult< CNEOBot >	CNEOBotGrenadeThrowSmoke::OnStart( CNEOBot *me, Action< 
 CNEOBotGrenadeThrow::ThrowTargetResult CNEOBotGrenadeThrowSmoke::UpdateGrenadeTargeting( CNEOBot *me, CNEOBaseCombatWeapon *pWeapon )
 {
 	Assert( m_vecThreatLastKnownPos != vec3_invalid );
-	
-	if (m_vecTarget == vec3_invalid)
-	{
-		const Vector vecThrowTarget = me->FindVisibleThrowPointNear( m_vecThreatLastKnownPos );
 
-		if (vecThrowTarget != vec3_invalid)
+	if ( m_vecTarget == vec3_invalid )
+	{
+		if ( !m_scanTimer.IsElapsed() )
 		{
-			m_vecTarget = vecThrowTarget;
+			return THROW_TARGET_WAIT;
 		}
-		else
+
+		m_vecTarget = me->FindVisibleThrowPointNear( m_vecThreatLastKnownPos );
+		if ( m_vecTarget == vec3_invalid )
 		{
-			// throw smoke at feet as fallback
-			m_vecTarget = me->GetAbsOrigin();
+			m_scanTimer.Start( 0.2f );
+			return THROW_TARGET_WAIT;
 		}
 	}
-	
-	Assert( m_vecTarget != vec3_invalid );
+
 	// A cloud observed while aiming can already cover the target.
 	if ( IsPointInObservedSmoke( me, m_vecTarget ) )
 	{
 		return THROW_TARGET_CANCEL;
 	}
+
 	return THROW_TARGET_READY;
 }
 
