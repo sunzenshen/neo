@@ -146,6 +146,13 @@ float GetThrowTolerance( const CNEOBot *me )
 }
 } // namespace
 
+bool IsGrenadeThrowOutOfRange( const Vector &vecEye, const Vector &vecVel, const Vector &vecTarget, QAngle &angOut )
+{
+	// Ignore throws whose best arc misses by more than half the blast radius.
+	const float flUnreachableMiss = 0.5f * sv_neo_grenade_blast_radius.GetFloat();
+	return SolveThrowAngles( vecEye, vecVel, vecTarget, angOut ) > flUnreachableMiss;
+}
+
 ConVar sv_neo_bot_grenade_debug_behavior("sv_neo_bot_grenade_debug_behavior", "0", FCVAR_CHEAT,
 	"Draw debug overlays for bot grenade behavior", true, 0, true, 1);
 
@@ -216,9 +223,10 @@ public:
 	{
 		CNavArea* area = (CNavArea*)baseArea;
 
-		// Smoke only needs a clear line to ground near the threat's last known position.
+		// Test smoke reach with the bot stopped at the vantage area's center.
 		const bool bCanThrow = m_bSmoke
-			? m_me->FindVisibleThrowPointNear( m_targetPos, area, area->GetCenter() + m_me->GetViewOffset() ) != vec3_invalid
+			? m_me->FindVisibleThrowPointNear( m_targetPos, area,
+				area->GetCenter() + m_me->GetViewOffset(), &vec3_origin ) != vec3_invalid
 			: area->IsCompletelyVisible( m_targetArea );
 		if ( bCanThrow )
 		{
@@ -302,9 +310,7 @@ CNEOBotGrenadeThrow::ThrowAimResult CNEOBotGrenadeThrow::UpdateThrowAim( CNEOBot
 	// Re-solve only once the solution drifts: AimHeadTowards ignores a new point mid-turn
 	if ( m_vecThrowLookAt == vec3_invalid || PredictMiss( vecEye, m_angThrowSolved, vecVel, m_vecTarget ) > 0.5f * flTolerance )
 	{
-		// Not worth throwing if even the best arc misses by more than half the blast radius
-		const float flUnreachableMiss = 0.5f * sv_neo_grenade_blast_radius.GetFloat();
-		if ( SolveThrowAngles( vecEye, vecVel, m_vecTarget, m_angThrowSolved ) > flUnreachableMiss )
+		if ( IsGrenadeThrowOutOfRange( vecEye, vecVel, m_vecTarget, m_angThrowSolved ) )
 		{
 			m_vecThrowLookAt = vec3_invalid;
 			return THROW_AIM_UNREACHABLE;
