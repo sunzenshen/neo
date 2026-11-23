@@ -105,7 +105,7 @@ CNEOBotGrenadeThrow::ThrowTargetResult CNEOBotGrenadeThrowSmoke::UpdateGrenadeTa
 		return IsPointInObservedSmoke( me, m_vecTarget ) ? THROW_TARGET_CANCEL : THROW_TARGET_READY;
 	}
 
-	const float flCloudExtent = static_cast< float >( sv_neo_smoke_blocker_size.GetInt() );
+	const float flCloudExtent = sv_neo_smoke_blocker_size.GetFloat();
 	if ( flCloudExtent <= 0.0f )
 	{
 		return THROW_TARGET_CANCEL;
