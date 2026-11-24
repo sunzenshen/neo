@@ -27,9 +27,20 @@ CNEOBotGrenadeThrow::ThrowTargetResult CNEOBotGrenadeThrowSmoke::UpdateGrenadeTa
 		return THROW_TARGET_READY;
 	}
 
+	if ( !m_scanTimer.IsElapsed() )
+	{
+		return THROW_TARGET_WAIT;
+	}
+
 	const Vector vecVelocity = me->GetAbsVelocity();
 	m_vecTarget = me->FindVisibleThrowPointNear( m_vecThreatLastKnownPos, me->GetLastKnownArea(),
 		me->EyePosition(), &vecVelocity );
-	return m_vecTarget == vec3_invalid ? THROW_TARGET_CANCEL : THROW_TARGET_READY;
+	if ( m_vecTarget == vec3_invalid )
+	{
+		m_scanTimer.Start( 0.2f );
+		return THROW_TARGET_WAIT;
+	}
+
+	return THROW_TARGET_READY;
 }
 

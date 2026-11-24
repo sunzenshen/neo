@@ -398,7 +398,15 @@ ActionResult< CNEOBot >	CNEOBotGrenadeThrow::OnStart( CNEOBot *me, Action< CNEOB
 	}
 
 	const bool bSmoke = ( pWep->GetNeoWepBits() & NEO_WEP_SMOKE_GRENADE ) != 0;
-	if ( !bSmoke || UpdateGrenadeTargeting( me, pWep ) != THROW_TARGET_READY )
+	const bool bHasSmokeTarget = bSmoke && UpdateGrenadeTargeting( me, pWep ) == THROW_TARGET_READY;
+	if ( bSmoke )
+	{
+		// Pick the actual target with throw-time velocity.
+		m_vecTarget = vec3_invalid;
+		m_scanTimer.Invalidate();
+	}
+
+	if ( !bHasSmokeTarget )
 	{
 		const bool bCanReposition = !bSmoke || ( me->GetIntentionInterface()->ShouldHurry( me ) != ANSWER_YES &&
 			IsSmokeEyeScreened( me->EyePosition(), m_vecThreatLastKnownPos ) );
@@ -564,7 +572,9 @@ ActionResult< CNEOBot >	CNEOBotGrenadeThrow::Update( CNEOBot *me, float interval
 			}
 			else if ( bSmoke )
 			{
-				return Done( "Smoke throw line blocked" );
+				m_vecTarget = vec3_invalid;
+				m_vecThrowLookAt = vec3_invalid;
+				return Continue();
 			}
 			else
 			{
@@ -586,7 +596,13 @@ ActionResult< CNEOBot >	CNEOBotGrenadeThrow::Update( CNEOBot *me, float interval
 	}
 	else if ( result == THROW_TARGET_WAIT )
 	{
+		if ( bSmoke && !m_vantageArea )
+		{
+			return Continue();
+		}
+
 		m_PathFollower.Update( me );
+		// OnMoveToSuccess clears the smoke vantage area on arrival.
 		if ( bSmoke && !m_vantageArea && UpdateGrenadeTargeting( me, pWep ) != THROW_TARGET_READY )
 		{
 			return Done( "No smoke target from vantage point" );
