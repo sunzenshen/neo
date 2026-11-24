@@ -32,6 +32,15 @@ constexpr float kSteepestThrowPitch = -39.0f; // about a 45 degree lob, the bise
 constexpr float kShortestThrowPitch = 89.0f; // looking straight down drops it at the feet
 constexpr int kSolveBisections = 8;
 constexpr float kThrowLookAtDist = 4096.0f; // AimHeadTowards takes a point; this far, walking barely turns the view off it
+constexpr float kSmokeVantageTravel = 128.0f;
+
+bool IsSmokeEyeScreened( const Vector &vecEye, const Vector &vecThreatPos )
+{
+	trace_t trace;
+	CTraceFilterWorldOnly filter;
+	UTIL_TraceLine( vecThreatPos + Vector( 0, 0, HumanEyeHeight ), vecEye, CONTENTS_SOLID, &filter, &trace );
+	return !trace.startsolid && trace.DidHit();
+}
 
 // How far a throw at this eye pitch carries along its aim before the fuse ends, over flat floor
 // flDrop below the eye. flCarryTime is in seconds at launch speed; own velocity adds vel * it.
@@ -199,12 +208,12 @@ public:
 		m_bSmoke = bSmoke;
 		m_targetArea = TheNavMesh->GetNavArea( m_targetPos );
 
-		if ( pThreat )
+		if ( !bSmoke && pThreat )
 		{
 			m_threatArea = TheNavMesh->GetNavArea( pThreat->GetAbsOrigin() );
 		}
 
-		if ( !m_threatArea )
+		if ( !bSmoke && !m_threatArea )
 		{
 			const CKnownEntity *primaryThreat = me->GetVisionInterface()->GetPrimaryKnownThreat();
 			if ( primaryThreat )
@@ -216,17 +225,19 @@ public:
 		float flRadius = sv_neo_grenade_blast_radius.GetFloat() * sv_neo_bot_grenade_frag_safety_range_multiplier.GetFloat();
 		m_flSafetyRadiusSq = flRadius * flRadius;
 
-		m_flSearchRange = sv_neo_bot_grenade_search_range.GetFloat();
+		m_flSearchRange = bSmoke ? kSmokeVantageTravel : sv_neo_bot_grenade_search_range.GetFloat();
 	}
 
 	virtual bool operator() ( CNavArea* baseArea, CNavArea* priorArea, float travelDistanceSoFar )
 	{
 		CNavArea* area = (CNavArea*)baseArea;
 
+		const Vector vecEye = m_bSmoke ? area->GetCenter() + m_me->GetViewOffset() : vec3_origin;
 		// Test smoke reach with the bot stopped at the vantage area's center.
 		const bool bCanThrow = m_bSmoke
-			? m_me->FindVisibleThrowPointNear( m_targetPos, area,
-				area->GetCenter() + m_me->GetViewOffset(), &vec3_origin ) != vec3_invalid
+			? area->GetCenter().DistToSqr( m_me->GetAbsOrigin() ) <= kSmokeVantageTravel * kSmokeVantageTravel &&
+				IsSmokeEyeScreened( vecEye, m_targetPos ) &&
+				m_me->FindVisibleThrowPointNear( m_targetPos, area, vecEye, &vec3_origin ) != vec3_invalid
 			: area->IsCompletelyVisible( m_targetArea );
 		if ( bCanThrow )
 		{
@@ -386,14 +397,22 @@ ActionResult< CNEOBot >	CNEOBotGrenadeThrow::OnStart( CNEOBot *me, Action< CNEOB
 		return Done( "Targeted threat position invalid" );
 	}
 
-	// Smoke only needs a vantage point if the initial throw-point scan fails.
-	if ( !( pWep->GetNeoWepBits() & NEO_WEP_SMOKE_GRENADE ) )
+	const bool bSmoke = ( pWep->GetNeoWepBits() & NEO_WEP_SMOKE_GRENADE ) != 0;
+	if ( !bSmoke || UpdateGrenadeTargeting( me, pWep ) != THROW_TARGET_READY )
 	{
-		m_vantageArea = FindVantageArea( me );
-		if ( !m_vantageArea )
+		const bool bCanReposition = !bSmoke || ( me->GetIntentionInterface()->ShouldHurry( me ) != ANSWER_YES &&
+			IsSmokeEyeScreened( me->EyePosition(), m_vecThreatLastKnownPos ) );
+		m_vantageArea = bCanReposition ? FindVantageArea( me ) : nullptr;
+		const bool bSmokePathFailed = bSmoke && m_vantageArea &&
+			( !CNEOBotPathCompute( me, m_PathFollower, m_vantageArea->GetCenter(), FASTEST_ROUTE, kSmokeVantageTravel, false, true ) ||
+				m_PathFollower.GetLength() > kSmokeVantageTravel );
+		if ( !m_vantageArea || bSmokePathFailed )
 		{
 			return Done( "No viable vantage point for grenade throw" );
 		}
+
+		m_vecSmokeWalkPos = me->GetAbsOrigin();
+		m_flSmokeWalkLastDamage = me->GetLastDamageTime();
 	}
 
 	// We have decided to commit to the throw by this point
@@ -403,7 +422,10 @@ ActionResult< CNEOBot >	CNEOBotGrenadeThrow::OnStart( CNEOBot *me, Action< CNEOB
 	m_bPinPulled = false;
 
 	m_PathFollower.SetMinLookAheadDistance( me->GetDesiredPathLookAheadRange() );
-	CNEOBotPathCompute( me, m_PathFollower, m_vantageArea ? m_vantageArea->GetCenter() : m_vecThreatLastKnownPos, FASTEST_ROUTE );
+	if ( !bSmoke )
+	{
+		CNEOBotPathCompute( me, m_PathFollower, m_vantageArea->GetCenter(), FASTEST_ROUTE );
+	}
 
 	return Continue();
 }
@@ -450,11 +472,26 @@ ActionResult< CNEOBot >	CNEOBotGrenadeThrow::Update( CNEOBot *me, float interval
 		return Done( "Actively getting hurt, too dangerous to throw grenade" );
 	}
 
+	const bool bSmoke = ( pWep->GetNeoWepBits() & NEO_WEP_SMOKE_GRENADE ) != 0;
+	if ( bSmoke && m_vantageArea )
+	{
+		const Vector &vecPos = me->GetAbsOrigin();
+		m_flSmokeWalkDistance += vecPos.DistTo( m_vecSmokeWalkPos );
+		m_vecSmokeWalkPos = vecPos;
+		if ( !m_PathFollower.IsValid() || m_flSmokeWalkDistance > kSmokeVantageTravel ||
+			me->GetLastDamageTime() != m_flSmokeWalkLastDamage ||
+			me->GetIntentionInterface()->ShouldHurry( me ) == ANSWER_YES ||
+			!IsSmokeEyeScreened( me->EyePosition(), m_vecThreatLastKnownPos ) )
+		{
+			return Done( "Smoke vantage walk interrupted" );
+		}
+	}
+
 	if ( sv_neo_bot_grenade_debug_behavior.GetBool() && m_hThreatGrenadeTarget.Get() )
 	{
 		// DEBUG Colors: Red = Frag, Gray = Smoke, Purple = Unknown
 		const Vector& vecStart = me->WorldSpaceCenter();
-		const Vector& vecVictim = m_hThreatGrenadeTarget->GetAbsOrigin();
+		const Vector& vecVictim = bSmoke ? m_vecThreatLastKnownPos : m_hThreatGrenadeTarget->GetAbsOrigin();
 		int r = 255, g = 0, b = 255; // Default purple just in case
 		if ( pWep->GetNeoWepBits() & NEO_WEP_FRAG_GRENADE )
 		{
@@ -496,7 +533,7 @@ ActionResult< CNEOBot >	CNEOBotGrenadeThrow::Update( CNEOBot *me, float interval
 		m_bPinPulled = true;
 	}
 
-	ThrowTargetResult result = UpdateGrenadeTargeting( me, pWep );
+	const ThrowTargetResult result = bSmoke && m_vantageArea ? THROW_TARGET_WAIT : UpdateGrenadeTargeting( me, pWep );
 
 	// Subclasses may decide in the last second that a throw is too dangerous
 	if ( result == THROW_TARGET_CANCEL )
@@ -521,9 +558,13 @@ ActionResult< CNEOBot >	CNEOBotGrenadeThrow::Update( CNEOBot *me, float interval
 
 		if ( aim == THROW_AIM_READY )
 		{
-			if ( me->IsLineOfFireClear( m_vecTarget, CNEOBot::LINE_OF_FIRE_FLAGS_SHOTGUN ) )
+			if ( bSmoke ? me->IsThrowLineClear( m_vecTarget ) : me->IsLineOfFireClear( m_vecTarget, CNEOBot::LINE_OF_FIRE_FLAGS_SHOTGUN ) )
 			{
 				bAimOnTarget = true;
+			}
+			else if ( bSmoke )
+			{
+				return Done( "Smoke throw line blocked" );
 			}
 			else
 			{
@@ -546,6 +587,10 @@ ActionResult< CNEOBot >	CNEOBotGrenadeThrow::Update( CNEOBot *me, float interval
 	else if ( result == THROW_TARGET_WAIT )
 	{
 		m_PathFollower.Update( me );
+		if ( bSmoke && !m_vantageArea && UpdateGrenadeTargeting( me, pWep ) != THROW_TARGET_READY )
+		{
+			return Done( "No smoke target from vantage point" );
+		}
 
 		// Watch for threats emerging from known position
 		if ( m_vecThreatLastKnownPos != vec3_invalid )
@@ -554,20 +599,15 @@ ActionResult< CNEOBot >	CNEOBotGrenadeThrow::Update( CNEOBot *me, float interval
 				m_vecThreatLastKnownPos, IBody::IMPORTANT, 0.1f, nullptr,
 				"Looking towards last known threat position while moving to vantage point");
 		}
+	}
 
-		const bool bSmoke = ( pWep->GetNeoWepBits() & NEO_WEP_SMOKE_GRENADE ) != 0;
-		// A smoke throw line was checked from the area's center, so keep walking past the edge.
-		if ( m_vantageArea && me->GetLastKnownArea() == m_vantageArea &&
-			( !bSmoke || !m_PathFollower.IsValid() ) )
+	if ( !bSmoke && result == THROW_TARGET_WAIT )
+	{
+		if ( m_vantageArea && me->GetLastKnownArea() == m_vantageArea )
 		{
 			// Arrived at vantage point but still blocked - fallback to chase
 			m_bVantagePointBlocked = true;
 			m_vantageArea = nullptr;
-			if ( bSmoke && m_repathTimer.GetRemainingTime() < m_scanTimer.GetRemainingTime() )
-			{
-				// Give the smoke scan a chance from the end of the path before moving on.
-				m_repathTimer.Start( m_scanTimer.GetRemainingTime() );
-			}
 		}
 
 		if ( m_repathTimer.IsElapsed() )

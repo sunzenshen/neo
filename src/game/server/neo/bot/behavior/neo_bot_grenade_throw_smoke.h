@@ -14,7 +14,7 @@ public:
 
 	virtual const char *GetName( void ) const override final { return "GrenadeThrowSmoke"; }
 
-	virtual ActionResult< CNEOBot >	OnStart( CNEOBot *me, Action< CNEOBot > *priorAction ) override;
+	virtual EventDesiredResult< CNEOBot >	OnMoveToSuccess( CNEOBot *me, const Path *path ) override;
 
 protected:
 	virtual ThrowTargetResult UpdateGrenadeTargeting( CNEOBot *me, CNEOBaseCombatWeapon *pWeapon ) override;

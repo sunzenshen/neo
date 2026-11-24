@@ -67,6 +67,10 @@ protected:
 	virtual ThrowTargetResult UpdateGrenadeTargeting( CNEOBot *me, CNEOBaseCombatWeapon *pWeapon ) = 0;
 	virtual void OnThrowReleased( CNEOBot *me ) { }
 
+private:
+	Vector m_vecSmokeWalkPos;
+	float m_flSmokeWalkDistance = 0.0f;
+	float m_flSmokeWalkLastDamage = 0.0f;
 };
 
 #endif // NEO_BOT_GRENADE_THROW_H

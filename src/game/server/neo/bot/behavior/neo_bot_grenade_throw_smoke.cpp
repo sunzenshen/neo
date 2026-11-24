@@ -9,15 +9,13 @@ CNEOBotGrenadeThrowSmoke::CNEOBotGrenadeThrowSmoke( CNEOBaseCombatWeapon *pWeapo
 {
 }
 
-ActionResult< CNEOBot >	CNEOBotGrenadeThrowSmoke::OnStart( CNEOBot *me, Action< CNEOBot > *priorAction )
+EventDesiredResult< CNEOBot > CNEOBotGrenadeThrowSmoke::OnMoveToSuccess( CNEOBot *me, const Path *path )
 {
-	ActionResult< CNEOBot > result = CNEOBotGrenadeThrow::OnStart( me, priorAction );
-	if ( result.IsDone() )
+	if ( path == &m_PathFollower )
 	{
-		return result;
+		m_vantageArea = nullptr;
 	}
-
-	return Continue();
+	return TryContinue();
 }
 
 CNEOBotGrenadeThrow::ThrowTargetResult CNEOBotGrenadeThrowSmoke::UpdateGrenadeTargeting( CNEOBot *me, CNEOBaseCombatWeapon *pWeapon )
@@ -29,20 +27,9 @@ CNEOBotGrenadeThrow::ThrowTargetResult CNEOBotGrenadeThrowSmoke::UpdateGrenadeTa
 		return THROW_TARGET_READY;
 	}
 
-	if ( !m_scanTimer.IsElapsed() )
-	{
-		return THROW_TARGET_WAIT;
-	}
-
 	const Vector vecVelocity = me->GetAbsVelocity();
 	m_vecTarget = me->FindVisibleThrowPointNear( m_vecThreatLastKnownPos, me->GetLastKnownArea(),
 		me->EyePosition(), &vecVelocity );
-	if ( m_vecTarget == vec3_invalid )
-	{
-		m_scanTimer.Start( 0.2f );
-		return THROW_TARGET_WAIT;
-	}
-
-	return THROW_TARGET_READY;
+	return m_vecTarget == vec3_invalid ? THROW_TARGET_CANCEL : THROW_TARGET_READY;
 }
 
