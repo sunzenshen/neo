@@ -5,7 +5,7 @@
 class CNEOBotHoldInSmoke : public Action< CNEOBot >
 {
 public:
-	explicit CNEOBotHoldInSmoke( const Vector &vecThreatPos ) : m_vecThreatPos( vecThreatPos )
+	CNEOBotHoldInSmoke( const Vector &vecThreatPos, const Vector &vecAimPoint ) : m_vecThreatPos( vecThreatPos ), m_vecAimPoint( vecAimPoint )
 	{
 	}
 
@@ -18,6 +18,7 @@ public:
 
 private:
 	const Vector m_vecThreatPos;
+	const Vector m_vecAimPoint;
 	EHANDLE m_hSmoke;
 	PathFollower m_path;
 	CountdownTimer m_timeout;

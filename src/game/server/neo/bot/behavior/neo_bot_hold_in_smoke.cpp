@@ -94,6 +94,12 @@ bool ComputeSmokePath( CNEOBot *me, PathFollower &path, CBaseEntity *pSmoke )
 
 ActionResult< CNEOBot > CNEOBotHoldInSmoke::OnStart( CNEOBot *me, Action< CNEOBot > *priorAction )
 {
+	// The aim point estimates where the smoke will bloom.
+	if ( me->GetAbsOrigin().DistToSqr( m_vecAimPoint ) > Square( kSmokeNoticeRange ) && !FindNearbySmoke( me ) )
+	{
+		return Done( "Smoke target is too far away" );
+	}
+
 	m_timeout.Start( sv_neo_grenade_fuse_timer.GetFloat() + sv_neo_smoke_blocker_delay.GetFloat() + kSmokeSettleAllowance );
 	m_path.SetMinLookAheadDistance( me->GetDesiredPathLookAheadRange() );
 	HoldPosition( me );

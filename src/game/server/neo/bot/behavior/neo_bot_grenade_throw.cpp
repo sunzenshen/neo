@@ -627,7 +627,7 @@ ActionResult< CNEOBot >	CNEOBotGrenadeThrow::Update( CNEOBot *me, float interval
 			{
 				return ChangeTo( new CNEOBotRetreatFromGrenade( pDangerousGrenade ), "Retreating after throw" );
 			}
-			return ChangeTo( new CNEOBotHoldInSmoke( m_vecThreatLastKnownPos ), "Holding after smoke throw" );
+			return ChangeTo( new CNEOBotHoldInSmoke( m_vecThreatLastKnownPos, m_vecTarget ), "Holding after smoke throw" );
 		}
 		else
 		{
