@@ -1549,6 +1549,7 @@ set(UNITY_SOURCE_NEO_BOT
     neo/bot/behavior/neo_bot_grenade_throw.cpp
     neo/bot/behavior/neo_bot_grenade_throw_frag.cpp
     neo/bot/behavior/neo_bot_grenade_throw_smoke.cpp
+    neo/bot/behavior/neo_bot_hold_in_smoke.cpp
     neo/bot/behavior/neo_bot_jgr_capture.cpp
     neo/bot/behavior/neo_bot_jgr_enemy.cpp
     neo/bot/behavior/neo_bot_jgr_escort.cpp
@@ -1628,6 +1629,7 @@ target_sources_grouped(
     neo/bot/behavior/neo_bot_grenade_throw.h
     neo/bot/behavior/neo_bot_grenade_throw_frag.h
     neo/bot/behavior/neo_bot_grenade_throw_smoke.h
+    neo/bot/behavior/neo_bot_hold_in_smoke.h
     neo/bot/behavior/neo_bot_jgr_capture.h
     neo/bot/behavior/neo_bot_jgr_enemy.h
     neo/bot/behavior/neo_bot_jgr_escort.h
