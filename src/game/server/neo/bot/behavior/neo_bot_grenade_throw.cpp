@@ -3,6 +3,7 @@
 #include "bot/neo_bot.h"
 #include "bot/behavior/neo_bot_grenade_throw.h"
 #include "bot/behavior/neo_bot_retreat_from_grenade.h"
+#include "bot/behavior/neo_bot_retreat_to_cover.h"
 #include "weapon_neobasecombatweapon.h"
 #include "weapon_grenade.h"
 #include "weapon_smokegrenade.h"
@@ -620,7 +621,11 @@ ActionResult< CNEOBot >	CNEOBotGrenadeThrow::Update( CNEOBot *me, float interval
 		}
 		else if ( pWep->GetNeoWepBits() & NEO_WEP_SMOKE_GRENADE )
 		{
-			static_cast<CWeaponSmokeGrenade*>(pWep)->ThrowGrenade( me );
+			CNEOGrenadeSmoke *pSmoke = static_cast<CWeaponSmokeGrenade *>( pWep )->ThrowGrenade( me );
+			if ( pSmoke && me->GetIntentionInterface()->ShouldHurry( me ) != ANSWER_YES )
+			{
+				return ChangeTo( new CNEOBotRetreatToCover( *pSmoke ), "Taking cover after throwing smoke" );
+			}
 		}
 		else
 		{
@@ -628,7 +633,7 @@ ActionResult< CNEOBot >	CNEOBotGrenadeThrow::Update( CNEOBot *me, float interval
 			Assert(0);
 		}
 
-		// Would exit immediately for smoke, but enemies tend to frag back so look for one now
+		// Check for a frag before resuming the interrupted action.
 		return ChangeTo( new CNEOBotRetreatFromGrenade( nullptr ), "Retreating after throw" );
 	}
 	

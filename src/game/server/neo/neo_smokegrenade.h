@@ -13,6 +13,8 @@
 
 #define NEO_SMOKE_GRENADE_MODEL "models/weapons/w_smokenade.mdl"
 
+class CNEOSmokeLineOfSightBlocker;
+
 class CNEOGrenadeSmoke : public CBaseGrenadeProjectile
 {
 	DECLARE_CLASS(CNEOGrenadeSmoke, CBaseGrenadeProjectile);
@@ -29,6 +31,7 @@ public:
 	void	DelayThink();
 	void	SetPunted(bool punt) { m_punted = punt; }
 	bool	WasPunted(void) const { return m_punted; }
+	bool	HasActiveLOSBlocker() const;
 	void	OnPhysGunPickup(CBasePlayer* pPhysGunUser, PhysGunPickup_t reason);
 
 	void	InputSetTimer(inputdata_t& inputdata);
@@ -47,9 +50,10 @@ protected:
 
 private:
 	Vector m_lastPos;
+	CHandle< CNEOSmokeLineOfSightBlocker > m_hLOSBlocker;
 };
 
-CBaseGrenadeProjectile* NEOSmokegrenade_Create(const Vector& position, const QAngle& angles, const Vector& velocity,
+CNEOGrenadeSmoke* NEOSmokegrenade_Create(const Vector& position, const QAngle& angles, const Vector& velocity,
 	const AngularImpulse& angVelocity, CBaseEntity* pOwner);
 
 bool NEOSmokegrenade_WasPunted(const CBaseEntity* pEntity);

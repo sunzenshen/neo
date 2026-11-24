@@ -2,6 +2,7 @@
 
 #include "cbase.h"
 #include "neo_player.h"
+#include "neo_smokegrenade.h"
 #include "neo_smokelineofsightblocker.h"
 #include "bot/neo_bot.h"
 #include "bot/behavior/neo_bot_grenade_dispatch.h"
@@ -11,6 +12,7 @@
 #include "bot/neo_bot_path_reservation.h"
 
 extern ConVar neo_bot_path_lookahead_range;
+extern ConVar sv_neo_smoke_blocker_delay;
 ConVar neo_bot_retreat_to_cover_range( "neo_bot_retreat_to_cover_range", "1000", FCVAR_CHEAT );
 ConVar neo_bot_debug_retreat_to_cover( "neo_bot_debug_retreat_to_cover", "0", FCVAR_CHEAT );
 ConVar neo_bot_wait_in_cover_min_time( "neo_bot_wait_in_cover_min_time", "1", FCVAR_CHEAT );
@@ -30,6 +32,14 @@ CNEOBotRetreatToCover::CNEOBotRetreatToCover( Action< CNEOBot > *actionToChangeT
 {
 	m_hideDuration = -1.0f;
 	m_actionToChangeToOnceCoverReached = actionToChangeToOnceCoverReached;
+}
+
+
+//---------------------------------------------------------------------------------------------
+CNEOBotRetreatToCover::CNEOBotRetreatToCover( CNEOGrenadeSmoke &smoke )
+	: CNEOBotRetreatToCover()
+{
+	m_hCoverSmoke = &smoke;
 }
 
 
@@ -245,6 +255,13 @@ ActionResult< CNEOBot >	CNEOBotRetreatToCover::OnStart( CNEOBot *me, Action< CNE
 	}
 
 	m_waitInCoverTimer.Start( m_hideDuration );
+	if ( CNEOGrenadeSmoke *pSmoke = m_hCoverSmoke.Get() )
+	{
+		// Allow time for the grenade to settle after its fuse expires.
+		const float flSettleAllowance = 2.0f;
+		const float flFuseRemaining = Max( 0.0f, pSmoke->GetDetonateTimerLength() - gpGlobals->curtime );
+		m_smokeWaitTimer.Start( flFuseRemaining + sv_neo_smoke_blocker_delay.GetFloat() + flSettleAllowance );
+	}
 
 	return Continue();
 }
@@ -279,6 +296,22 @@ ActionResult< CNEOBot >	CNEOBotRetreatToCover::Update( CNEOBot *me, float interv
 	if ( ShouldRetreat( me ) == ANSWER_NO )
 		return Done( "No longer need to retreat" );
 
+	CNEOGrenadeSmoke *pSmoke = m_hCoverSmoke.Get();
+	const bool bSmokeCoverReady = pSmoke && pSmoke->HasActiveLOSBlocker();
+	if ( bSmokeCoverReady && m_smokeWaitTimer.HasStarted() )
+	{
+		// The new cloud can shield areas that were exposed at the start of the retreat.
+		m_smokeWaitTimer.Invalidate();
+		m_coverArea = FindCoverArea( me );
+		if ( !m_coverArea )
+		{
+			return Done( "No cover available once smoke bloomed" );
+		}
+		m_path.Invalidate();
+		m_waitInCoverTimer.Reset();
+	}
+	const bool bWaitingForSmoke = pSmoke && !bSmokeCoverReady && !m_smokeWaitTimer.IsElapsed();
+
 	// attack while retreating
 	me->EquipBestWeaponForThreat( threat );
 
@@ -298,8 +331,9 @@ ActionResult< CNEOBot >	CNEOBotRetreatToCover::Update( CNEOBot *me, float interv
 	}
 #endif
 
-	// Consider throwing a grenade
-	if ( ( !m_grenadeThrowCooldownTimer.HasStarted() || m_grenadeThrowCooldownTimer.IsElapsed() ) &&
+	// A retreat started by a smoke throw already has a grenade to use.
+	if ( !m_hCoverSmoke.IsValid() &&
+	     ( !m_grenadeThrowCooldownTimer.HasStarted() || m_grenadeThrowCooldownTimer.IsElapsed() ) &&
 	     threat && threat->GetEntity() && !me->IsLineOfFireClear( threat->GetEntity()->EyePosition(), CNEOBot::LINE_OF_FIRE_FLAGS_DEFAULT ) )
 	{
 		m_grenadeThrowCooldownTimer.Start( sv_neo_bot_grenade_throw_cooldown.GetFloat() );
@@ -310,12 +344,12 @@ ActionResult< CNEOBot >	CNEOBotRetreatToCover::Update( CNEOBot *me, float interv
 		}
 	}
 
-	// move to cover, or stop if we've found opportunistic cover (no visible threats right now)
-	if ( me->GetLastKnownArea() == m_coverArea || !threat )
+	// Keep moving to smoke cover even if the threat falls out of sight.
+	if ( me->GetLastKnownArea() == m_coverArea || ( !threat && !bSmokeCoverReady ) )
 	{
 		// we are now in cover
 
-		if ( threat )
+		if ( threat && !bSmokeCoverReady )
 		{
 			// threats are still visible - find new cover
 			CNavArea *pPrevCoverArea = m_coverArea;
@@ -332,7 +366,7 @@ ActionResult< CNEOBot >	CNEOBotRetreatToCover::Update( CNEOBot *me, float interv
 				m_path.Invalidate();
 			}
 		}
-		else
+		else if ( !threat )
 		{
 			me->DisableCloak();
 		}
@@ -349,7 +383,7 @@ ActionResult< CNEOBot >	CNEOBotRetreatToCover::Update( CNEOBot *me, float interv
 			return Continue();
 		}
 
-		if ( m_waitInCoverTimer.IsElapsed() )
+		if ( !bWaitingForSmoke && m_waitInCoverTimer.IsElapsed() )
 		{
 			return Done( "Been in cover long enough" );
 		}

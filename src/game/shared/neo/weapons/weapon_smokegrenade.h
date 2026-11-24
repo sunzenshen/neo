@@ -26,6 +26,8 @@
 #define CWeaponSmokeGrenade C_WeaponSmokeGrenade
 #endif
 
+class CNEOGrenadeSmoke;
+
 class CWeaponSmokeGrenade : public CNEOBaseProjectile
 {
 	DECLARE_CLASS(CWeaponSmokeGrenade, CNEOBaseProjectile);
@@ -64,7 +66,7 @@ public:
 	void Operator_HandleAnimEvent(animevent_t* pEvent, CBaseCombatCharacter* pOperator);
 #endif
 
-	void	ThrowGrenade(CNEO_Player* pPlayer, bool isAlive = true, CBaseEntity *pAttacker = NULL);
+	CNEOGrenadeSmoke* ThrowGrenade(CNEO_Player* pPlayer, bool isAlive = true, CBaseEntity *pAttacker = nullptr);
 	bool	IsPrimed() const { return (m_AttackPaused != 0); }
 
 	bool CanBePickedUpByClass(int classId) OVERRIDE;
