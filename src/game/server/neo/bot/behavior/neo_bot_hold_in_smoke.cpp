@@ -1,6 +1,7 @@
 #include "cbase.h"
 #include "basegrenade_shared.h"
 #include "bot/behavior/neo_bot_hold_in_smoke.h"
+#include "bot/behavior/neo_bot_retreat_to_cover.h"
 #include "bot/neo_bot_path_compute.h"
 #include "nav_mesh.h"
 #include "neo_smokelineofsightblocker.h"
@@ -154,4 +155,14 @@ ActionResult< CNEOBot > CNEOBotHoldInSmoke::Update( CNEOBot *me, float interval 
 
 	m_path.Update( me );
 	return Continue();
+}
+
+EventDesiredResult< CNEOBot > CNEOBotHoldInSmoke::OnInjured( CNEOBot *me, const CTakeDamageInfo &info )
+{
+	CBaseEntity *pAttacker = info.GetAttacker();
+	if ( !pAttacker || !me->IsEnemy( pAttacker ) )
+	{
+		return TryContinue();
+	}
+	return TryChangeTo( new CNEOBotRetreatToCover( m_hSmoke ), RESULT_IMPORTANT, "Enemy hit during smoke hold" );
 }

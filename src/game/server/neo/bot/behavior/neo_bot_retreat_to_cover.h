@@ -10,6 +10,7 @@ class CNEOBotRetreatToCover : public Action< CNEOBot >
 {
 public:
 	CNEOBotRetreatToCover( float hideDuration = -1.0f );
+	explicit CNEOBotRetreatToCover( const EHANDLE &hSmokeToLeave );
 	CNEOBotRetreatToCover( Action< CNEOBot > *actionToChangeToOnceCoverReached );
 
 	virtual ActionResult< CNEOBot >	OnStart( CNEOBot *me, Action< CNEOBot > *priorAction );
@@ -25,6 +26,8 @@ public:
 
 private:
 	float m_hideDuration;
+	bool m_bSeekHardCover = false;
+	EHANDLE m_hAvoidSmoke;
 	Action< CNEOBot > *m_actionToChangeToOnceCoverReached;
 
 	PathFollower m_path;

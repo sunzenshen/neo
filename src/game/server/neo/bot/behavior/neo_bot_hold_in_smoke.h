@@ -11,7 +11,8 @@ public:
 
 	ActionResult< CNEOBot > OnStart( CNEOBot *me, Action< CNEOBot > *priorAction ) override;
 	ActionResult< CNEOBot > Update( CNEOBot *me, float interval ) override;
-	// The tactical monitor checks grenade danger before asking about cover.
+	EventDesiredResult< CNEOBot > OnInjured( CNEOBot *me, const CTakeDamageInfo &info ) override;
+	// Stay in smoke until an enemy hits us, while still allowing grenade avoidance.
 	QueryResultType ShouldRetreat( const INextBot *me ) const override { return ANSWER_NO; }
 	const char *GetName() const override { return "HoldInSmoke"; }
 
