@@ -13,7 +13,7 @@ extern ConVar sv_neo_smoke_blocker_delay;
 
 namespace
 {
-constexpr float kSmokeNoticeRange = 1000.0f;
+constexpr float kSmokeNoticeRange = 200.0f;
 constexpr float kSmokeSettleAllowance = 1.0f;
 constexpr float kSmokeTravelTimeout = 6.0f;
 
