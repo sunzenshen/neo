@@ -294,11 +294,21 @@ bool CNEOBotLadderApproach::IsHeldByLadder( CNEOBot *me ) const
 		return false;
 	}
 
-	const Vector &feet = me->GetLocomotionInterface()->GetFeet();
-	const float stepHeight = me->GetLocomotionInterface()->GetStepHeight();
-	if ( feet.z < m_ladder->m_bottom.z - stepHeight || feet.z > m_ladder->m_top.z )
+	const ILocomotion *mover = me->GetLocomotionInterface();
+	const Vector &feet = mover->GetFeet();
+	if ( feet.z > m_ladder->m_top.z )
 	{
 		return false;
+	}
+
+	// A jump can catch the ladder with the hull while the feet are still below the nav foot
+	if ( feet.z < m_ladder->m_bottom.z - mover->GetStepHeight() )
+	{
+		const float hullTop = feet.z + me->WorldAlignMaxs().z;
+		if ( mover->IsOnGround() || hullTop < m_ladder->m_bottom.z )
+		{
+			return false;
+		}
 	}
 
 	const float range = CalcDistanceToLineSegment2D(
