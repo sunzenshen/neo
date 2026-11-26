@@ -16,6 +16,7 @@
 #ifdef CLIENT_DLL
 #include "c_neo_player.h"
 #include "c_playerresource.h"
+#include "prediction.h"
 #include "ui/neo_hud_context_hint.h"
 #include "vprof.h"
 #define CNEO_Player C_NEO_Player
@@ -752,6 +753,19 @@ const wchar_t *GetRankNameW(const int xp, const bool shortened)
 	return GetRankNameBase(xp, shortened).wszStr;
 }
 
+// The scope time is stamped in predicted code. Outside prediction, the local player's render clock runs
+// behind the predicted clock, so read it on the predicted clock, as C_BasePlayer::GetFOV does for its lerp.
+static float ScopeClock(const CNEO_Player *pPlayer)
+{
+#ifdef CLIENT_DLL
+	if (!prediction->InPrediction() && pPlayer->IsLocalPlayer() && pPlayer->GetPredictable())
+	{
+		return pPlayer->GetFinalPredictedTime() + (gpGlobals->interpolation_amount * TICK_INTERVAL);
+	}
+#endif
+	return gpGlobals->curtime;
+}
+
 bool CNEO_Player::IsInScope() const
 {
 	if (!IsInAim())
@@ -761,7 +775,7 @@ bool CNEO_Player::IsInScope() const
 
 	const auto *pWeapon = static_cast<CNEOBaseCombatWeapon *>(GetActiveWeapon());
 	return pWeapon && (pWeapon->GetNeoWepBits() & NEO_WEP_SCOPEDWEAPON)
-		&& gpGlobals->curtime >= m_flScopeUpTime;
+		&& ScopeClock(this) >= m_flScopeUpTime;
 }
 
 void CNEO_Player::CheckAimButtons()
