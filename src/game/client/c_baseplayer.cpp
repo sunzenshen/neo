@@ -2730,7 +2730,6 @@ float C_BasePlayer::GetFOV( void )
 				auto *pWeapon = static_cast<CNEOBaseCombatWeapon *>(pTargetPlayer->GetActiveWeapon());
 				if (pWeapon && (pWeapon->GetNeoWepBits() & NEO_WEP_SCOPEDWEAPON))
 				{
-					// Scopes snap in and out, so a switch to another weapon starts from the hip FOV
 					pTargetPlayer->m_flSpecFOV = fovNorm;
 					return pTargetPlayer->IsInScope() ? fovAim : fovNorm;
 				}
