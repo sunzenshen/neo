@@ -1856,7 +1856,7 @@ void CNEO_Player::Weapon_SetZoom(const bool bZoomIn)
 	auto *pWeapon = static_cast<CNEOBaseCombatWeapon *>(GetActiveWeapon());
 	if (bZoomIn && pWeapon && (pWeapon->GetNeoWepBits() & NEO_WEP_SCOPEDWEAPON))
 	{
-		// The gun is raised to the eye first; CheckAimButtons zooms in once the scope is up
+		// Wait for the raising scope to eye animation to finish before zooming in
 		m_flScopeUpTime = gpGlobals->curtime + NEO_SCOPE_RAISE_TIME;
 		m_bInAim = true;
 		return;

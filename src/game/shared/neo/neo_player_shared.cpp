@@ -753,8 +753,7 @@ const wchar_t *GetRankNameW(const int xp, const bool shortened)
 	return GetRankNameBase(xp, shortened).wszStr;
 }
 
-// The scope time is stamped in predicted code. Outside prediction, the local player's render clock runs
-// behind the predicted clock, so use the time of the last predicted command: the one that snaps the FOV.
+// Accounts for the prediction lead of the local player
 static float ScopeClock(const CNEO_Player *pPlayer)
 {
 #ifdef CLIENT_DLL
@@ -804,7 +803,6 @@ void CNEO_Player::CheckAimButtons()
 	    Weapon_SetZoom(false);
 	}
 
-	// Scopes zoom in at once when the raise ends
 	if (IsInScope())
 	{
 		const int aimFOV = NeoAimFOV(GetDefaultFOV(), GetActiveWeapon());

@@ -577,7 +577,6 @@ bool CNEOBaseCombatWeapon::Deploy(void)
 				}
 				else if (GetNeoWepBits() & NEO_WEP_SCOPEDWEAPON)
 				{
-					// Switching to a scope with aim held raises it again from the hip FOV
 					pOwner->m_flScopeUpTime = gpGlobals->curtime + NEO_SCOPE_RAISE_TIME;
 					pOwner->SetFOV(pOwner, pOwner->GetDefaultFOV(), 0.0f);
 				}
@@ -613,7 +612,6 @@ bool CNEOBaseCombatWeapon::Holster(CBaseCombatWeapon* pSwitchingTo)
 		return false;
 	}
 
-	// Leave the scope zoom here: by Deploy, the next weapon is active and the scope state is gone
 	auto *pOwner = static_cast<CNEO_Player *>(GetOwner());
 	if ((GetNeoWepBits() & NEO_WEP_SCOPEDWEAPON) && pOwner && pOwner->IsInScope())
 	{

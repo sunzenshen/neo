@@ -256,7 +256,6 @@ float ClientModeHL2MPNormal::GetViewModelFOV()
 		Assert(pWepInfo);
 
 		const float flAimFov = NeoGetAimPose(*pWepInfo).fov;
-		// A scope covers the view when its raise ends
 		const float aimChangeTime = (pWeapon->GetNeoWepBits() & NEO_WEP_SCOPEDWEAPON)
 			? NEO_SCOPE_RAISE_TIME : NeoAimTransitionTime(*pWepInfo);
 		const float endAimingChange = m_flStartAimingChange + aimChangeTime;
