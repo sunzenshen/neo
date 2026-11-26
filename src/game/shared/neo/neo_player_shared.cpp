@@ -754,13 +754,13 @@ const wchar_t *GetRankNameW(const int xp, const bool shortened)
 }
 
 // The scope time is stamped in predicted code. Outside prediction, the local player's render clock runs
-// behind the predicted clock, so read it on the predicted clock, as C_BasePlayer::GetFOV does for its lerp.
+// behind the predicted clock, so use the time of the last predicted command: the one that snaps the FOV.
 static float ScopeClock(const CNEO_Player *pPlayer)
 {
 #ifdef CLIENT_DLL
 	if (!prediction->InPrediction() && pPlayer->IsLocalPlayer() && pPlayer->GetPredictable())
 	{
-		return pPlayer->GetFinalPredictedTime() + (gpGlobals->interpolation_amount * TICK_INTERVAL);
+		return pPlayer->GetFinalPredictedTime() - TICK_INTERVAL;
 	}
 #endif
 	return gpGlobals->curtime;
