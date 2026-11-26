@@ -19,6 +19,8 @@ bool NeoAdsActive(const CNEOWeaponInfo &data);
 
 NeoAimPose NeoGetAimPose(const CNEOWeaponInfo &data);
 float NeoAimTransitionTime(const CNEOWeaponInfo &data);
+// Reversing a change in progress starts from the current pose.
+float NeoAimChangeStart(float lastStart, float now, float changeTime);
 float NeoAimTransitionCurve(const CNEOWeaponInfo &data, float fraction);
 
 // adsBlend: 0 at the hip, 1 on the sights.
