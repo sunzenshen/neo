@@ -580,7 +580,9 @@ void CNEOPredictedViewModel::CalcViewModelView(CBasePlayer *pOwner,
 				m_bViewAim = true;
 			}
 			const NeoAimPose aimPose = NeoGetAimPose(data);
-			const float aimChangeTime = NeoAimTransitionTime(data);
+			// A scope covers the view when its raise ends
+			const float aimChangeTime = (weapon->GetNeoWepBits() & NEO_WEP_SCOPEDWEAPON)
+				? NEO_SCOPE_RAISE_TIME : NeoAimTransitionTime(data);
 			const float endAimingChange = m_flStartAimingChange + aimChangeTime;
 			const bool inAimingChange = (m_flStartAimingChange <= currentTime && currentTime < endAimingChange);
 			if (inAimingChange)

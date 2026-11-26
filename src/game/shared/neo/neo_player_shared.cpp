@@ -752,6 +752,18 @@ const wchar_t *GetRankNameW(const int xp, const bool shortened)
 	return GetRankNameBase(xp, shortened).wszStr;
 }
 
+bool CNEO_Player::IsInScope() const
+{
+	if (!IsInAim())
+	{
+		return false;
+	}
+
+	const auto *pWeapon = static_cast<CNEOBaseCombatWeapon *>(GetActiveWeapon());
+	return pWeapon && (pWeapon->GetNeoWepBits() & NEO_WEP_SCOPEDWEAPON)
+		&& gpGlobals->curtime >= m_flScopeUpTime;
+}
+
 void CNEO_Player::CheckAimButtons()
 {
 	if (auto *pNeoWep = static_cast<CNEOBaseCombatWeapon *>(GetActiveWeapon()))
@@ -776,6 +788,16 @@ void CNEO_Player::CheckAimButtons()
 	else
 	{
 	    Weapon_SetZoom(false);
+	}
+
+	// Scopes zoom in at once when the raise ends
+	if (IsInScope())
+	{
+		const int aimFOV = NeoAimFOV(GetDefaultFOV(), GetActiveWeapon());
+		if (m_iFOV != aimFOV)
+		{
+			SetFOV(this, aimFOV, 0.0f);
+		}
 	}
 }
 
