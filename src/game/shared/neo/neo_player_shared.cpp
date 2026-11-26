@@ -31,6 +31,7 @@
 #include "convar.h"
 #include "neo_weapon_loadout.h"
 #include "weapon_neobasecombatweapon.h"
+#include "weapon_srs.h"
 #include "igameresources.h"
 #ifdef GAME_DLL
 #include "ai_basenpc.h"
@@ -94,8 +95,14 @@ bool IsAllowedToZoom(CNEOBaseCombatWeapon *pWep)
 		return false;
 	}
 
-	if (pWep->GetNeoWepBits() & NEO_WEP_SRS && pWep->GetIdealActivity() == ACT_VM_PULLBACK) {
-		return false;
+	if (pWep->GetNeoWepBits() & NEO_WEP_SRS)
+	{
+		const auto *pOwner = ToNEOPlayer(pWep->GetOwner());
+		if (pWep->GetIdealActivity() == ACT_VM_PULLBACK ||
+			(static_cast<CWeaponSRS *>(pWep)->GetNeedsBolting() && pOwner && !pOwner->IsInScope()))
+		{
+			return false;
+		}
 	}
 
 	return true;
