@@ -1523,7 +1523,7 @@ void C_NEO_Player::CalcView( Vector &eyeOrigin, QAngle &eyeAngles,
 
 	if (IsAlive() && !IsObserver())
 	{
-		eyeAngles += Lerp(gpGlobals->interpolation_amount, m_vecViewKickPrev, m_vecViewKickCurrent);
+		eyeAngles += GetInterpolatedViewKick();
 	}
 }
 
@@ -2067,6 +2067,11 @@ void C_NEO_Player::ApplyAimPunch()
 ConVar cl_neo_viewkick_strength( "cl_neo_viewkick_strength", "1.0", FCVAR_ARCHIVE, "View kick strength", true, 0.0f, true, 1.0f );
 ConVar cl_neo_viewkick_spring_constant( "cl_neo_viewkick_spring_constant", "65.0", FCVAR_ARCHIVE, "View kick spring constant", true, 0.0f, false, 0.0f );
 ConVar cl_neo_viewkick_damping( "cl_neo_viewkick_damping", "9.0", FCVAR_ARCHIVE, "View kick damping", true, 0.0f, false, 0.0f );
+
+QAngle C_NEO_Player::GetInterpolatedViewKick() const
+{
+	return Lerp(gpGlobals->interpolation_amount, m_vecViewKickPrev, m_vecViewKickCurrent);
+}
 
 void C_NEO_Player::ViewKickReset()
 {
