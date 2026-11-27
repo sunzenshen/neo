@@ -20,6 +20,7 @@ BEGIN_DATADESC(CNEODeployedDetpack)
 	DEFINE_FIELD(m_punted, FIELD_BOOLEAN),
 	DEFINE_FIELD(m_hasSettled, FIELD_BOOLEAN),
 	DEFINE_FIELD(m_hasBeenTriggeredToDetonate, FIELD_BOOLEAN),
+	DEFINE_FIELD(m_surfaceNormal, FIELD_VECTOR),
 
 	// Function pointers
 	DEFINE_THINKFUNC(DelayThink),
@@ -53,6 +54,7 @@ void CNEODeployedDetpack::Spawn(void)
 	m_hasBeenTriggeredToDetonate = false;
 
 	m_lastPos = GetAbsOrigin();
+	m_surfaceNormal = Vector(0, 0, 1);
 }
 
 void CNEODeployedDetpack::Precache(void)
@@ -169,6 +171,37 @@ void CNEODeployedDetpack::SetVelocity(const Vector& velocity, const AngularImpul
 	}
 }
 
+void CNEODeployedDetpack::AttachToSurface(const Vector& surfacePos, const Vector& surfaceNormal, float levelSurfaceYaw)
+{
+	// Same facing as a detpack that came to rest on the floor
+	QAngle angles;
+	VectorAngles(surfaceNormal, angles);
+
+	const bool isLevelSurface = (surfaceNormal.x == 0 && surfaceNormal.y == 0);
+	if (isLevelSurface)
+	{
+		angles[YAW] = levelSurfaceYaw;
+	}
+
+	// Sit as far off the surface as a dropped detpack rests above the floor
+	const float restDistance = CollisionProp()->OBBMaxs().z;
+
+	SetAbsOrigin(surfacePos + (surfaceNormal * restDistance));
+	SetAbsAngles(angles);
+	SetAbsVelocity(vec3_origin);
+	SetLocalAngularVelocity(vec3_angle);
+
+	SetTouch(NULL);
+	SetSolid(SOLID_NONE);
+	SetMoveType(MOVETYPE_NONE);
+	SetThink(NULL);
+
+	m_surfaceNormal = surfaceNormal;
+	m_lastPos = GetAbsOrigin();
+	m_hasSettled = true;
+	m_hasBeenMadeNonSolid = true;
+}
+
 int CNEODeployedDetpack::OnTakeDamage(const CTakeDamageInfo& inputInfo)
 {
 	// Dets can't be detonated by damage.
@@ -177,7 +210,9 @@ int CNEODeployedDetpack::OnTakeDamage(const CTakeDamageInfo& inputInfo)
 
 void CNEODeployedDetpack::InputRemoteDetonate(inputdata_t& inputdata)
 {
-	ExplosionCreate(GetAbsOrigin() + Vector(0, 0, 16), GetAbsAngles(), GetThrower(), GetDamage(), GetDamageRadius(),
+	// Offset away from the surface, so that the blast does not start inside a wall or ceiling
+	constexpr float EXPLOSION_SURFACE_OFFSET = 16.f;
+	ExplosionCreate(GetAbsOrigin() + (m_surfaceNormal * EXPLOSION_SURFACE_OFFSET), GetAbsAngles(), GetThrower(), GetDamage(), GetDamageRadius(),
 					SF_ENVEXPLOSION_NOSPARKS | SF_ENVEXPLOSION_NODLIGHTS | SF_ENVEXPLOSION_NOSMOKE | SF_ENVEXPLOSION_NOSOUND, 0.0f, this);
 	m_hasBeenTriggeredToDetonate = true;
 	DevMsg("CNEODeployedDetpack::InputRemoteDetonate triggered\n");

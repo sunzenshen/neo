@@ -34,6 +34,7 @@ public:
 	void	Precache(void);
 	void	SetTimer(float detonateDelay, float warnDelay);
 	void	SetVelocity(const Vector& velocity, const AngularImpulse& angVelocity);
+	void	AttachToSurface(const Vector& surfacePos, const Vector& surfaceNormal, float levelSurfaceYaw);
 	int		OnTakeDamage(const CTakeDamageInfo& inputInfo);
 	void	DelayThink();
 	void	SetPunted(bool punt) { m_punted = punt; }
@@ -54,6 +55,7 @@ private:
 
 private:
 	Vector m_lastPos;
+	Vector m_surfaceNormal;
 };
 
 CBaseGrenadeProjectile*NEODeployedDetpack_Create(const Vector& position, const QAngle& angles, const Vector& velocity,
