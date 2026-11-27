@@ -560,6 +560,13 @@ void CNEOBot::PressRunButton(float duration)
 		return;
 	}
 
+	// A sprint starts on a press while moving, so a stopped bot waits to press
+	constexpr float SPRINT_PRESS_MIN_SPEED = 0.5f;
+	if (!GetLocalVelocity().IsLengthGreaterThan(SPRINT_PRESS_MIN_SPEED))
+	{
+		return;
+	}
+
 	BaseClass::PressRunButton(duration);
 }
 
