@@ -1,5 +1,7 @@
 #pragma once
 
+class CNEOGrenadeSmoke;
+
 // How many known enemies could see into this area
 int CountThreatsExposingArea( CNEOBot *me, CNavArea *area );
 
@@ -11,6 +13,7 @@ class CNEOBotRetreatToCover : public Action< CNEOBot >
 public:
 	CNEOBotRetreatToCover( float hideDuration = -1.0f );
 	CNEOBotRetreatToCover( Action< CNEOBot > *actionToChangeToOnceCoverReached );
+	explicit CNEOBotRetreatToCover( CNEOGrenadeSmoke &smoke );
 
 	virtual ActionResult< CNEOBot >	OnStart( CNEOBot *me, Action< CNEOBot > *priorAction );
 	virtual ActionResult< CNEOBot >	Update( CNEOBot *me, float interval );
@@ -33,6 +36,8 @@ private:
 	CountdownTimer m_grenadeCheckTimer;
 	CountdownTimer m_grenadeThrowCooldownTimer;
 	CountdownTimer m_waitInCoverTimer;
+	CHandle< CNEOGrenadeSmoke > m_hCoverSmoke;
+	CountdownTimer m_smokeWaitTimer;
 
 	CNavArea *FindCoverArea( CNEOBot *me );
 };

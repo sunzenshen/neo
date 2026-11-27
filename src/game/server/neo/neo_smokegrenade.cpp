@@ -19,6 +19,7 @@ BEGIN_DATADESC(CNEOGrenadeSmoke)
 DEFINE_FIELD(m_inSolid, FIELD_BOOLEAN),
 DEFINE_FIELD(m_punted, FIELD_BOOLEAN),
 DEFINE_FIELD(m_hasSettled, FIELD_BOOLEAN),
+DEFINE_FIELD(m_hLOSBlocker, FIELD_EHANDLE),
 
 // Function Pointers
 DEFINE_THINKFUNC(DelayThink),
@@ -175,8 +176,14 @@ void CNEOGrenadeSmoke::SetupParticles(size_t number)
 			// Schedule activation of LOS blocking
 			blocker->SetThink(&CNEOSmokeLineOfSightBlocker::ActivateLOSBlocker);
 			blocker->SetNextThink(gpGlobals->curtime + sv_neo_smoke_blocker_delay.GetFloat());
+			m_hLOSBlocker = blocker;
 		}
 	}
+}
+
+bool CNEOGrenadeSmoke::HasActiveLOSBlocker() const
+{
+	return m_hLOSBlocker.Get() && m_hLOSBlocker->IsSolid();
 }
 
 void CNEOGrenadeSmoke::InputSetTimer(inputdata_t& inputdata)
@@ -184,7 +191,7 @@ void CNEOGrenadeSmoke::InputSetTimer(inputdata_t& inputdata)
 	SetDetonateTimerLength(inputdata.value.Float());
 }
 
-CBaseGrenadeProjectile* NEOSmokegrenade_Create(const Vector& position, const QAngle& angles, const Vector& velocity,
+CNEOGrenadeSmoke* NEOSmokegrenade_Create(const Vector& position, const QAngle& angles, const Vector& velocity,
 	const AngularImpulse& angVelocity, CBaseEntity* pOwner)
 {
 	// Don't set the owner here, or the player can't interact with grenades he's thrown

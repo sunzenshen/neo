@@ -196,7 +196,7 @@ void CWeaponSmokeGrenade::ItemPostFrame(void)
 }
 
 extern ConVar sv_neo_grenade_fuse_timer;
-void CWeaponSmokeGrenade::ThrowGrenade(CNEO_Player* pPlayer, bool isAlive, CBaseEntity *pAttacker)
+CNEOGrenadeSmoke* CWeaponSmokeGrenade::ThrowGrenade(CNEO_Player* pPlayer, bool isAlive, CBaseEntity *pAttacker)
 {
 	if (!sv_neo_infinite_smoke_grenades.GetBool())
 	{
@@ -204,6 +204,7 @@ void CWeaponSmokeGrenade::ThrowGrenade(CNEO_Player* pPlayer, bool isAlive, CBase
 		DecrementAmmo(pPlayer);
 	}
 
+	CNEOGrenadeSmoke *pGrenade = nullptr;
 #ifndef CLIENT_DLL
 	QAngle angThrow = pPlayer->LocalEyeAngles();
 
@@ -228,7 +229,7 @@ void CWeaponSmokeGrenade::ThrowGrenade(CNEO_Player* pPlayer, bool isAlive, CBase
 
 	Vector vecThrow = vForward * flVel + pPlayer->GetAbsVelocity();
 
-	CBaseGrenadeProjectile* pGrenade = NEOSmokegrenade_Create(vecSrc, vec3_angle, vecThrow, AngularImpulse(600, random->RandomInt(-1200, 1200), 0), ((!(pPlayer->IsAlive()) || !isAlive) && pAttacker) ? pAttacker : pPlayer);
+	pGrenade = NEOSmokegrenade_Create(vecSrc, vec3_angle, vecThrow, AngularImpulse(600, random->RandomInt(-1200, 1200), 0), ((!(pPlayer->IsAlive()) || !isAlive) && pAttacker) ? pAttacker : pPlayer);
 
 	if (pGrenade)
 	{
@@ -242,6 +243,7 @@ void CWeaponSmokeGrenade::ThrowGrenade(CNEO_Player* pPlayer, bool isAlive, CBase
 	pPlayer->DoAnimationEvent(PLAYERANIMEVENT_ATTACK_PRIMARY);
 
 	m_bRedraw = true;
+	return pGrenade;
 }
 
 bool CWeaponSmokeGrenade::CanDrop()
