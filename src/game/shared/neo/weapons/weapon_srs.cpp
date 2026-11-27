@@ -4,6 +4,8 @@
 // memdbgon must be the last include file in a .cpp file!!!
 #include "tier0/memdbgon.h"
 
+static constexpr float SRS_BOLT_REFIRE_TIME = 1.27f;
+
 IMPLEMENT_NETWORKCLASS_ALIASED(WeaponSRS, DT_WeaponSRS)
 
 BEGIN_NETWORK_TABLE(CWeaponSRS, DT_WeaponSRS)
@@ -70,16 +72,10 @@ void CWeaponSRS::ItemPreFrame()
 		return BaseClass::ItemPreFrame();
 	}
 
-	if (m_flLastAttackTime + 0.08f <= gpGlobals->curtime)
-	{ // Primary attack animation finished, begin chambering a round
-		if (auto* pOwner = ToNEOPlayer(GetOwner())) {
-			if (pOwner->m_nButtons & IN_ATTACK)
-			{
-				return BaseClass::ItemPreFrame();
-			}
-		}
-		// Only queue the bolting anim once; we want to allow the player
-		// to cancel this with manual weapon quick-switching.
+	const auto* pOwner = ToNEOPlayer(GetOwner());
+	if (pOwner && !(pOwner->m_nButtons & IN_ATTACK))
+	{
+		m_flNextPrimaryAttack = Max(m_flNextPrimaryAttack.Get(), gpGlobals->curtime + SRS_BOLT_REFIRE_TIME);
 		SendWeaponAnim(ACT_VM_PULLBACK);
 		WeaponSound(SPECIAL1);
 		m_bNeedsBolting = false;
