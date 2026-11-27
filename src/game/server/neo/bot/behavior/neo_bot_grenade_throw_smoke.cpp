@@ -40,6 +40,12 @@ CNEOBotGrenadeThrowSmoke::CNEOBotGrenadeThrowSmoke( CNEOBaseCombatWeapon *pWeapo
 
 ActionResult< CNEOBot >	CNEOBotGrenadeThrowSmoke::OnStart( CNEOBot *me, Action< CNEOBot > *priorAction )
 {
+	// Pick the target before committing, so a covered spot costs no weapon swap or pin pull
+	if ( m_vecThreatLastKnownPos != vec3_invalid && UpdateGrenadeTargeting( me, m_hGrenadeWeapon.Get() ) == THROW_TARGET_CANCEL )
+	{
+		return Done( "Smoke target already covered by friendly smoke" );
+	}
+
 	ActionResult< CNEOBot > result = CNEOBotGrenadeThrow::OnStart( me, priorAction );
 	if ( result.IsDone() )
 	{
@@ -66,6 +72,11 @@ CNEOBotGrenadeThrow::ThrowTargetResult CNEOBotGrenadeThrowSmoke::UpdateGrenadeTa
 			// throw smoke at feet as fallback
 			m_vecTarget = me->GetAbsOrigin();
 		}
+
+		if ( me->IsCoveredByFriendlySmoke( m_vecTarget ) )
+		{
+			return THROW_TARGET_CANCEL;
+		}
 	}
 	
 	Assert( m_vecTarget != vec3_invalid );
@@ -77,3 +88,7 @@ CNEOBotGrenadeThrow::ThrowTargetResult CNEOBotGrenadeThrowSmoke::UpdateGrenadeTa
 	return THROW_TARGET_READY;
 }
 
+void CNEOBotGrenadeThrowSmoke::OnThrowReleased( CNEOBot *me )
+{
+	me->RememberSmokeTarget( m_vecTarget );
+}

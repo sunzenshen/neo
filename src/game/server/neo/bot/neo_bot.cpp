@@ -7,6 +7,7 @@
 #include "neo_bot_manager.h"
 #include "neo_bot_path_reservation.h"
 #include "neo_bot_vision.h"
+#include "neo_smokelineofsightblocker.h"
 #include "trigger_area_capture.h"
 #include "GameEventListener.h"
 #include "NextBotUtil.h"
@@ -44,6 +45,9 @@ extern ConVar neo_bot_path_lookahead_range;
 extern ConVar sv_neo_ctg_ghost_beacons_when_inactive;
 extern ConVar neo_bot_path_around_friendly_cooldown;
 extern ConVar sv_neo_smoke_blocker_duration;
+extern ConVar sv_neo_smoke_blocker_delay;
+extern ConVar sv_neo_smoke_blocker_size;
+extern ConVar sv_neo_grenade_fuse_timer;
 
 
 
@@ -684,6 +688,7 @@ void CNEOBot::Spawn()
 	m_visionCheckTimer.Invalidate();
 	m_visionHoldTimer.Invalidate();
 	m_smokeThermalTimer.Invalidate();
+	m_smokeInFlightTimer.Invalidate();
 }
 
 int CNEOBot::ChooseRandomWeaponIndex() const
@@ -1355,6 +1360,59 @@ Vector CNEOBot::FindVisibleThrowPointNear( const Vector &vecPos ) const
 
 	const Vector &vecCenter = find.m_closeArea->GetCenter();
 	return IsThrowLineClear( vecCenter ) ? vecCenter : vec3_invalid;
+}
+
+//-----------------------------------------------------------------------------------------------------
+void CNEOBot::RememberSmokeTarget( const Vector &vecTarget )
+{
+	// Until the cloud starts to conceal there is no blocker to find
+	m_vecSmokeInFlight = vecTarget;
+	m_smokeInFlightTimer.Start( sv_neo_grenade_fuse_timer.GetFloat() + sv_neo_smoke_blocker_delay.GetFloat() );
+}
+
+//-----------------------------------------------------------------------------------------------------
+// A wall or floor between the two points keeps a cloud at one away from the other
+static bool IsSmokeWalledOff( const Vector &vecSmoke, const Vector &vecPos )
+{
+	const Vector vecLift( 0.0f, 0.0f, StepHeight );
+	trace_t tr;
+	UTIL_TraceLine( vecSmoke + vecLift, vecPos + vecLift, MASK_SOLID_BRUSHONLY, NULL, COLLISION_GROUP_NONE, &tr );
+	return tr.DidHit();
+}
+
+//-----------------------------------------------------------------------------------------------------
+// Return true if a friendly smoke cloud already conceals the given spot, or my smoke in flight will, so another smoke there is wasted
+bool CNEOBot::IsCoveredByFriendlySmoke( const Vector &vecPos ) const
+{
+	// Well inside the coming cloud; a point farther out can still extend the screen along a lane
+	const float flCoveredRadius = sv_neo_smoke_blocker_size.GetFloat() * 0.5f;
+	if ( !m_smokeInFlightTimer.IsElapsed() && m_vecSmokeInFlight.DistToSqr( vecPos ) <= Square( flCoveredRadius )
+		&& !IsSmokeWalledOff( m_vecSmokeInFlight, vecPos ) )
+	{
+		return true;
+	}
+
+	const bool bTeamplay = NEORules()->IsTeamplay();
+
+	CBaseEntity *pEntity = nullptr;
+	while ( ( pEntity = gEntList.FindEntityByClassname( pEntity, SMOKELINEOFSIGHTBLOCKER_ENTITYNAME ) ) )
+	{
+		// A blocker turns solid when its cloud starts to conceal and is removed when the cloud thins out
+		auto *pSmoke = static_cast< CNEOSmokeLineOfSightBlocker * >( pEntity );
+		if ( !pSmoke->IsSolid() || pSmoke->IsMarkedForDeletion() || !pSmoke->CollisionProp()->IsPointInBounds( vecPos ) )
+		{
+			continue;
+		}
+
+		// The team knows where its own smoke went; an enemy cloud is left to what the bot sees
+		const bool bFriendly = pSmoke->GetThrower() == this || ( bTeamplay && pSmoke->GetTeamNumber() == GetTeamNumber() );
+		if ( bFriendly && !IsSmokeWalledOff( pSmoke->GetAbsOrigin(), vecPos ) )
+		{
+			return true;
+		}
+	}
+
+	return false;
 }
 
 

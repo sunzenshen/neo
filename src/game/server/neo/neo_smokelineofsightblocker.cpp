@@ -13,6 +13,7 @@ LINK_ENTITY_TO_CLASS(env_smokelineofsightblocker, CNEOSmokeLineOfSightBlocker);
 BEGIN_DATADESC(CNEOSmokeLineOfSightBlocker)
     DEFINE_FIELD(m_mins, FIELD_VECTOR),
     DEFINE_FIELD(m_maxs, FIELD_VECTOR),
+	DEFINE_FIELD( m_hThrower, FIELD_EHANDLE ),
 END_DATADESC()
 
 ConVar sv_neo_smoke_blocker_duration("sv_neo_smoke_blocker_duration", "20.5", FCVAR_CHEAT, "Time when LOS block should disappear", true, 0.0, true, 30.0);
