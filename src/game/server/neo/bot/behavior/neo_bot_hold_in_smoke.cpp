@@ -26,7 +26,7 @@ void HoldPosition( CNEOBot *me )
 	me->SetMoveDirection( vec2_origin );
 }
 
-bool IsActiveSmoke( CBaseEntity *pSmoke )
+bool IsLiveSmokeCloud( CBaseEntity *pSmoke )
 {
 	return pSmoke && pSmoke->IsSolid() && !pSmoke->IsMarkedForDeletion();
 }
@@ -56,7 +56,7 @@ CBaseEntity *FindNearbySmoke( CNEOBot *me )
 	{
 		const Vector &vecCenter = pSmoke->GetAbsOrigin();
 		const float flDistSq = vecBotPos.DistToSqr( vecCenter );
-		if ( flDistSq > flClosestDistSq || !IsActiveSmoke( pSmoke ) )
+		if ( flDistSq > flClosestDistSq || !IsLiveSmokeCloud( pSmoke ) )
 		{
 			continue;
 		}
@@ -138,7 +138,7 @@ ActionResult< CNEOBot > CNEOBotHoldInSmoke::Update( CNEOBot *me, float interval 
 		m_timeout.Start( kSmokeTravelTimeout );
 	}
 
-	if ( !IsActiveSmoke( m_hSmoke.Get() ) )
+	if ( !IsLiveSmokeCloud( m_hSmoke.Get() ) )
 	{
 		return Done( "Smoke cleared" );
 	}
