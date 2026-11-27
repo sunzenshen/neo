@@ -407,7 +407,7 @@ bool CHL2MPPlayerAnimState::HandleSwimming( Activity &idealActivity )
 
 #ifdef NEO
 // Slower than the walk legs' stride, the sprint legs shuffle in place
-static constexpr float SPRINT_LEGS_MIN_SPEED = 100.0f;
+static constexpr float ANIM_SPRINT_LEGS_TRANSITION_SPEED = 100.0f;
 #endif
 
 //-----------------------------------------------------------------------------
@@ -418,7 +418,7 @@ static constexpr float SPRINT_LEGS_MIN_SPEED = 100.0f;
 bool CHL2MPPlayerAnimState::HandleMoving( Activity &idealActivity )
 {
 #ifdef NEO
-	if (m_pHL2MPPlayer->IsSprinting() && GetOuterXYSpeed() > SPRINT_LEGS_MIN_SPEED)
+	if (m_pHL2MPPlayer->IsSprinting() && GetOuterXYSpeed() > ANIM_SPRINT_LEGS_TRANSITION_SPEED)
 	{
 		idealActivity = ACT_RUN;
 	}
