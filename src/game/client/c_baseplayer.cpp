@@ -2778,6 +2778,10 @@ float C_BasePlayer::GetFOV( void )
 				// m_flFOVTime was set to a predicted time in the future, because the FOV change was predicted.
 				deltaTime = (float)( GetFinalPredictedTime() - m_flFOVTime );
 				deltaTime += ( gpGlobals->interpolation_amount * TICK_INTERVAL );
+#ifdef NEO
+				// The final predicted tick is drawn one tick later, so start the zoom on the frame it shows
+				deltaTime -= TICK_INTERVAL;
+#endif
 				deltaTime /= m_Local.m_flFOVRate;
 			}
 #endif
