@@ -928,7 +928,7 @@ void C_NEO_Player::HandleSpeedChangesLegacy()
 				StopSprinting();
 			}
 #ifdef NEO
-			else if ((m_nButtons & IN_SPEED) && !IsSprinting() && GetLocalVelocity().IsLengthGreaterThan(MOVING_SPEED_MINIMUM))
+			else if ((m_afButtonPressed & IN_SPEED) && !IsSprinting() && GetLocalVelocity().IsLengthGreaterThan(MOVING_SPEED_MINIMUM))
 #else
 			else if ( (m_afButtonPressed & IN_SPEED) && (m_nButtons & (IN_FORWARD | IN_BACK | IN_MOVELEFT | IN_MOVERIGHT)) && !IsSprinting() )
 #endif
@@ -939,8 +939,10 @@ void C_NEO_Player::HandleSpeedChangesLegacy()
 				}
 				else
 				{
+#ifndef NEO
 					// Reset key, so it will be activated post whatever is suppressing it.
 					m_nButtons &= ~IN_SPEED;
+#endif
 				}
 			}
 		}

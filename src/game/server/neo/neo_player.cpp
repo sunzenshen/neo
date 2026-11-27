@@ -890,7 +890,7 @@ void CNEO_Player::HandleSpeedChangesLegacy()
 	bool bWantSprint = ( bCanSprint && IsSuitEquipped() && (m_nButtons & IN_SPEED) && (m_nButtons & (IN_FORWARD | IN_BACK | IN_MOVELEFT | IN_MOVERIGHT)));
 #endif
 #ifdef NEO
-	if ( bIsSprinting != bWantSprint && ((m_nButtons & IN_SPEED) || buttonsChanged & IN_SPEED))
+	if ( bIsSprinting != bWantSprint && ((bIsSprinting && (m_nButtons & IN_SPEED)) || buttonsChanged & IN_SPEED))
 #else
 	if ( bIsSprinting != bWantSprint && (buttonsChanged & IN_SPEED)  )
 #endif
