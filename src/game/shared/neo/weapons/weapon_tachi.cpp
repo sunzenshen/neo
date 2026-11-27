@@ -109,9 +109,10 @@ void CWeaponTachi::ItemPostFrame( void )
 		if (m_flSoonestFiremodeSwitch < gpGlobals->curtime)
 		{
 			SwitchFireMode();
-#define TACHI_FASTEST_FIREMODE_SWITCH_TIME 0.2f
+#define TACHI_FASTEST_FIREMODE_SWITCH_TIME 0.65f
 			m_flSoonestFiremodeSwitch = gpGlobals->curtime + TACHI_FASTEST_FIREMODE_SWITCH_TIME;
 			m_flSoonestAttack = gpGlobals->curtime + TACHI_FASTEST_FIREMODE_SWITCH_TIME;
+			m_flNextPrimaryAttack = Max(m_flNextPrimaryAttack.Get(), m_flSoonestAttack.Get());
 			return;
 		}
 	}
