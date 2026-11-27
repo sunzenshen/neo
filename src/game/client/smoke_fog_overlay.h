@@ -49,6 +49,11 @@ void TermSmokeFogOverlay();
 void DrawSmokeFogOverlay();
 #ifdef NEO
 void UpdateThermalOverride();
+// True when the overlay this frame will be fully opaque over the whole view.
+bool SmokeFogOverlayCoversView();
+// Adds to this frame's overlay alpha a share that takes the given display
+// color instead of the legacy gray.
+void AddSmokeFogOverlayColored( float alpha, const Vector &color );
 #endif
 
 // Set these before calling DrawSmokeFogOverlay.

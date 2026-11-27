@@ -18,6 +18,7 @@
 #include "hltvcamera.h"
 #include "hud_crosshair.h"
 #include "ui/neo_hud_deathnotice.h"
+#include "c_te_legacytempents.h"
 #else
 #include "neo_player.h"
 #include "team.h"
@@ -56,6 +57,10 @@ ConVar sv_neo_exp_dmg_modifier("sv_neo_exp_dmg_modifier", "1.485", FCVAR_REPLICA
 ConVar sv_neo_player_restore("sv_neo_player_restore", "1", FCVAR_REPLICATED, "If enabled, the server will save players XP and deaths per match session and restore them if they reconnect.", true, 0.0f, true, 1.0f);
 
 ConVar sv_neo_spraydisable("sv_neo_spraydisable", "0", FCVAR_REPLICATED, "If enabled, disables the players ability to spray.", true, 0.0f, true, 1.0f);
+
+// -1, left out of the help on purpose, is volumetric smoke drawn as the
+// cover boxes on every client: it shows where the smoke can block sight.
+ConVar sv_neo_smoke_volumetric("sv_neo_smoke_volumetric", "0", FCVAR_REPLICATED | FCVAR_NOTIFY, "Smoke grenades: 0 = legacy particle smoke, 1 = volumetric smoke. Applies from the next detonation.", true, -1.0f, true, 1.0f);
 
 ConVar sv_neo_class_limit_recon("sv_neo_class_limit_recon", "-1", FCVAR_REPLICATED, "Maximum number of Recon class players per team (-1 = no limit, 0 = banned).", true, -1, true, 32);
 ConVar sv_neo_class_limit_assault("sv_neo_class_limit_assault", "-1", FCVAR_REPLICATED, "Maximum number of Assault class players per team (-1 = no limit, 0 = banned).", true, -1, true, 32);
@@ -1928,6 +1933,7 @@ void CNEORules::FireGameEvent(IGameEvent* event)
 	{
 #ifdef CLIENT_DLL
 		engine->ClientCmd("r_cleardecals");
+		NEO_RemoveTempEntDebris();
 		engine->ClientCmd("classmenu");
 
 		if (!engine->IsRecordingDemo() && sv_neo_client_autorecord.GetBool() && cl_neo_client_autorecord_allow.GetBool())

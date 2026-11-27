@@ -20,6 +20,10 @@
 #define TE_EXPLFLAG_NOFIREBALL	0x40	// do not draw a fireball
 #define TE_EXPLFLAG_NOFIREBALLSMOKE	0x80	// do not draw smoke with the fireball
 
+#ifdef NEO
+#define TE_PHYSPROPFLAG_DEBRIS	0x2	// physics prop collides only with the world, stays until the round restarts
+
+#endif // NEO
 #define	TE_BEAMPOINTS		0		// beam effect between two points
 #define TE_SPRITE			1	// additive sprite, plays 1 cycle
 #define TE_BEAMDISK			2	// disk that expands to max radius over lifetime

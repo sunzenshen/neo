@@ -127,6 +127,7 @@ target_sources_grouped(
     Neo_SSAO_Shader.cpp
     Neo_TestShader.cpp
     Neo_ThermalVision.cpp
+    Neo_VolSmoke.cpp
     neo_thermal_model_dx9.cpp
     neo_thermal_model_dx9_helper.cpp
     neo_thermal_model_dx9_helper.h
