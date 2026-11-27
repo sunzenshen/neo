@@ -2560,6 +2560,8 @@ void CNEO_Player::Weapon_DropOnDeath(CNEOBaseCombatWeapon* pNeoWeapon, Vector da
 		pNeoWeapon->AddEffects(EF_BONEMERGE);
 	}
 
+	pNeoWeapon->StopReloadOnDrop();
+
 	Vector playerVelocity = vec3_origin;
 	GetVelocity(&playerVelocity, nullptr);
 	pNeoWeapon->Drop(playerVelocity);
@@ -3028,6 +3030,7 @@ void CNEO_Player::Weapon_Drop( CBaseCombatWeapon *pWeapon,
 		return; // Return early to not drop weapon
 	}
 
+	neoWeapon->StopReloadOnDrop();
 	pWeapon->m_bInReload = false;
 	pWeapon->StopWeaponSound(RELOAD_NPC);
 

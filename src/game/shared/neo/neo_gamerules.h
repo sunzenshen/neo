@@ -245,6 +245,7 @@ public:
 	int GetForcedSkin();
 	int GetForcedWeapon();
 	bool IsCyberspace();
+	bool IsReloadExperimental() const { return m_bReloadExperimental; }
 	virtual const char* GetGameTypeName(void) OVERRIDE;
 	bool CanChangeTeamClassLoadoutWhenAlive();
 	bool CanRespawnAnyTime();
@@ -556,6 +557,7 @@ private:
 	CNetworkVar(int, m_iForcedSkin);
 	CNetworkVar(int, m_iForcedWeapon);
 	CNetworkVar(bool, m_bCyberspaceLevel);
+	CNetworkVar(bool, m_bReloadExperimental);
 	CNetworkVar(int, m_nGameTypeSelected);
 	CNetworkVar(int, m_iRoundNumber);
 	CNetworkVar(bool, m_bIsMatchPoint);
