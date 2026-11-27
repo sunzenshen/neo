@@ -638,6 +638,20 @@ CNEOBot::~CNEOBot()
 
 
 //-----------------------------------------------------------------------------------------------------
+void CNEOBot::StartGrenadeThrowCooldown( float duration )
+{
+	m_grenadeThrowCooldownTimer.Start( duration );
+}
+
+
+//-----------------------------------------------------------------------------------------------------
+bool CNEOBot::IsOnGrenadeThrowCooldown() const
+{
+	return !m_grenadeThrowCooldownTimer.IsElapsed();
+}
+
+
+//-----------------------------------------------------------------------------------------------------
 void CNEOBot::Spawn()
 {
 	// CNEOBot do m_iNeoClass a bit earlier
@@ -658,6 +672,7 @@ void CNEOBot::Spawn()
 	m_spawnArea = NULL;
 	m_suppressiveFire.Reset();
 	m_justLostPointTimer.Invalidate();
+	m_grenadeThrowCooldownTimer.Invalidate();
 	m_squad = NULL;
 	m_didReselectClass = false;
 	m_isLookingAroundForEnemies = true;

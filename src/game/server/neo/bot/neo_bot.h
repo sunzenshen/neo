@@ -476,6 +476,8 @@ public:
 	bool m_bRespawnCopyCorpse = false;
 
 	CNEOBotSuppressiveFire *GetSuppressiveFire( void ) { return &m_suppressiveFire; }
+	void StartGrenadeThrowCooldown( float duration );
+	bool IsOnGrenadeThrowCooldown() const;
 
 private:
 	void ToggleCloak(void);
@@ -485,6 +487,7 @@ private:
 	CountdownTimer m_visionCheckTimer;
 	CountdownTimer m_visionHoldTimer;
 	CountdownTimer m_smokeThermalTimer;
+	CountdownTimer m_grenadeThrowCooldownTimer;
 
 	CNEOBotSuppressiveFire m_suppressiveFire;
 
