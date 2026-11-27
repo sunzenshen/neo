@@ -21,6 +21,7 @@
 #include "decals.h"
 #include "neo_weapon_loadout.h"
 #include "behavior/neo_bot_behavior.h"
+#include "behavior/neo_bot_grenade_throw.h"
 #include "neo_crosshair.h"
 #include "neo/weapons/weapon_ghost.h"
 
@@ -1297,10 +1298,43 @@ void CNEOBot::OnWeaponFired(CBaseCombatCharacter* whoFired, CBaseCombatWeapon* w
 
 
 //-----------------------------------------------------------------------------------------------------
+class CNEOThrowPointSearch
+{
+public:
+	CNEOThrowPointSearch(const CNEOBot &bot, const Vector &eye, const Vector *pRangeCheckVelocity)
+		: m_bot(bot), m_eye(eye), m_pRangeCheckVelocity(pRangeCheckVelocity)
+	{
+	}
+
+	Vector FindPoint(const CNavArea *area, const Vector &point) const
+	{
+		if (CanThrowAt(point))
+		{
+			return point;
+		}
+
+		const Vector &center = area->GetCenter();
+		return CanThrowAt(center) ? center : vec3_invalid;
+	}
+
+private:
+	bool CanThrowAt(const Vector &point) const
+	{
+		QAngle angles;
+		return (!m_pRangeCheckVelocity || !IsGrenadeThrowOutOfRange(m_eye, *m_pRangeCheckVelocity, point, angles)) &&
+			m_bot.IsThrowLineClear(m_eye, point);
+	}
+
+	const CNEOBot &m_bot;
+	const Vector &m_eye;
+	const Vector *m_pRangeCheckVelocity;
+};
+
 class CNEOFindClosestPotentiallyVisibleAreaToPos
 {
 public:
-	CNEOFindClosestPotentiallyVisibleAreaToPos(const Vector& pos)
+	CNEOFindClosestPotentiallyVisibleAreaToPos(const Vector& pos, const CNEOThrowPointSearch *pThrowSearch = nullptr)
+		: m_pThrowSearch(pThrowSearch)
 	{
 		m_pos = pos;
 		m_closeArea = NULL;
@@ -1314,47 +1348,67 @@ public:
 		Vector close;
 		area->GetClosestPointOnArea(m_pos, &close);
 
-		float rangeSq = (close - m_pos).LengthSqr();
-		if (rangeSq < m_closeRangeSq)
+		const float rangeSq = (close - m_pos).LengthSqr();
+		if (rangeSq >= m_closeRangeSq)
 		{
-			m_closeArea = area;
-			m_closeRangeSq = rangeSq;
+			return true;
 		}
 
+		if (m_pThrowSearch)
+		{
+			const Vector point = m_pThrowSearch->FindPoint(area, close);
+			if (point == vec3_invalid)
+			{
+				return true;
+			}
+			m_throwPoint = point;
+		}
+
+		m_closeArea = area;
+		m_closeRangeSq = rangeSq;
 		return true;
 	}
 
 	Vector m_pos;
 	CNavArea* m_closeArea;
 	float m_closeRangeSq;
+	Vector m_throwPoint = vec3_invalid;
+
+private:
+	const CNEOThrowPointSearch *m_pThrowSearch;
 };
 
 
 //-----------------------------------------------------------------------------------------------------
 Vector CNEOBot::FindVisibleThrowPointNear( const Vector &vecPos ) const
 {
-	CNavArea *myArea = GetLastKnownArea();
-	if ( !myArea )
+	return FindVisibleThrowPointNear( vecPos, GetLastKnownArea(), const_cast<CNEOBot*>(this)->EyePosition() );
+}
+
+Vector CNEOBot::FindVisibleThrowPointNear( const Vector &vecPos, CNavArea *pFromArea, const Vector &vecEye,
+	const Vector *pRangeCheckVelocity ) const
+{
+	if ( !pFromArea )
 	{
 		return vec3_invalid;
 	}
 
-	CNEOFindClosestPotentiallyVisibleAreaToPos find( vecPos );
-	myArea->ForAllPotentiallyVisibleAreas( find );
+	const CNEOThrowPointSearch throwSearch( *this, vecEye, pRangeCheckVelocity );
+	CNEOFindClosestPotentiallyVisibleAreaToPos find( vecPos, pRangeCheckVelocity ? &throwSearch : nullptr );
+	pFromArea->ForAllPotentiallyVisibleAreas( find );
 	if ( !find.m_closeArea )
 	{
 		return vec3_invalid;
 	}
 
-	Vector vecPoint;
-	find.m_closeArea->GetClosestPointOnArea( vecPos, &vecPoint );
-	if ( IsThrowLineClear( vecPoint ) )
+	if ( pRangeCheckVelocity )
 	{
-		return vecPoint;
+		return find.m_throwPoint;
 	}
 
-	const Vector &vecCenter = find.m_closeArea->GetCenter();
-	return IsThrowLineClear( vecCenter ) ? vecCenter : vec3_invalid;
+	Vector vecPoint;
+	find.m_closeArea->GetClosestPointOnArea( vecPos, &vecPoint );
+	return throwSearch.FindPoint( find.m_closeArea, vecPoint );
 }
 
 

@@ -146,6 +146,13 @@ float GetThrowTolerance( const CNEOBot *me )
 }
 } // namespace
 
+bool IsGrenadeThrowOutOfRange( const Vector &vecEye, const Vector &vecVel, const Vector &vecTarget, QAngle &angOut )
+{
+	// Ignore throws whose best arc misses by more than half the blast radius.
+	const float flUnreachableMiss = 0.5f * sv_neo_grenade_blast_radius.GetFloat();
+	return SolveThrowAngles( vecEye, vecVel, vecTarget, angOut ) > flUnreachableMiss;
+}
+
 ConVar sv_neo_bot_grenade_debug_behavior("sv_neo_bot_grenade_debug_behavior", "0", FCVAR_CHEAT,
 	"Draw debug overlays for bot grenade behavior", true, 0, true, 1);
 
@@ -183,12 +190,13 @@ CNEOBotGrenadeThrow::CNEOBotGrenadeThrow( CNEOBaseCombatWeapon *pWeapon, const C
 class CFindVantagePointTargetPos : public ISearchSurroundingAreasFunctor
 {
 public:
-	CFindVantagePointTargetPos( CNEOBot *me, const Vector &targetPos, CBaseEntity *pThreat )
+	CFindVantagePointTargetPos( CNEOBot *me, const Vector &targetPos, CBaseEntity *pThreat, bool bSmoke )
 	{
 		m_me = me;
 		m_targetPos = targetPos;
 		m_vantageArea = nullptr;
 		m_threatArea = nullptr;
+		m_bSmoke = bSmoke;
 		m_targetArea = TheNavMesh->GetNavArea( m_targetPos );
 
 		if ( pThreat )
@@ -215,9 +223,13 @@ public:
 	{
 		CNavArea* area = (CNavArea*)baseArea;
 
-		if ( area->IsCompletelyVisible( m_targetArea ) )
+		// Test smoke reach with the bot stopped at the vantage area's center.
+		const bool bCanThrow = m_bSmoke
+			? m_me->FindVisibleThrowPointNear( m_targetPos, area,
+				area->GetCenter() + m_me->GetViewOffset(), &vec3_origin ) != vec3_invalid
+			: area->IsCompletelyVisible( m_targetArea );
+		if ( bCanThrow )
 		{
-			// nearby area from which we have a full view of the last known position
 			m_vantageArea = area;
 			return false; // stop searching
 		}
@@ -236,7 +248,7 @@ public:
 		// For considering areas off to the side of current area
 		constexpr float distanceThresholdRatio = 0.8f;
 
-		if ( m_threatArea )
+		if ( !m_bSmoke && m_threatArea )
 		{
 			// The adjacent area to search should not be farther from the threat
 			float adjThreatDistance = ( m_threatArea->GetCenter() - adjArea->GetCenter() ).LengthSqr();
@@ -249,9 +261,7 @@ public:
 			// The adjacent area to search should not be closer than the safety range
 			if ( adjThreatDistance < m_flSafetyRadiusSq )
 			{
-				// NEO JANK: While this range is based on frag grenades,
-				// it's still likely a bad idea to throw smoke grenades this close to the threat
-				// Though logic at time of comment just throws smoke safely from behind cover
+				// NEO JANK: Frag clearance here is measured from the threat area's center.
 				return false; // Candidate adjacent area is too close to threat
 			}
 		}
@@ -267,17 +277,18 @@ public:
 	const CNavArea *m_threatArea;
 	float m_flSafetyRadiusSq;
 	float m_flSearchRange;
+	bool m_bSmoke;
 };
 
 
 //---------------------------------------------------------------------------------------------
-// Search outwards from the bot for the nearest reachable area with a full view of the
-// threat's last known position. Returns nullptr if the last known position is off the nav
-// mesh, or if there is no such area within range.
+// Search outwards for a reachable area from which to throw toward the threat's last known
+// position. Returns nullptr if no such area is in range, or if a frag target is off the nav mesh.
 CNavArea *CNEOBotGrenadeThrow::FindVantageArea( CNEOBot *me )
 {
-	CFindVantagePointTargetPos find( me, m_vecThreatLastKnownPos, m_hThreatGrenadeTarget.Get() );
-	if ( !find.m_targetArea )
+	const bool bSmoke = ( m_hGrenadeWeapon->GetNeoWepBits() & NEO_WEP_SMOKE_GRENADE ) != 0;
+	CFindVantagePointTargetPos find( me, m_vecThreatLastKnownPos, m_hThreatGrenadeTarget.Get(), bSmoke );
+	if ( !bSmoke && !find.m_targetArea )
 	{
 		// The last known position isn't on the nav mesh, so there is nothing to get a view of
 		return nullptr;
@@ -299,9 +310,7 @@ CNEOBotGrenadeThrow::ThrowAimResult CNEOBotGrenadeThrow::UpdateThrowAim( CNEOBot
 	// Re-solve only once the solution drifts: AimHeadTowards ignores a new point mid-turn
 	if ( m_vecThrowLookAt == vec3_invalid || PredictMiss( vecEye, m_angThrowSolved, vecVel, m_vecTarget ) > 0.5f * flTolerance )
 	{
-		// Not worth throwing if even the best arc misses by more than half the blast radius
-		const float flUnreachableMiss = 0.5f * sv_neo_grenade_blast_radius.GetFloat();
-		if ( SolveThrowAngles( vecEye, vecVel, m_vecTarget, m_angThrowSolved ) > flUnreachableMiss )
+		if ( IsGrenadeThrowOutOfRange( vecEye, vecVel, m_vecTarget, m_angThrowSolved ) )
 		{
 			m_vecThrowLookAt = vec3_invalid;
 			return THROW_AIM_UNREACHABLE;
@@ -377,7 +386,7 @@ ActionResult< CNEOBot >	CNEOBotGrenadeThrow::OnStart( CNEOBot *me, Action< CNEOB
 		return Done( "Targeted threat position invalid" );
 	}
 
-	// Smoke grenades don't need vantage point planning since they don't have unsafe radius.
+	// Smoke only needs a vantage point if the initial throw-point scan fails.
 	if ( !( pWep->GetNeoWepBits() & NEO_WEP_SMOKE_GRENADE ) )
 	{
 		m_vantageArea = FindVantageArea( me );
@@ -546,11 +555,19 @@ ActionResult< CNEOBot >	CNEOBotGrenadeThrow::Update( CNEOBot *me, float interval
 				"Looking towards last known threat position while moving to vantage point");
 		}
 
-		if ( m_vantageArea && me->GetLastKnownArea() == m_vantageArea )
+		const bool bSmoke = ( pWep->GetNeoWepBits() & NEO_WEP_SMOKE_GRENADE ) != 0;
+		// A smoke throw line was checked from the area's center, so keep walking past the edge.
+		if ( m_vantageArea && me->GetLastKnownArea() == m_vantageArea &&
+			( !bSmoke || !m_PathFollower.IsValid() ) )
 		{
 			// Arrived at vantage point but still blocked - fallback to chase
 			m_bVantagePointBlocked = true;
 			m_vantageArea = nullptr;
+			if ( bSmoke && m_repathTimer.GetRemainingTime() < m_scanTimer.GetRemainingTime() )
+			{
+				// Give the smoke scan a chance from the end of the path before moving on.
+				m_repathTimer.Start( m_scanTimer.GetRemainingTime() );
+			}
 		}
 
 		if ( m_repathTimer.IsElapsed() )
