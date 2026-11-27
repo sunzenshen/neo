@@ -26,6 +26,15 @@ CNEOBotRetreatToCover::CNEOBotRetreatToCover( float hideDuration )
 
 
 //---------------------------------------------------------------------------------------------
+CNEOBotRetreatToCover::CNEOBotRetreatToCover( const EHANDLE &hSmokeToLeave )
+	: CNEOBotRetreatToCover()
+{
+	m_bSeekHardCover = true;
+	m_hAvoidSmoke = hSmokeToLeave;
+}
+
+
+//---------------------------------------------------------------------------------------------
 CNEOBotRetreatToCover::CNEOBotRetreatToCover( Action< CNEOBot > *actionToChangeToOnceCoverReached )
 {
 	m_hideDuration = -1.0f;
@@ -38,10 +47,11 @@ CNEOBotRetreatToCover::CNEOBotRetreatToCover( Action< CNEOBot > *actionToChangeT
 class CTestAreaAgainstThreats :  public IVision::IForEachKnownEntity
 {
 public:
-	CTestAreaAgainstThreats( CNEOBot *me, CNavArea *area )
+	CTestAreaAgainstThreats( CNEOBot *me, CNavArea *area, bool bSeekHardCover = false )
 	{
 		m_me = me;
 		m_area = area;
+		m_bSeekHardCover = bSeekHardCover;
 		m_exposedThreatCount = 0;
 	}
 
@@ -66,11 +76,12 @@ public:
 			return true; // Candidate area is not visible by threat
 		}
 
-		// Only consider smoke as concealment if I can see through it but the enemy cannot (thermal vision)
+		// Hard cover ignores smoke; ordinary retreats can use thermal concealment.
 		CNEO_Player *pThreatPlayer = ToNEOPlayer( known.GetEntity() );
-		if ( pThreatPlayer && (pThreatPlayer->GetClass() != NEO_CLASS_SUPPORT) && (m_me->GetClass() == NEO_CLASS_SUPPORT) )
+		if ( pThreatPlayer && ( m_bSeekHardCover ||
+			( pThreatPlayer->GetClass() != NEO_CLASS_SUPPORT && m_me->GetClass() == NEO_CLASS_SUPPORT ) ) )
 		{
-			ScopedSmokeLOS smokeScope( false );
+			ScopedSmokeLOS smokeScope( m_bSeekHardCover );
 
 			Vector vecThreatEye = known.GetLastKnownPosition() + pThreatPlayer->GetViewOffset();
 			Vector vecCandidateArea = m_area->GetCenter() + m_me->GetViewOffset();
@@ -82,7 +93,7 @@ public:
 
 			if ( tr.fraction < 1.0f )
 			{
-				return true; // Smoke provides concealment from this threat
+				return true; // The threat cannot see this area
 			}
 		}
 
@@ -95,6 +106,7 @@ public:
 	CNEOBot *m_me;
 	CNavArea *m_area;
 	int m_exposedThreatCount;
+	bool m_bSeekHardCover;
 };
 
 
@@ -127,9 +139,11 @@ static constexpr int NEO_BOT_STUCK_AREA_EXPOSURE = 1;
 class CSearchForCover : public ISearchSurroundingAreasFunctor
 {
 public:
-	CSearchForCover( CNEOBot *me )
+	CSearchForCover( CNEOBot *me, bool bSeekHardCover, CBaseEntity *pAvoidSmoke )
 	{
 		m_me = me;
+		m_bSeekHardCover = bSeekHardCover;
+		m_pAvoidSmoke = pAvoidSmoke;
 		m_minExposureCount = 9999;
 
 		if ( neo_bot_debug_retreat_to_cover.GetBool() )
@@ -141,6 +155,12 @@ public:
 		VPROF_BUDGET( "CSearchForCover::operator()", "NextBot" );
 
 		CNavArea *area = (CNavArea *)baseArea;
+
+		// Do not return to the cloud after being hit there.
+		if ( m_pAvoidSmoke && m_pAvoidSmoke->CollisionProp()->IsPointInBounds( area->GetCenter() ) )
+		{
+			return true;
+		}
 
 		// Skip areas that are hazardous or where bots get stuck
 		const AreaPenalty_t penalty = CNEOBotPathReservations()->GetAreaPenalty( area->GetID() );
@@ -157,7 +177,7 @@ public:
 			}
 		}
 
-		CTestAreaAgainstThreats test( m_me, area );
+		CTestAreaAgainstThreats test( m_me, area, m_bSeekHardCover );
 		m_me->GetVisionInterface()->ForEachKnownEntity( test );
 
 		// an area where a bot got stuck this round counts as exposed to one more threat
@@ -205,6 +225,8 @@ public:
 	CNEOBot *m_me;
 	CUtlVector< CNavArea * > m_coverAreaVector;
 	int m_minExposureCount;
+	bool m_bSeekHardCover;
+	CBaseEntity *m_pAvoidSmoke;
 };
 
 
@@ -213,7 +235,7 @@ CNavArea *CNEOBotRetreatToCover::FindCoverArea( CNEOBot *me )
 {
 	VPROF_BUDGET( "CNEOBotRetreatToCover::FindCoverArea", "NextBot" );
 
-	CSearchForCover search( me );
+	CSearchForCover search( me, m_bSeekHardCover, m_hAvoidSmoke.Get() );
 	SearchSurroundingAreas( me->GetLastKnownArea(), search );
 
 	if ( search.m_coverAreaVector.Count() == 0 )
@@ -271,7 +293,7 @@ ActionResult< CNEOBot >	CNEOBotRetreatToCover::Update( CNEOBot *me, float interv
 	{
 		me->ReloadIfLowClip();
 	}
-	else if ( IsThreatGhostCarrier( threat ) )
+	else if ( !m_bSeekHardCover && IsThreatGhostCarrier( threat ) )
 	{
 		return Done( "Stopping retreat because my threat is the ghost carrier" );
 	}
@@ -311,7 +333,10 @@ ActionResult< CNEOBot >	CNEOBotRetreatToCover::Update( CNEOBot *me, float interv
 	}
 
 	// move to cover, or stop if we've found opportunistic cover (no visible threats right now)
-	if ( me->GetLastKnownArea() == m_coverArea || !threat )
+	// After a hit in smoke, concealment alone is not a reason to stop moving.
+	const bool bOutsideSmoke = !m_hAvoidSmoke || !m_hAvoidSmoke->CollisionProp()->IsPointInBounds( me->GetAbsOrigin() );
+	if ( ( me->GetLastKnownArea() == m_coverArea && bOutsideSmoke ) ||
+		( !threat && !m_bSeekHardCover ) )
 	{
 		// we are now in cover
 
