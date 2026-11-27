@@ -406,8 +406,7 @@ bool CHL2MPPlayerAnimState::HandleSwimming( Activity &idealActivity )
 }
 
 #ifdef NEO
-// Sprinting below this speed (from a stand, or stopping with the key held) plays the walk legs, as the sprint legs slide;
-// classic NEOTOKYO switches at 175 u/s, which neo's slowest sprints (185 u/s) dip below at every turn
+// Slower than the walk legs' stride, the sprint legs shuffle in place
 static constexpr float SPRINT_LEGS_MIN_SPEED = 100.0f;
 #endif
 
