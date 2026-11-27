@@ -211,6 +211,7 @@ public:
 
 	void ViewKick(const QAngle &angleOffset);
 	void ViewKickReset();
+	QAngle GetInterpolatedViewKick() const;
 
 private:
 	char m_sNameWithTakeoverContextProcessingBuffer[MAX_PLAYER_NAME_LENGTH];

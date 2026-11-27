@@ -29,6 +29,8 @@
 #endif // PORTAL
 
 #ifdef NEO
+#include "iviewrender.h"
+#include "view_shared.h"
 #include "weapon_neobasecombatweapon.h"
 #include "weapon_srs.h"
 #include "neo_gamerules.h"
@@ -66,6 +68,17 @@ void CVGlobal_NeoClCrosshair(IConVar *var, [[maybe_unused]] const char *pOldStri
 
 ConVar cl_neo_crosshair_scope_inaccuracy("cl_neo_crosshair_scope_inaccuracy", "1", FCVAR_ARCHIVE, "Show the player's inaccuracy when scoped", true, 0, true, 1);
 ConVar cl_neo_crosshair_friendly_fire_warning("cl_neo_crosshair_friendly_fire_warning", "1", FCVAR_ARCHIVE, "Replace crosshair with friendly fire warning where applicable", true, 0, true, 1);
+
+enum NeoTrueAimMode
+{
+	TRUE_AIM_OFF,
+	TRUE_AIM_SCREEN,
+	TRUE_AIM_WORLD,
+};
+
+static ConVar cl_neo_crosshair_true_aim("cl_neo_crosshair_true_aim", "0", FCVAR_ARCHIVE,
+	"Show a center pip and a true-aim crosshair (0 = off, 1 = screen-space, 2 = world-space)",
+	true, TRUE_AIM_OFF, true, TRUE_AIM_WORLD);
 #endif
 
 CHudCrosshair::CHudCrosshair( const char *pElementName ) :
@@ -371,6 +384,49 @@ ConVar cl_neo_scope_restrict_to_rectangle("cl_neo_scope_restrict_to_rectangle", 
 
 #ifdef NEO
 
+static bool GetTrueAimPosition(C_NEO_Player *pPlayer, int iMode, const Vector2D &vecCenter, Vector2D &vecPosition)
+{
+	const CViewSetup &viewSetup = *view->GetViewSetup();
+	Vector vecAim;
+	AngleVectors(viewSetup.angles - pPlayer->GetInterpolatedViewKick(), &vecAim);
+
+	Vector vecScreen;
+	if (iMode == TRUE_AIM_WORLD)
+	{
+		// The stock non-VR offset path projects a direction without tracing it.
+		const Vector vecStart = pPlayer->Weapon_ShootPosition();
+		trace_t tr;
+		UTIL_TraceLine(vecStart, vecStart + vecAim * MAX_TRACE_LENGTH, MASK_SHOT, pPlayer, COLLISION_GROUP_NONE, &tr);
+		if (ScreenTransform(tr.endpos, vecScreen) != 0)
+		{
+			return false;
+		}
+	}
+	else
+	{
+		Vector vecForward, vecRight, vecUp;
+		AngleVectors(viewSetup.angles, &vecForward, &vecRight, &vecUp);
+		const float flDepth = DotProduct(vecAim, vecForward);
+		if (flDepth <= 0.0f)
+		{
+			return false;
+		}
+
+		// The render FOV already includes zoom and horizontal aspect scaling.
+		const float flHalfWidth = flDepth * tanf(DEG2RAD(viewSetup.fov * 0.5f));
+		vecScreen.x = DotProduct(vecAim, vecRight) / flHalfWidth;
+		vecScreen.y = DotProduct(vecAim, vecUp) * viewSetup.m_flAspectRatio / flHalfWidth;
+	}
+
+	if (fabsf(vecScreen.x) > 1.0f || fabsf(vecScreen.y) > 1.0f)
+	{
+		return false;
+	}
+
+	vecPosition.Init(vecCenter.x * (1.0f + vecScreen.x), vecCenter.y * (1.0f - vecScreen.y));
+	return true;
+}
+
 void CHudCrosshair::resetPlayersCrosshair()
 {
 	V_memset(m_szLocalStrPlayerCrosshair, 0, sizeof(m_szLocalStrPlayerCrosshair));
@@ -579,6 +635,26 @@ void CHudCrosshair::Paint( void )
 		showFriendlyFireCrosshair = IsPlayerIndex(iffTrace.GetEntityIndex()) && iffTrace.m_pEnt->GetTeamNumber() == pPlayer->GetTeamNumber();
 	}
 
+#ifdef NEO
+	// Scoped weapons have no view kick, so their overlay already marks the shot.
+	const int iTrueAimMode = cl_neo_crosshair_true_aim.GetInt();
+	const bool bTrueAim = iTrueAimMode != TRUE_AIM_OFF && !(bIsScopedWep && pPlayer->m_bInAim) && !bHideCrosshair &&
+		pPlayer->IsLocalPlayer() && pPlayer->IsAlive() && !pPlayer->IsObserver() &&
+		C_BasePlayer::LocalPlayerInFirstPersonView() && pPlayer->entindex() == render->GetViewEntity() && !UseVR();
+	Vector2D vecCenter(0.0f, 0.0f);
+	if (bTrueAim)
+	{
+		int screenWidth, screenHeight;
+		GetHudSize(screenWidth, screenHeight);
+		vecCenter.Init(screenWidth * 0.5f, screenHeight * 0.5f);
+
+		Vector2D vecAim = vecCenter;
+		bHideCrosshair = !GetTrueAimPosition(pPlayer, iTrueAimMode, vecCenter, vecAim);
+		iX = RoundFloatToInt(vecAim.x);
+		iY = RoundFloatToInt(vecAim.y);
+	}
+
+#endif
 	if (bIsScopedWep && pPlayer->m_bInAim)
 	{
 		m_pCrosshair->DrawSelfCropped (
@@ -657,6 +733,16 @@ void CHudCrosshair::Paint( void )
 		}
 	}
 
+#ifdef NEO
+	if (bTrueAim)
+	{
+		constexpr int PIP_HALF_SIZE = 1;
+		surface()->DrawSetColor(crh->color);
+		surface()->DrawFilledRect(Floor2Int(vecCenter.x) - PIP_HALF_SIZE, Floor2Int(vecCenter.y) - PIP_HALF_SIZE,
+			Ceil2Int(vecCenter.x) + PIP_HALF_SIZE, Ceil2Int(vecCenter.y) + PIP_HALF_SIZE);
+	}
+
+#endif
 	if (bIsScopedWep && pPlayer->m_bInAim)
 	{
 		int screenWidth, screenHeight;
