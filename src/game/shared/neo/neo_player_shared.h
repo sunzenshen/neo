@@ -298,6 +298,9 @@ extern bool IsThereRoomForLeanSlide(CNEO_Player *player,
 // Is the player allowed to aim zoom with a weapon of this type?
 bool IsAllowedToZoom(CNEOBaseCombatWeapon *pWep);
 
+// The point the use key aims for, and where the HUD marks a usable entity
+Vector GetUseTargetPos(CBaseEntity *pEntity);
+
 //ConVar sv_neo_resupply_anywhere("sv_neo_resupply_anywhere", "0", FCVAR_CHEAT | FCVAR_REPLICATED);
 
 static constexpr const SZWSZTexts SZWSZ_NEO_CLASS_STRS[NEO_CLASS__ENUM_COUNT] = {

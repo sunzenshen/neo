@@ -46,6 +46,7 @@ private:
 	CPanelAnimationVar(float, m_flBoxYFactor, "box_y_factor", "0.75");
 	CPanelAnimationVar(Color, m_BoxColor, "box_color", "20 20 20 220");
 	CPanelAnimationVar(Color, m_TextColor, "text_color", "255 255 255 255");
+	CPanelAnimationVar(Color, m_OutlineColor, "outline_color", "0 0 0 255");
 };
 
 void SetUseEntityListEntry(int index, C_BaseEntity* entity);
