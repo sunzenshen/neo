@@ -1077,12 +1077,6 @@ void CNEO_Player::CheckVisionButtons()
 		return;
 	}
 	
-	constexpr float MIN_INTERVAL_BETWEEN_VISION_TOGGLE = 0.1f;
-	if (gpGlobals->curtime - m_flVisionLastTime < MIN_INTERVAL_BETWEEN_VISION_TOGGLE)
-	{
-		return;
-	}
-
 	if (!(m_afButtonPressed & IN_VISION))
 	{
 		return;
