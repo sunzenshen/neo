@@ -149,6 +149,15 @@ public:
 	bool ShouldDrawHL2StyleQuickHud( void );
 
 	int GetClass() const { return m_iNeoClass; }
+	bool CanChangeClassNow() const;
+	// Seconds until class changes close; NEO_PICK_NO_DEADLINE if they stay open, 0 once closed
+	float GetClassChangeTimeLeft() const;
+	// Seconds until loadout picks stop being granted now; NEO_PICK_NO_DEADLINE if never, 0 once closed
+	float GetLoadoutChangeTimeLeft() const;
+	bool IsFarFromSpawnForLoadout() const;
+	bool HasLeftSpawnArea() const;
+	NeoPickState GetPickState() const;
+	bool CanChangeLoadoutNow() const;
 	int GetStar() const { return m_iNeoStar; }
 	int GetDisplayedHealth(int mode) const;
 
@@ -251,6 +260,10 @@ public:
 	CNetworkVar(int, m_bInLean);
 	CNetworkVar(bool, m_bCarryingGhost);
 	CNetworkVar(bool, m_bIneligibleForLoadoutPick);
+	CNetworkVar(float, m_flSpawnTime);
+	// Where this life started, for the loadout change distance limit
+	CNetworkVector(m_vecSpawnOrigin);
+	CNetworkVar(bool, m_bLeftSpawnArea);
 	CNetworkHandle(CBaseEntity, m_hServerRagdoll);
 	CNetworkHandle(CBasePlayer, m_hCommandingPlayer);
 

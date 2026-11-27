@@ -9,6 +9,8 @@
 #include "neo/game_controls/neo_button.h"
 #include "neo/game_controls/neo_image_button.h"
 
+class C_NEO_Player;
+
 #define CNeoLoadoutMenu CNeoLoadoutMenu_Dev
 
 class CNeoLoadoutMenu : public vgui::Frame, public IViewPortPanel
@@ -58,6 +60,9 @@ protected:
 	void SetLabelText(const char *textEntryName, wchar_t *text);
 	void MoveLabelToFront(const char *textEntryName);
 	void FindButtons();
+	void FindLabels();
+	void UpdatePickStatus(const C_NEO_Player *pPlayer);
+	void UpdateRepickHint();
 	void UpdateTimer() { }
 
 	// vgui overrides
@@ -80,6 +85,8 @@ protected:
 	vgui::CNeoImageButton *m_pButton11;
 	vgui::CNeoImageButton *m_pButton12;
 	vgui::CNeoButton *returnButton;
+	vgui::Label *m_pPickStatus_Label = nullptr;
+	vgui::Label *m_pRepickHint_Label = nullptr;
 
 	// Our viewport interface accessor
 	IViewPort *m_pViewPort;
