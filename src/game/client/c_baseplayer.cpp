@@ -2736,7 +2736,7 @@ float C_BasePlayer::GetFOV( void )
 				float perc = (gpGlobals->curtime - pTargetPlayer->m_flFOVTime) / NEO_ZOOM_SPEED;
 				perc = clamp(perc, 0.0f, 1.0f);
 				if (pTargetPlayer->m_bInAim) perc = 1.0f - perc;
-				fov = SimpleSplineRemapValClamped( perc, 0.0f, 1.0f, fovAim, fovNorm);
+				fov = RemapValClamped( perc, 0.0f, 1.0f, fovAim, fovNorm);
 				pTargetPlayer->m_flSpecFOV = fov;
 			}
 			return fov;
@@ -2789,7 +2789,11 @@ float C_BasePlayer::GetFOV( void )
 			}
 			else
 			{
+#ifdef NEO
+				fFOV = RemapValClamped( deltaTime, 0.0f, 1.0f, (float) m_iFOVStart, fFOV );
+#else
 				fFOV = SimpleSplineRemapValClamped( deltaTime, 0.0f, 1.0f, (float) m_iFOVStart, fFOV );
+#endif
 			}
 		}
 	}
