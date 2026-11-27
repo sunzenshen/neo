@@ -287,6 +287,12 @@ CNavArea *CNEOBotGrenadeThrow::FindVantageArea( CNEOBot *me )
 	return find.m_vantageArea;
 }
 
+bool CNEOBotGrenadeThrow::CanReachThrowTarget( CNEOBot *me, const Vector &vecTarget ) const
+{
+	QAngle angThrow;
+	return SolveThrowAngles( me->EyePosition(), me->GetAbsVelocity(), vecTarget, angThrow ) <= GetThrowTolerance( me );
+}
+
 //---------------------------------------------------------------------------------------------
 // Aim so the grenade detonates near m_vecTarget, allowing for the launch coupling, own velocity,
 // bounces and the fuse

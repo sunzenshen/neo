@@ -4,6 +4,47 @@
 #include "bot/behavior/neo_bot_grenade_throw_smoke.h"
 #include "neo_smokelineofsightblocker.h"
 #include "weapon_neobasecombatweapon.h"
+#include "NextBotUtil.h"
+#include "nav.h"
+
+extern ConVar sv_neo_smoke_blocker_size;
+
+static bool IsSmokeSightlineOpen( const Vector &vecEye, const Vector &vecThreatEye )
+{
+	NextBotVisionTraceFilter filter( nullptr, COLLISION_GROUP_NONE );
+	trace_t tr;
+	UTIL_TraceLine( vecEye, vecThreatEye, MASK_BLOCKLOS | CONTENTS_IGNORE_NODRAW_OPAQUE, &filter, &tr );
+	return !tr.DidHit();
+}
+
+static Vector FindSmokeScreenPoint( CNEOBot *me, const Vector &vecScreenEye, const Vector &vecThreatEye, float flCloudExtent )
+{
+	const Vector vecToThreat = vecThreatEye - vecScreenEye;
+	const float flDistance = vecToThreat.Length2D();
+	if ( flDistance <= HalfHumanWidth )
+	{
+		return vec3_invalid;
+	}
+
+	const Vector vecScreen = vecScreenEye + vecToThreat * Min( 0.5f, flCloudExtent / flDistance );
+	// A floor farther down would put the cloud below the sightline.
+	NextBotTraceFilterIgnoreActors filter( nullptr, COLLISION_GROUP_NONE );
+	trace_t tr;
+	UTIL_TraceLine( vecScreen, vecScreen - Vector( 0.0f, 0.0f, flCloudExtent ), MASK_SOLID, &filter, &tr );
+	if ( !tr.DidHit() || tr.startsolid )
+	{
+		return vec3_invalid;
+	}
+
+	constexpr float kFloorClearance = 1.0f;
+	const Vector vecTarget = tr.endpos + Vector( 0.0f, 0.0f, kFloorClearance );
+	if ( ( vecTarget - me->GetAbsOrigin() ).Length2DSqr() <= Square( HalfHumanWidth ) )
+	{
+		return vec3_invalid;
+	}
+
+	return me->IsThrowLineClear( vecTarget ) ? vecTarget : vec3_invalid;
+}
 
 namespace
 {
@@ -43,7 +84,7 @@ ActionResult< CNEOBot >	CNEOBotGrenadeThrowSmoke::OnStart( CNEOBot *me, Action< 
 	// Pick the target before committing, so a covered spot costs no weapon swap or pin pull
 	if ( m_vecThreatLastKnownPos != vec3_invalid && UpdateGrenadeTargeting( me, m_hGrenadeWeapon.Get() ) == THROW_TARGET_CANCEL )
 	{
-		return Done( "Smoke target already covered by friendly smoke" );
+		return Done( m_vecTarget == vec3_invalid ? "No useful smoke target" : "Smoke target already covered" );
 	}
 
 	ActionResult< CNEOBot > result = CNEOBotGrenadeThrow::OnStart( me, priorAction );
@@ -58,30 +99,46 @@ ActionResult< CNEOBot >	CNEOBotGrenadeThrowSmoke::OnStart( CNEOBot *me, Action< 
 CNEOBotGrenadeThrow::ThrowTargetResult CNEOBotGrenadeThrowSmoke::UpdateGrenadeTargeting( CNEOBot *me, CNEOBaseCombatWeapon *pWeapon )
 {
 	Assert( m_vecThreatLastKnownPos != vec3_invalid );
-	
-	if (m_vecTarget == vec3_invalid)
+	if ( m_vecTarget != vec3_invalid )
 	{
-		const Vector vecThrowTarget = me->FindVisibleThrowPointNear( m_vecThreatLastKnownPos );
+		// A cloud observed while aiming can already cover the target.
+		return IsPointInObservedSmoke( me, m_vecTarget ) ? THROW_TARGET_CANCEL : THROW_TARGET_READY;
+	}
 
-		if (vecThrowTarget != vec3_invalid)
+	const float flCloudExtent = sv_neo_smoke_blocker_size.GetFloat();
+	if ( flCloudExtent <= 0.0f )
+	{
+		return THROW_TARGET_CANCEL;
+	}
+
+	const Vector vecThreatEye = m_vecThreatLastKnownPos + Vector( 0.0f, 0.0f, HumanEyeHeight );
+	const Vector vecEye = me->EyePosition();
+	const bool bExposed = IsSmokeSightlineOpen( vecEye, vecThreatEye );
+	Vector vecScreenEye = vecEye;
+	if ( !bExposed )
+	{
+		const PathFollower *path = me->GetCurrentPath();
+		const Path::Segment *goal = ( path && path->IsValid() ) ? path->GetCurrentGoal() : nullptr;
+		if ( !goal || goal->type != Path::ON_GROUND || !me->IsRangeLessThan( goal->pos, me->GetDesiredPathLookAheadRange() ) )
 		{
-			m_vecTarget = vecThrowTarget;
-		}
-		else
-		{
-			// throw smoke at feet as fallback
-			m_vecTarget = me->GetAbsOrigin();
+			return THROW_TARGET_CANCEL;
 		}
 
-		if ( me->IsCoveredByFriendlySmoke( m_vecTarget ) )
+		vecScreenEye = goal->pos + me->GetViewOffset();
+		if ( !IsSmokeSightlineOpen( vecScreenEye, vecThreatEye ) )
 		{
 			return THROW_TARGET_CANCEL;
 		}
 	}
-	
-	Assert( m_vecTarget != vec3_invalid );
-	// A cloud observed while aiming can already cover the target.
-	if ( IsPointInObservedSmoke( me, m_vecTarget ) )
+
+	m_vecTarget = FindSmokeScreenPoint( me, vecScreenEye, vecThreatEye, flCloudExtent );
+	if ( m_vecTarget == vec3_invalid || !CanReachThrowTarget( me, m_vecTarget ) )
+	{
+		const bool bCanScreenAtFeet = bExposed && me->GetViewOffset().z < flCloudExtent;
+		m_vecTarget = bCanScreenAtFeet ? me->GetAbsOrigin() : vec3_invalid;
+	}
+
+	if ( m_vecTarget == vec3_invalid || me->IsCoveredByFriendlySmoke( m_vecTarget ) || IsPointInObservedSmoke( me, m_vecTarget ) )
 	{
 		return THROW_TARGET_CANCEL;
 	}

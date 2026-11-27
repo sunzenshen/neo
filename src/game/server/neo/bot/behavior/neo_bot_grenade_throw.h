@@ -59,6 +59,7 @@ protected:
 		THROW_AIM_UNREACHABLE,
 	};
 
+	bool CanReachThrowTarget( CNEOBot *me, const Vector &vecTarget ) const;
 	ThrowAimResult UpdateThrowAim( CNEOBot *me );
 	CNavArea *FindVantageArea( CNEOBot *me );
 
