@@ -35,6 +35,8 @@ constexpr float SUPPRESS_SWEEP_MAX_DEG = 12.0f;
 constexpr float SUPPRESS_SWEEP_PERIOD = 1.5f;
 // Keep sweeping through a stretch of the arc that is not worth firing down
 constexpr float SUPRESS_HOLD_AIM_TIME = 0.5f;
+// Allow for a skipped bot update between taking the aim and checking it.
+constexpr float SUPPRESS_AIM_RECENT_TIME = 0.25f;
 
 constexpr float HIT_LOOK_DISTANCE = 512.0f;
 constexpr float HIT_CLOAK_THRESHOLD = 3.0f;
@@ -147,6 +149,7 @@ void CNEOBotSuppressiveFire::Reset()
 	m_vecBelievedPos = vec3_origin;
 	m_fireWindowTimer.Invalidate();
 	m_holdAimTimer.Invalidate();
+	m_aimTakenTimer.Invalidate();
 	m_sweepPhase = 0.0f;
 	m_bearingErrorDeg = 0.0f;
 	m_rangeScale = 1.0f;
@@ -166,6 +169,7 @@ void CNEOBotSuppressiveFire::OpenFireWindow( CNEOBot *me, CBaseEntity *target, c
 	m_vecBelievedPos = RotateBearing( me->GetAbsOrigin(), pos, m_bearingErrorDeg, m_rangeScale );
 	m_fireWindowTimer.Start( RandomFloat( SUPPRESS_WINDOW_MIN, SUPPRESS_WINDOW_MAX ) );
 	m_holdAimTimer.Invalidate();
+	m_aimTakenTimer.Invalidate();
 	m_sweepPhase = RandomFloat( 0.0f, 1.0f ); // where in the sweep, and which way, the hose starts
 }
 
@@ -274,6 +278,27 @@ void CNEOBotSuppressiveFire::OnHeardGunfire( CNEOBot *me, CBaseEntity *shooter )
 
 
 //---------------------------------------------------------------------------------------------
+bool CNEOBotSuppressiveFire::GetBelievedPos( const CBaseEntity *target, Vector &pos ) const
+{
+	if ( !target || m_fireWindowTimer.IsElapsed() || m_hTarget.Get() != target )
+	{
+		return false;
+	}
+
+	pos = m_vecBelievedPos;
+	return true;
+}
+
+
+//---------------------------------------------------------------------------------------------
+bool CNEOBotSuppressiveFire::IsSuppressing( const CBaseEntity *target ) const
+{
+	return target && m_hTarget.Get() == target && !m_fireWindowTimer.IsElapsed()
+		&& m_aimTakenTimer.HasStarted() && m_aimTakenTimer.IsLessThen( SUPPRESS_AIM_RECENT_TIME );
+}
+
+
+//---------------------------------------------------------------------------------------------
 // FireWeaponAtEnemy calls this with its primary threat, once its own checks say I may fire at all.
 // Returns true while this is driving aiming behavior, so FireWeaponAtEnemy leaves the aim and trigger alone.
 bool CNEOBotSuppressiveFire::Update( CNEOBot *me, const CKnownEntity *threat )
@@ -332,6 +357,7 @@ bool CNEOBotSuppressiveFire::Update( CNEOBot *me, const CKnownEntity *threat )
 	}
 
 	me->GetBodyInterface()->AimHeadTowards( aimSpot, IBody::CRITICAL, 0.5f, nullptr, "Suppressing an unseen threat" );
+	m_aimTakenTimer.Start();
 
 	if ( bLineWorthFiring )
 	{

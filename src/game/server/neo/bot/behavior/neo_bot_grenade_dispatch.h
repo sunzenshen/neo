@@ -15,6 +15,7 @@ class CNEOBotGrenadeDispatch
 {
 public:
 	static Action< CNEOBot > *ChooseGrenadeThrowBehavior( const CNEOBot *me, const CKnownEntity *threat );
+	static bool GetSmokeHiddenThreatPos( const CNEOBot *me, const CKnownEntity *threat, Vector &pos );
 };
 
 #endif // NEO_BOT_GRENADE_DISPATCH_H

@@ -64,6 +64,7 @@ protected:
 
 	virtual ThrowTargetResult UpdateGrenadeTargeting( CNEOBot *me, CNEOBaseCombatWeapon *pWeapon ) = 0;
 	virtual void OnThrowReleased( CNEOBot *me ) { }
+	virtual Action< CNEOBot > *CreateRetreatAfterThrow( CNEOBot *me );
 
 };
 

@@ -43,6 +43,9 @@ private:
 
 	ActionResult< CNEOBot > ScavengeForPrimaryWeapon(CNEOBot* me);
 
+	CountdownTimer m_smokeFragTimer;
+	Action< CNEOBot > *ChooseSmokeFrag( CNEOBot *me );
+
 	void AvoidBumpingFriends(CNEOBot* me);
 	ActionResult< CNEOBot > WatchForLadders(CNEOBot* me);
 	void CloakPastNpcTurret(CNEOBot* me);

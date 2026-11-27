@@ -7,9 +7,16 @@
 class CNEOBotRetreatFromGrenade : public Action< CNEOBot >, public CNEOBotContextualQueryInterface
 {
 public:
-	CNEOBotRetreatFromGrenade( CBaseEntity *grenade = nullptr );
+	enum GrenadeDanger_t
+	{
+		DANGER_ALONG_FLIGHT,
+		DANGER_AT_REST,
+	};
+
+	CNEOBotRetreatFromGrenade( CBaseEntity *grenade = nullptr, GrenadeDanger_t eDanger = DANGER_ALONG_FLIGHT );
 
 	static CBaseEntity *FindDangerousGrenade( CNEOBot *me );
+	static CBaseEntity *FindOwnLiveFrag( CNEOBot *me );
 	static Vector PredictGrenadeRest( CBaseEntity *grenade );
 	static float GetGrenadeCoverDistance();
 
@@ -29,6 +36,7 @@ public:
 
 private:
 	CHandle< CBaseEntity > m_grenade;
+	GrenadeDanger_t m_eDanger;
 
 	PathFollower m_path;
 

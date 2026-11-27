@@ -27,6 +27,7 @@ ConVar neo_bot_grenade_check_radius( "neo_bot_grenade_check_radius", "500", FCVA
 static constexpr float kCoverEnemyExposureCost = 300.0f;
 static constexpr float kMaxGrenadeElasticity = 0.9f; // CBaseGrenadeProjectile::ResolveFlyCollisionCustom clamp
 static constexpr float kSqrt2 = 1.41421356f; // M_SQRT2 is not defined by MSVC
+static constexpr char kFragClassname[] = "neo_grenade_frag";
 
 
 //---------------------------------------------------------------------------------------------
@@ -115,7 +116,6 @@ CBaseEntity *CNEOBotRetreatFromGrenade::FindDangerousGrenade( CNEOBot *me )
 {
 	const float flGrenadeCheckRadius = neo_bot_grenade_check_radius.GetFloat();
 	CBaseEntity *closestThreat = NULL;
-	const char *pszGrenadeClass = "neo_grenade_frag";
 	
 	int iSound = CSoundEnt::ActiveList();
 	while ( iSound != SOUNDLIST_EMPTY )
@@ -132,7 +132,7 @@ CBaseEntity *CNEOBotRetreatFromGrenade::FindDangerousGrenade( CNEOBot *me )
 				CBaseEntity *pOwner = pSound->m_hOwner.Get();
 				// Use FClassnameIs to check if it's a generic base grenade or our specific ones
 				// FClassnameIs is better than dynamic_cast inside a loop when possible
-				if ( pOwner && ( FClassnameIs( pOwner, pszGrenadeClass ) || IsUnidentifiedSmoke( me, pOwner ) ) )
+				if ( pOwner && ( FClassnameIs( pOwner, kFragClassname ) || IsUnidentifiedSmoke( me, pOwner ) ) )
 				{
 					// Found a dangerous grenade
 					closestThreat = pOwner;
@@ -149,8 +149,35 @@ CBaseEntity *CNEOBotRetreatFromGrenade::FindDangerousGrenade( CNEOBot *me )
 
 
 //---------------------------------------------------------------------------------------------
-CNEOBotRetreatFromGrenade::CNEOBotRetreatFromGrenade( CBaseEntity *grenade )
-	: m_grenade(grenade)
+CBaseEntity *CNEOBotRetreatFromGrenade::FindOwnLiveFrag( CNEOBot *me )
+{
+	CBaseEntity *pNearest = nullptr;
+	float flNearestSqr = FLT_MAX;
+
+	for ( CBaseEntity *pEnt = gEntList.FindEntityByClassname( nullptr, kFragClassname ); pEnt;
+		pEnt = gEntList.FindEntityByClassname( pEnt, kFragClassname ) )
+	{
+		if ( static_cast< CBaseGrenade * >( pEnt )->GetThrower() != me )
+		{
+			continue;
+		}
+
+		const float flDistSqr = pEnt->GetAbsOrigin().DistToSqr( me->GetAbsOrigin() );
+		if ( flDistSqr < flNearestSqr )
+		{
+			flNearestSqr = flDistSqr;
+			pNearest = pEnt;
+		}
+	}
+
+	return pNearest;
+}
+
+
+//---------------------------------------------------------------------------------------------
+CNEOBotRetreatFromGrenade::CNEOBotRetreatFromGrenade( CBaseEntity *grenade, GrenadeDanger_t eDanger )
+	: m_grenade( grenade )
+	, m_eDanger( eDanger )
 	, m_coverArea( NULL )
 {
 }
@@ -161,7 +188,7 @@ CNEOBotRetreatFromGrenade::CNEOBotRetreatFromGrenade( CBaseEntity *grenade )
 class CSearchForCoverFromGrenade : public ISearchSurroundingAreasFunctor
 {
 public:
-	CSearchForCoverFromGrenade( CNEOBot *me, CBaseEntity *grenade )
+	CSearchForCoverFromGrenade( CNEOBot *me, CBaseEntity *grenade, CNEOBotRetreatFromGrenade::GrenadeDanger_t eDanger )
 	{
 		m_me = me;
 		m_grenade = grenade;
@@ -175,8 +202,10 @@ public:
 		m_restArea = nullptr;
 		if ( grenade )
 		{
-			m_vecDangerStart = grenade->GetAbsOrigin();
 			m_vecDangerEnd = CNEOBotRetreatFromGrenade::PredictGrenadeRest( grenade );
+			// Fleeing the start of our own throw can send us toward its landing spot.
+			m_vecDangerStart = ( eDanger == CNEOBotRetreatFromGrenade::DANGER_AT_REST ) ? m_vecDangerEnd : grenade->GetAbsOrigin();
+
 			m_restArea = TheNavMesh->GetNavArea( m_vecDangerEnd );
 			if ( !m_restArea )
 			{
@@ -293,7 +322,7 @@ CNavArea *CNEOBotRetreatFromGrenade::FindCoverArea( CNEOBot *me )
 {
 	VPROF_BUDGET( "CNEOBotRetreatFromGrenade::FindCoverArea", "NextBot" );
 
-	CSearchForCoverFromGrenade search( me, m_grenade );
+	CSearchForCoverFromGrenade search( me, m_grenade, m_eDanger );
 
 	CNavArea *startArea = me->GetLastKnownArea();
 	if ( !startArea )
@@ -331,8 +360,9 @@ ActionResult< CNEOBot >	CNEOBotRetreatFromGrenade::OnStart( CNEOBot *me, Action<
 		return Done("No grenade found");
 	}
 
-	// Register explosive hazard for the bot's team at the grenade's initial position
-	CNavArea *grenadeArea = TheNavMesh->GetNearestNavArea( m_grenade->GetAbsOrigin() );
+	// Avoid marking our own escape route as hazardous when the frag leaves our hand.
+	const Vector vecHazard = ( m_eDanger == DANGER_AT_REST ) ? PredictGrenadeRest( m_grenade ) : m_grenade->GetAbsOrigin();
+	CNavArea *grenadeArea = TheNavMesh->GetNearestNavArea( vecHazard );
 	if (grenadeArea)
 	{
 		int team = me->GetTeamNumber();

@@ -2,6 +2,7 @@
 #include "bot/neo_bot.h"
 #include "bot/neo_bot_path_reservation.h"
 #include "bot/behavior/neo_bot_grenade_throw_frag.h"
+#include "bot/behavior/neo_bot_retreat_from_grenade.h"
 #include "neo_gamerules.h"
 #include "neo_player.h"
 #include "weapon_neobasecombatweapon.h"
@@ -21,6 +22,30 @@ ConVar sv_neo_bot_grenade_frag_max_range_ratio("sv_neo_bot_grenade_frag_max_rang
 CNEOBotGrenadeThrowFrag::CNEOBotGrenadeThrowFrag( CNEOBaseCombatWeapon *pWeapon, const CKnownEntity *threat )
 	: CNEOBotGrenadeThrow( pWeapon, threat )
 {
+}
+
+CNEOBotGrenadeThrowFrag::CNEOBotGrenadeThrowFrag( CNEOBaseCombatWeapon *pWeapon, const CKnownEntity *threat, const Vector &vecSmokeTarget )
+	: CNEOBotGrenadeThrow( pWeapon, threat )
+	, m_bSmokeTarget( true )
+{
+	m_vecThreatLastKnownPos = vecSmokeTarget;
+}
+
+// Not using LINE_OF_FIRE_FLAGS_SHOTGUN because we want to abort grenade throw if threat could shoot us from behind glass
+bool CNEOBotGrenadeThrowFrag::IsImmediateThreat( CNEOBot *me, const CKnownEntity *threat ) const
+{
+	if ( !threat || !threat->GetEntity() )
+	{
+		return false;
+	}
+
+	// Bullets pass through smoke, so a clear line of fire does not mean the threat hidden in it can be seen
+	if ( m_bSmokeTarget && !threat->IsVisibleInFOVNow() )
+	{
+		return false;
+	}
+
+	return me->IsLineOfFireClear( threat->GetEntity(), CNEOBot::LINE_OF_FIRE_FLAGS_DEFAULT );
 }
 
 ActionResult< CNEOBot >	CNEOBotGrenadeThrowFrag::OnStart( CNEOBot *me, Action< CNEOBot > *priorAction )
@@ -48,8 +73,7 @@ CNEOBotGrenadeThrow::ThrowTargetResult CNEOBotGrenadeThrowFrag::UpdateGrenadeTar
 	// Check if there is a more immediate threat interrupting my grenade throw
 	bool bImmediateThreatPresent = false;
 	const CKnownEntity* pPrimaryThreat = me->GetVisionInterface()->GetPrimaryKnownThreat();
-	// Not using LINE_OF_FIRE_FLAGS_SHOTGUN because we want to abort grenade throw if threat could shoot us from behind glass
-	if (pPrimaryThreat && pPrimaryThreat->GetEntity() && me->IsLineOfFireClear(pPrimaryThreat->GetEntity(), CNEOBot::LINE_OF_FIRE_FLAGS_DEFAULT))
+	if ( IsImmediateThreat( me, pPrimaryThreat ) )
 	{
 		// consider panic throwing the grenade at the immediate threat
 		bImmediateThreatPresent = true;
@@ -117,6 +141,18 @@ void CNEOBotGrenadeThrowFrag::OnThrowReleased( CNEOBot *me )
 		int team = me->GetTeamNumber();
 		CNEOBotPathReservations()->AddFragHazard(area->GetID(), gpGlobals->curtime + sv_neo_grenade_fuse_timer.GetFloat(), team);
 	}
+}
+
+Action< CNEOBot > *CNEOBotGrenadeThrowFrag::CreateRetreatAfterThrow( CNEOBot *me )
+{
+	// The frag has yet to emit a danger sound the retreat could detect.
+	CBaseEntity *pFrag = m_bSmokeTarget ? CNEOBotRetreatFromGrenade::FindOwnLiveFrag( me ) : nullptr;
+	if ( !pFrag )
+	{
+		return CNEOBotGrenadeThrow::CreateRetreatAfterThrow( me );
+	}
+
+	return new CNEOBotRetreatFromGrenade( pFrag, CNEOBotRetreatFromGrenade::DANGER_AT_REST );
 }
 
 float CNEOBotGrenadeThrowFrag::GetFragSafetyRadius()

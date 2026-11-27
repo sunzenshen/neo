@@ -629,10 +629,16 @@ ActionResult< CNEOBot >	CNEOBotGrenadeThrow::Update( CNEOBot *me, float interval
 		}
 
 		// Would exit immediately for smoke, but enemies tend to frag back so look for one now
-		return ChangeTo( new CNEOBotRetreatFromGrenade( nullptr ), "Retreating after throw" );
+		return ChangeTo( CreateRetreatAfterThrow( me ), "Retreating after throw" );
 	}
 	
 	return Continue();
+}
+
+//---------------------------------------------------------------------------------------------
+Action< CNEOBot > *CNEOBotGrenadeThrow::CreateRetreatAfterThrow( CNEOBot * )
+{
+	return new CNEOBotRetreatFromGrenade( nullptr );
 }
 
 //---------------------------------------------------------------------------------------------
