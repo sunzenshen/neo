@@ -16,6 +16,7 @@
 #include "weapon_neobasecombatweapon.h"
 #include "weapon_knife.h"
 #include "nav_mesh.h"
+#include "NextBot/Path/NextBotPathFollow.h"
 #include "neo_penetration_resistance.h"
 #include "neo_shot_manipulator.h"
 #include "decals.h"
@@ -655,6 +656,7 @@ void CNEOBot::Spawn()
 
 	BaseClass::Spawn();
 
+	m_ladderHandicapCooldown.Invalidate();
 	m_spawnArea = NULL;
 	m_suppressiveFire.Reset();
 	m_justLostPointTimer.Invalidate();
@@ -2922,6 +2924,18 @@ bool CNEOBot::IsBotOnLadder() const
 	return ( GetMoveType() == MOVETYPE_LADDER ) ||
 		mover->IsUsingLadder() ||
 		mover->IsAscendingOrDescendingLadder();
+}
+
+//-----------------------------------------------------------------------------------------------------
+// A teleport or a released ladder leaves the follower's goal behind the bot,
+// and the behavior that owns the follower recomputes an invalid path
+void CNEOBot::InvalidateCurrentPath()
+{
+	const PathFollower *path = GetCurrentPath();
+	if ( path )
+	{
+		const_cast< PathFollower * >( path )->Invalidate();
+	}
 }
 
 

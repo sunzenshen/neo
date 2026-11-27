@@ -4,6 +4,8 @@
 #include "neo_player_shared.h"
 #include "../neo_player.h"
 
+class CNEOBot;
+
 //----------------------------------------------------------------------------
 class CNEOBotLocomotion : public PlayerLocomotion
 {
@@ -36,6 +38,8 @@ protected:
 private:
 	bool IsOnlyCrouchClearAhead( const Vector &moveGoal, float flReach ) const;
 	static bool IsLadderEnd( const CNavArea *area );
+	bool IsAtLadderBlockedByThreat() const;
+	void LeaveLadderForThreat( CNEOBot *me );
 
 	CountdownTimer m_headroomTimer;
 };

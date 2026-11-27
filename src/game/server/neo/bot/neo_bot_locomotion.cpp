@@ -2,11 +2,13 @@
 #include "neo_bot_locomotion.h"
 #include "neo_bot.h"
 #include "NextBotUtil.h"
+#include "NextBot/Path/NextBotPathFollow.h"
 
 // memdbgon must be the last include file in a .cpp file!!!
 #include "tier0/memdbgon.h"
 
 extern ConVar falldamage;
+extern ConVar NextBotLadderAlignRange;
 
 // How far towards its move goal a bot checks its headroom: at least about a hull width, so it ducks at the
 // obstacle rather than a long way before it,
@@ -14,6 +16,8 @@ static const float NEO_BOT_HEADROOM_LOOKAHEAD = 32.0f;
 // and how often, while the crouch press of one check lasts until the next
 static const float NEO_BOT_HEADROOM_CHECK_INTERVAL = 0.2f;
 static const float NEO_BOT_HEADROOM_CROUCH_HOLD = 0.3f;
+// A bot leaving a ladder for a threat backs off it this long, so it does not grab the ladder again
+static const float NEO_BOT_LADDER_LEAVE_BACK_TIME = 0.1f;
 
 //-----------------------------------------------------------------------------------------
 void CNEOBotLocomotion::Update( void )
@@ -23,6 +27,8 @@ void CNEOBotLocomotion::Update( void )
 	{
 		return;
 	}
+
+	LeaveLadderForThreat( me );
 
 	BaseClass::Update();
 
@@ -61,6 +67,12 @@ void CNEOBotLocomotion::Update( void )
 // Move directly towards the given position
 void CNEOBotLocomotion::Approach( const Vector& pos, float goalWeight )
 {
+	// The follower lines up with a ladder it may not climb by walking into it, and the engine grabs the bot each time
+	if ( IsAtLadderBlockedByThreat() )
+	{
+		return;
+	}
+
 	BaseClass::Approach( pos, goalWeight );
 }
 
@@ -240,4 +252,43 @@ bool CNEOBotLocomotion::IsEntityTraversable( CBaseEntity* obstacle, TraverseWhen
 
 	const bool bIsTraversable = PlayerLocomotion::IsEntityTraversable( obstacle, when );
 	return bIsTraversable || GetBot()->IsAbleToBreak(obstacle);
+}
+
+//-----------------------------------------------------------------------------------------
+// The follower's goal is a ladder whose end the bot is lining up at, while it knows a threat
+bool CNEOBotLocomotion::IsAtLadderBlockedByThreat() const
+{
+	const PathFollower *path = GetBot()->GetCurrentPath();
+	const Path::Segment *goal = path ? path->GetCurrentGoal() : nullptr;
+	if ( !goal || !goal->ladder )
+	{
+		return false;
+	}
+
+	const Vector &ladderEnd = ( goal->how == GO_LADDER_UP ) ? goal->ladder->m_bottom : goal->ladder->m_top;
+	return ( ladderEnd - GetFeet() ).AsVector2D().IsLengthLessThan( NextBotLadderAlignRange.GetFloat() )
+		&& GetBot()->GetVisionInterface()->GetPrimaryKnownThreat( false );
+}
+
+//-----------------------------------------------------------------------------------------
+// Any threat the bot knows of, seen or not, is fought before a ladder is climbed: the path followers of combat
+// behaviors start the climbs on their paths, so a ladder the bot is on or about to use is let go here
+void CNEOBotLocomotion::LeaveLadderForThreat( CNEOBot *me )
+{
+	const bool bOnLadder = me->GetMoveType() == MOVETYPE_LADDER;
+	if ( ( !bOnLadder && !IsUsingLadder() ) || !GetBot()->GetVisionInterface()->GetPrimaryKnownThreat( false ) )
+	{
+		return;
+	}
+
+	if ( bOnLadder )
+	{
+		me->PressJumpButton();
+		me->PressBackwardButton( NEO_BOT_LADDER_LEAVE_BACK_TIME );
+	}
+
+	Reset();
+
+	// A descent the follower started has already moved its goal past the ladder
+	me->InvalidateCurrentPath();
 }

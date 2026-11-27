@@ -283,6 +283,14 @@ ActionResult< CNEOBot > CNEOBotTacticalMonitor::WatchForLadders( CNEOBot *me )
 	}
 
 	const Path::Segment *goal = path->GetCurrentGoal();
+
+	// The goal can still be the ladder's end area while the bot is held at its edge
+	const Path::Segment *after = goal ? path->NextSegment( goal ) : nullptr;
+	if ( goal && !goal->ladder && after && after->ladder )
+	{
+		goal = after;
+	}
+
 	if ( !goal || !goal->ladder )
 	{
 		return Continue();

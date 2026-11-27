@@ -3,7 +3,6 @@
 #include "bot/behavior/neo_bot_ladder_climb.h"
 #include "bot/behavior/neo_bot_attack.h"
 #include "nav_ladder.h"
-#include "NextBot/Path/NextBotPathFollow.h"
 
 // memdbgon must be the last include file in a .cpp file!!!
 #include "tier0/memdbgon.h"
@@ -66,30 +65,6 @@ ActionResult<CNEOBot> CNEOBotLadderApproach::OnStart( CNEOBot *me, Action<CNEOBo
 }
 
 //---------------------------------------------------------------------------------------------
-// The area the path reaches through this ladder, held by its ladder segment
-static const CNavArea *FindLadderExitArea( CNEOBot *me, const CNavLadder *ladder, bool goingUp )
-{
-	const PathFollower *path = me->GetCurrentPath();
-	const Path::Segment *goal = ( path && path->IsValid() ) ? path->GetCurrentGoal() : nullptr;
-	if ( !goal )
-	{
-		return nullptr;
-	}
-
-	const NavTraverseType how = goingUp ? GO_LADDER_UP : GO_LADDER_DOWN;
-	const Path::Segment *candidates[] = { goal, path->NextSegment( goal ), path->PriorSegment( goal ) };
-	for ( const Path::Segment *seg : candidates )
-	{
-		if ( seg && seg->ladder == ladder && seg->how == how )
-		{
-			return seg->area;
-		}
-	}
-
-	return nullptr;
-}
-
-//---------------------------------------------------------------------------------------------
 // Implementation based on ladder climbing implementation in https://github.com/Dragoteryx/drgbase/
 ActionResult<CNEOBot> CNEOBotLadderApproach::Update( CNEOBot *me, float )
 {
@@ -107,21 +82,6 @@ ActionResult<CNEOBot> CNEOBotLadderApproach::Update( CNEOBot *me, float )
 		return Continue();
 	}
 
-	if ( m_timeoutTimer.IsElapsed() )
-	{
-		TryHandicap( me, "expire" );
-		return Done( "Ladder approach timeout" );
-	}
-
-	if ( m_bStuck )
-	{
-		m_bStuck = false;
-		if ( TryHandicap( me, "stuck" ) )
-		{
-			return Done( "Stuck approaching the ladder, teleported past it" );
-		}
-	}
-
 	const Vector &feetNow = me->GetLocomotionInterface()->GetFeet();
 	if ( ( feetNow - m_vecLastProgressPos ).AsVector2D().IsLengthGreaterThan( PROGRESS_STEP ) )
 	{
@@ -129,7 +89,8 @@ ActionResult<CNEOBot> CNEOBotLadderApproach::Update( CNEOBot *me, float )
 		m_progressTimer.Start();
 	}
 
-	const CKnownEntity *threat = me->GetVisionInterface()->GetPrimaryKnownThreat(true);
+	// Any threat the bot knows of, seen or not, is fought before the ladder is climbed
+	const CKnownEntity *threat = me->GetVisionInterface()->GetPrimaryKnownThreat( false );
 	if ( threat )
 	{
 		if ( me->IsDebugging( NEXTBOT_PATH ) )
@@ -138,6 +99,21 @@ ActionResult<CNEOBot> CNEOBotLadderApproach::Update( CNEOBot *me, float )
 		}
 		// ChangeTo: We may move away from ladder when fighting, so don't want to get stuck in ladder approach behavior
 		return ChangeTo( new CNEOBotAttack(), "Engaging enemy before climbing" );
+	}
+
+	if ( m_timeoutTimer.IsElapsed() )
+	{
+		CNEOBotLadderClimb::TryHandicap( me, m_ladder, m_bGoingUp, CNEOBotLadderClimb::HANDICAP_APPROACH, "expire" );
+		return Done( "Ladder approach timeout" );
+	}
+
+	if ( m_bStuck )
+	{
+		m_bStuck = false;
+		if ( CNEOBotLadderClimb::TryHandicap( me, m_ladder, m_bGoingUp, CNEOBotLadderClimb::HANDICAP_APPROACH, "stuck" ) )
+		{
+			return Done( "Stuck approaching the ladder, placed past it" );
+		}
 	}
 
 	ILocomotion *mover = me->GetLocomotionInterface();
@@ -425,14 +401,7 @@ bool CNEOBotLadderApproach::IsBarrierAhead( CNEOBot *me, const Vector &hangPos )
 }
 
 //---------------------------------------------------------------------------------------------
-bool CNEOBotLadderApproach::TryHandicap( CNEOBot *me, const char *reason ) const
-{
-	const CNavArea *exitArea = FindLadderExitArea( me, m_ladder, m_bGoingUp );
-	return CNEOBotLadderClimb::TeleportPastLadder( me, m_ladder, m_bGoingUp, exitArea, reason );
-}
-
-//---------------------------------------------------------------------------------------------
-// Handled on the next update, so the teleport does not run in the middle of this one
+// Handled on the next update, so the placement does not run in the middle of this one
 EventDesiredResult<CNEOBot> CNEOBotLadderApproach::OnStuck( CNEOBot *me )
 {
 	m_bStuck = true;
