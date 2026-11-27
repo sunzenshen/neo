@@ -77,7 +77,8 @@ bool CNEOBotSeekAndDestroy::TryPathToCombatSound( CNEOBot *me )
 		m_soundSearchTimer.Start( 0.25f );
 
 		Vector vFight;
-		if ( !NEOMemorySoundCombat::FindNearestFight( me->GetAbsOrigin(), me->GetTeamNumber(), me->entindex(), vFight )
+		float flLastHeard;
+		if ( !NEOMemorySoundCombat::FindNearestFight( me->GetAbsOrigin(), me->GetTeamNumber(), me->entindex(), vFight, flLastHeard )
 			|| !BotInSoundPAS( me, vFight )
 			|| me->GetAbsOrigin().DistToSqr( vFight ) <= flArriveSqr )
 		{
@@ -105,6 +106,7 @@ bool CNEOBotSeekAndDestroy::TryPathToCombatSound( CNEOBot *me )
 		}
 
 		m_vCombatSoundSpot = vFight;
+		m_flCombatSoundHeard = flLastHeard;
 		m_combatSoundCommitTimer.Start( sv_neo_bot_seek_and_destroy_combat_sound_commit_time.GetFloat() );
 	}
 
@@ -135,6 +137,18 @@ bool CNEOBotSeekAndDestroy::TryPathToCombatSound( CNEOBot *me )
 bool CNEOBotSeekAndDestroy::TryPathToRoamGoal( CNEOBot *me, const Vector &vGoal )
 {
 	return CNEOBotPathCompute( me, m_path, vGoal, DEFAULT_ROUTE ) && CNEOBotPathReachesGoal( m_path );
+}
+
+
+//---------------------------------------------------------------------------------------------
+void CNEOBotSeekAndDestroy::RequestSoundCloak( CNEOBot *me )
+{
+	if ( m_bOverrideApproach || m_bGoingToTargetEntity || m_vGoalPos != m_vCombatSoundSpot )
+	{
+		return;
+	}
+
+	me->RequestSearchCloak( m_path, m_flCombatSoundHeard );
 }
 
 
@@ -234,6 +248,7 @@ ActionResult< CNEOBot >	CNEOBotSeekAndDestroy::Update( CNEOBot *me, float interv
 		return result;
 	}
 
+	RequestSoundCloak( me );
 	return Continue();
 }
 
@@ -314,7 +329,10 @@ ActionResult< CNEOBot > CNEOBotSeekAndDestroy::UpdateCommon( CNEOBot *me, float 
 	else
 	{
 		// Out of combat
-		me->DisableCloak();
+		if ( !me->HasSearchCloak() )
+		{
+			me->DisableCloak();
+		}
 
 		// Reload when safe
 		me->ReloadIfLowClip();
