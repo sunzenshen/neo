@@ -83,6 +83,18 @@ END_DATADESC()
 
 ConVar sv_neo_accuracy_penalty_scale("sv_neo_accuracy_penalty_scale", "1.0", FCVAR_REPLICATED, "Scales the accuracy penalty per shot.", true, 0.0f, true, 2.0f);
 ConVar sv_neo_dynamic_viewkick("sv_neo_dynamic_viewkick", "0", FCVAR_REPLICATED, "Enables view kick scaling based on current inaccuracy.", true, 0.0f, true, 1.0f);
+ConVar sv_neo_reload_sprint_classic("sv_neo_reload_sprint_classic", "0", FCVAR_REPLICATED, "Classic NEOTOKYO reload rules: no reload starts while sprinting, and a magazine loads only once the sprint ends.", true, 0.0f, true, 1.0f);
+
+static bool SprintBlocksReload(CBaseCombatCharacter *pOwner)
+{
+	if (!sv_neo_reload_sprint_classic.GetBool())
+	{
+		return false;
+	}
+
+	CNEO_Player *pPlayer = ToNEOPlayer(pOwner);
+	return pPlayer && pPlayer->IsSprinting();
+}
 
 const char *GetWeaponByLoadoutId(int id)
 {
@@ -422,6 +434,11 @@ void CNEOBaseCombatWeapon::Equip(CBaseCombatCharacter* pOwner)
 
 bool CNEOBaseCombatWeapon::Reload( void )
 {
+	if (SprintBlocksReload(GetOwner()))
+	{
+		return false;
+	}
+
 	const bool bEmptyReload = UsesClipsForAmmo1() && m_iClip1 <= 0 &&
 		SelectWeightedSequence(ACT_VM_RELOAD_EMPTY) != ACTIVITY_NOT_AVAILABLE;
 
@@ -607,6 +624,11 @@ bool CNEOBaseCombatWeapon::Holster(CBaseCombatWeapon* pSwitchingTo)
 
 void CNEOBaseCombatWeapon::CheckReload(void)
 {
+	if (m_bInReload && SprintBlocksReload(GetOwner()))
+	{
+		return;
+	}
+
 	if (!m_bInReload && UsesClipsForAmmo1() && m_iClip1 == 0 && GetOwner() && !ClientWantsAutoReload(GetOwner()))
 	{
 		return;
@@ -658,7 +680,7 @@ void CNEOBaseCombatWeapon::ItemBusyFrame(void)
 	UpdateInaccuracy();
 
 	// The owner stays busy until the reload animation ends, but the magazine loads at the reload's ready time
-	if (m_bInReload && m_flReloadReadyTime > 0.0f && gpGlobals->curtime >= m_flReloadReadyTime)
+	if (m_bInReload && m_flReloadReadyTime > 0.0f && gpGlobals->curtime >= m_flReloadReadyTime && !SprintBlocksReload(GetOwner()))
 	{
 		FinishReload();
 	}
