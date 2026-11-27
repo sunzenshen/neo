@@ -1233,6 +1233,7 @@ private:
 private:
 	void LadderFromPolyhedron(const CPolyhedron* polyhedron);
 	void RemoveNarrowSideLadders(int firstLadder);
+	void SplitBrushLaddersAtFloors(int firstLadder);
 #endif
 
 	bool SampleStep( void );									// sample the walkable areas of the map

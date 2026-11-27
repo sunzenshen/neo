@@ -3448,6 +3448,7 @@ void CNavMesh::LadderFromPolyhedron(const CPolyhedron* polyhedron)
 	}
 
 	RemoveNarrowSideLadders(firstLadder);
+	SplitBrushLaddersAtFloors(firstLadder);
 }
 
 // A climb brush often has climbable end faces narrower than its main face. The player hull

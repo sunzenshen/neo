@@ -359,6 +359,122 @@ static bool TrimLadderEnds( CNavLadder *ladder, NavLadderSourceType source )
 		rejectReason, length, finalSignedSpan );
 	return false;
 }
+
+
+//--------------------------------------------------------------------------------------------------------------
+// A floor nearer the foot than this leaves a lower ladder too short to need a climb.
+static constexpr float LadderFloorMinSpan = HumanHeight;
+// ConnectGeneratedLadder already links a landing this far below the top.
+static constexpr float LadderFloorTopMargin = 100.0f;
+// Under HalfHumanHeight, the headroom GetGroundHeight needs, so the scan skips no floor.
+static constexpr float LadderFloorScanStep = GenerationStepSize;
+// LadderEndSearch seeds sampling one and two steps from a ladder end; look as far.
+static constexpr int LadderFloorSideSteps = 2;
+
+/**
+ * Find a floor beside the ladder that a climber passing height z can step onto.
+ * Only the left and right sides count, because those are the exits a climb can take
+ * while the climbable face continues above.
+ */
+static bool FindFloorBesideLadder( const CNavLadder *ladder, float z, float *floorZ )
+{
+	Vector stand = ladder->GetPosAtHeight( z );
+	AddDirectionVector( &stand, ladder->GetDir(), HalfHumanWidth );
+
+	const NavDirType sides[] = { DirectionLeft( ladder->GetDir() ), DirectionRight( ladder->GetDir() ) };
+	for ( const NavDirType side : sides )
+	{
+		for ( int step = 1; step <= LadderFloorSideSteps; ++step )
+		{
+			// step up a rung, as LadderEndSearch does
+			Vector nearPos = stand + Vector( 0, 0, GenerationStepSize );
+			AddDirectionVector( &nearPos, side, step * GenerationStepSize );
+
+			float nearZ;
+			if (!TheNavMesh->GetGroundHeight( nearPos, &nearZ ))
+			{
+				continue;
+			}
+
+			// Take a floor only at the scan step that passes it, so its height is found once.
+			if (nearZ > z || nearZ <= z - LadderFloorScanStep)
+			{
+				continue;
+			}
+
+			// A lip, rung or sill has no level ground a step further out.
+			Vector farPos = nearPos;
+			AddDirectionVector( &farPos, side, GenerationStepSize );
+
+			float farZ;
+			if (!TheNavMesh->GetGroundHeight( farPos, &farZ ) || fabs( farZ - nearZ ) > StepHeight)
+			{
+				continue;
+			}
+
+			// A wall or rail between the climb and the floor leaves no way onto it.
+			const float fudge = 4.0f;
+			const Vector from( stand.x, stand.y, nearZ + fudge );
+			const Vector to( farPos.x, farPos.y, nearZ + fudge );
+			trace_t result;
+			UTIL_TraceHull( from, to, NavTraceMins, NavTraceMaxs, TheNavMesh->GetGenerationTraceMask(), NULL, COLLISION_GROUP_NONE, &result );
+			if (result.fraction != 1.0f || result.startsolid)
+			{
+				continue;
+			}
+
+			*floorZ = nearZ;
+			return true;
+		}
+	}
+
+	return false;
+}
+
+
+//--------------------------------------------------------------------------------------------------------------
+/**
+ * Split each new brush ladder at every floor it passes between its ends.
+ * A nav ladder links areas at its two ends only, so a floor in between needs
+ * a ladder that ends there, or bots can never reach it.
+ */
+void CNavMesh::SplitBrushLaddersAtFloors( int firstLadder )
+{
+	// The upper pieces go to the tail and have been scanned already.
+	const int ladderCount = m_ladders.Count();
+	for ( int i = firstLadder; i < ladderCount; ++i )
+	{
+		CNavLadder *ladder = m_ladders[i];
+
+		float z = ladder->m_top.z - LadderFloorTopMargin;
+		while (z >= ladder->m_bottom.z + LadderFloorMinSpan)
+		{
+			float floorZ;
+			if (!FindFloorBesideLadder( ladder, z, &floorZ ) || floorZ < ladder->m_bottom.z + LadderFloorMinSpan)
+			{
+				z -= LadderFloorScanStep;
+				continue;
+			}
+
+			CNavLadder *upper = new CNavLadder;
+			upper->m_top = ladder->m_top;
+			upper->m_bottom = ladder->GetPosAtHeight( floorZ );
+			upper->m_width = ladder->m_width;
+			upper->m_length = (upper->m_top - upper->m_bottom).Length();
+			upper->SetDir( ladder->GetDir() );
+			m_ladders.AddToTail( upper );
+
+			ladder->m_top = upper->m_bottom;
+			ladder->m_length = (ladder->m_top - ladder->m_bottom).Length();
+			ladder->SetDir( ladder->GetDir() );
+
+			DevMsg( "Brush ladder split at floor z %.1f: ( %g, %g, %g )\n",
+				floorZ, upper->m_bottom.x, upper->m_bottom.y, upper->m_bottom.z );
+
+			z = floorZ - LadderFloorTopMargin;
+		}
+	}
+}
 #endif // NEO
 
 
