@@ -1220,6 +1220,9 @@ constexpr float CLOAK_CONTACT_RESERVE = 3.0f;
 constexpr float CLOAK_CONTACT_MEMORY = 10.0f;
 constexpr float CLOAK_CONTACT_RANGE = 600.0f;
 
+// a calm cloak that ran down to the reserve recharges past it before starting again, keeping the reserve for the contact
+constexpr float CLOAK_CALM_MARGIN = 2.0f;
+
 class CFindCloakWatcher : public IVision::IForEachKnownEntity
 {
 public:
@@ -1311,7 +1314,8 @@ void CNEOBot::UpdateCalmCloak()
 	// Keep enough charge to cloak again on contact; a hit cloak held back in an enemy's view starts here
 	if ( ExpectsContact() && GetCloakPower() >= CLOAK_CONTACT_RESERVE )
 	{
-		EnableCloak( CLOAK_CONTACT_RESERVE );
+		const float threshold = WasRecentlyInjuredByEnemy() ? CLOAK_CONTACT_RESERVE : CLOAK_CONTACT_RESERVE + CLOAK_CALM_MARGIN;
+		EnableCloak( threshold );
 		return;
 	}
 
