@@ -148,7 +148,7 @@ public:
 	void OnSmokeBlockedSight(void);
 	void EnableCloak(float threshold);
 	void DisableCloak(void);
-	void DisableCloakUnlessRecentlyInjured();
+	void UpdateCalmCloak();
 	bool WasRecentlyInjuredByEnemy() const;
 
 	void UpdateLookingAroundForEnemies(void);						// update our view to keep an eye on enemies, and where enemies come from
@@ -481,6 +481,8 @@ public:
 
 private:
 	void ToggleCloak(void);
+	bool IsCloakWatched() const;
+	bool ExpectsContact() const;
 	void UpdateVisionMode(void);
 
 	int m_visionClass = NEO_CLASS_RANDOM;

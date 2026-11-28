@@ -1183,11 +1183,18 @@ void CNEOBot::EnableCloak(float threshold)
 		return;
 	}
 
-	if ( (GetCloakPower() >= threshold)
-		&& !IsCloakEnabled() )
+	if ( IsCloakEnabled() || GetCloakPower() < threshold )
 	{
-		ToggleCloak();
+		return;
 	}
+
+	// the activation flash and sound give the bot away to an enemy that is looking at it
+	if ( IsCloakWatched() )
+	{
+		return;
+	}
+
+	ToggleCloak();
 }
 
 void CNEOBot::DisableCloak(void)
@@ -1198,16 +1205,117 @@ void CNEOBot::DisableCloak(void)
 	}
 }
 
-void CNEOBot::DisableCloakUnlessRecentlyInjured()
+namespace
 {
-	if ( !IsCloakEnabled() )
+// within this cone an enemy would see the activation flash
+constexpr float CLOAK_WATCH_COS = 0.5f;
+
+// matches the injury window, so a held-back hit cloak cannot start in the open when this memory ends
+constexpr float CLOAK_WATCH_MEMORY = 5.0f;
+
+constexpr float CLOAK_CONTACT_RESERVE = 3.0f;
+
+// a hidden enemy seen or heard this recently and this close is likely met soon;
+// close enough that an Assault's charge lasts until the contact
+constexpr float CLOAK_CONTACT_MEMORY = 10.0f;
+constexpr float CLOAK_CONTACT_RANGE = 600.0f;
+
+// a calm cloak that ran down to the reserve recharges past it before starting again, keeping the reserve for the contact
+constexpr float CLOAK_CALM_MARGIN = 2.0f;
+
+class CFindCloakWatcher : public IVision::IForEachKnownEntity
+{
+public:
+	CFindCloakWatcher( const CNEOBot *me ) : m_me( me ), m_bWatched( false ) {}
+
+	bool Inspect( const CKnownEntity &known ) override
 	{
-		return;
+		CBaseEntity *enemy = known.GetEntity();
+		if ( !enemy || !enemy->IsPlayer() || known.IsObsolete() || !m_me->IsEnemy( enemy ) )
+		{
+			return true;
+		}
+
+		// an enemy in view shows which way it faces, as its model does to a player
+		if ( known.IsVisibleInFOVNow() )
+		{
+			m_bWatched = enemy->MyCombatCharacterPointer()->IsLookingTowards( m_me, CLOAK_WATCH_COS );
+			return !m_bWatched;
+		}
+
+		// an enemy just lost from view, by a flicker or its own cloak, may still be watching from the same spot;
+		// once the bot has looked at the spot and seen nobody, it no longer knows where that enemy is
+		const bool bJustLost = known.IsVisibleRecently();
+		if ( !bJustLost && ( known.GetTimeSinceLastKnown() >= CLOAK_WATCH_MEMORY || known.HasLastKnownPositionBeenSeen() ) )
+		{
+			return true;
+		}
+
+		const Vector spot = known.GetLastKnownPosition() + Vector( 0, 0, HalfHumanHeight );
+		m_bWatched = m_me->IsLineOfSightClear( spot, CBaseCombatCharacter::IGNORE_ACTORS );
+		return !m_bWatched;
 	}
 
-	// Keep enough charge to cloak again on contact.
-	if ( WasRecentlyInjuredByEnemy() && GetCloakPower() >= 3.0f )
+	bool IsWatched() const { return m_bWatched; }
+
+private:
+	const CNEOBot *m_me;
+	bool m_bWatched;
+};
+
+class CFindHiddenEnemyNearby : public IVision::IForEachKnownEntity
+{
+public:
+	CFindHiddenEnemyNearby( const CNEOBot *me ) : m_me( me ), m_bFound( false ) {}
+
+	bool Inspect( const CKnownEntity &known ) override
 	{
+		CBaseEntity *enemy = known.GetEntity();
+		if ( !enemy || !enemy->IsPlayer() || known.IsObsolete() || !m_me->IsEnemy( enemy ) || known.IsVisibleInFOVNow() )
+		{
+			return true;
+		}
+
+		m_bFound = known.GetTimeSinceLastKnown() < CLOAK_CONTACT_MEMORY
+			&& m_me->IsRangeLessThan( known.GetLastKnownPosition(), CLOAK_CONTACT_RANGE );
+		return !m_bFound;
+	}
+
+	bool Found() const { return m_bFound; }
+
+private:
+	const CNEOBot *m_me;
+	bool m_bFound;
+};
+}
+
+bool CNEOBot::ExpectsContact() const
+{
+	if ( WasRecentlyInjuredByEnemy() )
+	{
+		return true;
+	}
+
+	CFindHiddenEnemyNearby finder( this );
+	GetVisionInterface()->ForEachKnownEntity( finder );
+	return finder.Found();
+}
+
+bool CNEOBot::IsCloakWatched() const
+{
+	CFindCloakWatcher watcher( this );
+	GetVisionInterface()->ForEachKnownEntity( watcher );
+	return watcher.IsWatched();
+}
+
+// Called where no threat is in view: cloak out of sight before an expected contact
+void CNEOBot::UpdateCalmCloak()
+{
+	// Keep enough charge to cloak again on contact; a hit cloak held back in an enemy's view starts here
+	if ( ExpectsContact() && GetCloakPower() >= CLOAK_CONTACT_RESERVE )
+	{
+		const float threshold = WasRecentlyInjuredByEnemy() ? CLOAK_CONTACT_RESERVE : CLOAK_CONTACT_RESERVE + CLOAK_CALM_MARGIN;
+		EnableCloak( threshold );
 		return;
 	}
 
