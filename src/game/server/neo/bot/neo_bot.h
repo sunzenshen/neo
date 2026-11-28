@@ -482,6 +482,7 @@ public:
 private:
 	void ToggleCloak(void);
 	bool IsCloakWatched() const;
+	bool ExpectsContact() const;
 	void UpdateVisionMode(void);
 
 	int m_visionClass = NEO_CLASS_RANDOM;

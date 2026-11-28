@@ -1215,6 +1215,11 @@ constexpr float CLOAK_WATCH_MEMORY = 5.0f;
 
 constexpr float CLOAK_CONTACT_RESERVE = 3.0f;
 
+// a hidden enemy seen or heard this recently and this close is likely met soon;
+// close enough that an Assault's charge lasts until the contact
+constexpr float CLOAK_CONTACT_MEMORY = 10.0f;
+constexpr float CLOAK_CONTACT_RANGE = 600.0f;
+
 class CFindCloakWatcher : public IVision::IForEachKnownEntity
 {
 public:
@@ -1254,6 +1259,43 @@ private:
 	const CNEOBot *m_me;
 	bool m_bWatched;
 };
+
+class CFindHiddenEnemyNearby : public IVision::IForEachKnownEntity
+{
+public:
+	CFindHiddenEnemyNearby( const CNEOBot *me ) : m_me( me ), m_bFound( false ) {}
+
+	bool Inspect( const CKnownEntity &known ) override
+	{
+		CBaseEntity *enemy = known.GetEntity();
+		if ( !enemy || !enemy->IsPlayer() || known.IsObsolete() || !m_me->IsEnemy( enemy ) || known.IsVisibleInFOVNow() )
+		{
+			return true;
+		}
+
+		m_bFound = known.GetTimeSinceLastKnown() < CLOAK_CONTACT_MEMORY
+			&& m_me->IsRangeLessThan( known.GetLastKnownPosition(), CLOAK_CONTACT_RANGE );
+		return !m_bFound;
+	}
+
+	bool Found() const { return m_bFound; }
+
+private:
+	const CNEOBot *m_me;
+	bool m_bFound;
+};
+}
+
+bool CNEOBot::ExpectsContact() const
+{
+	if ( WasRecentlyInjuredByEnemy() )
+	{
+		return true;
+	}
+
+	CFindHiddenEnemyNearby finder( this );
+	GetVisionInterface()->ForEachKnownEntity( finder );
+	return finder.Found();
 }
 
 bool CNEOBot::IsCloakWatched() const
@@ -1263,11 +1305,11 @@ bool CNEOBot::IsCloakWatched() const
 	return watcher.IsWatched();
 }
 
-// Called where no threat is in view
+// Called where no threat is in view: cloak out of sight before an expected contact
 void CNEOBot::UpdateCalmCloak()
 {
 	// Keep enough charge to cloak again on contact; a hit cloak held back in an enemy's view starts here
-	if ( WasRecentlyInjuredByEnemy() && GetCloakPower() >= CLOAK_CONTACT_RESERVE )
+	if ( ExpectsContact() && GetCloakPower() >= CLOAK_CONTACT_RESERVE )
 	{
 		EnableCloak( CLOAK_CONTACT_RESERVE );
 		return;
