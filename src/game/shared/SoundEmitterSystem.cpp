@@ -17,6 +17,10 @@
 #include "tier0/icommandline.h"
 #include "util_shared.h"
 
+#if defined CLIENT_DLL && defined NEO && defined NEO_STEAMAUDIO
+#include "neo/audio/neo_hrtf_local_sound.h"
+#endif
+
 #if defined( TF_CLIENT_DLL ) || defined( TF_DLL )
 #include "tf_shareddefs.h"
 #include "tf_classdata.h"
@@ -869,6 +873,9 @@ public:
 			char const *wavename = soundemitterbase->GetWaveName( params->GetSoundNames()[ i ].symbol );
 			Assert( wavename );
 
+#if defined CLIENT_DLL && defined NEO && defined NEO_STEAMAUDIO
+			NeoHrtfStopSound( entindex, params->GetChannel(), wavename );
+#endif // CLIENT_DLL && NEO && NEO_STEAMAUDIO
 			enginesound->StopSound( 
 				entindex, 
 				params->GetChannel(), 
@@ -895,6 +902,9 @@ public:
 	{
 		if ( pSample && ( Q_stristr( pSample, ".wav" ) || Q_stristr( pSample, ".mp3" ) || pSample[0] == '!' ) )
 		{
+#if defined CLIENT_DLL && defined NEO && defined NEO_STEAMAUDIO
+			NeoHrtfStopSound( iEntIndex, iChannel, pSample );
+#endif // CLIENT_DLL && NEO && NEO_STEAMAUDIO
 			enginesound->StopSound( iEntIndex, iChannel, pSample );
 
 			TraceEmitSound( "StopSound:  Raw wave stopped '%s' (ent %i)\n",

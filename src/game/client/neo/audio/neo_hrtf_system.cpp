@@ -1,19 +1,29 @@
 #include "cbase.h"
 #include "neo_hrtf_system.h"
+#include "neo_audio_geometry.h"
+#include "neo_audio_probe_lump.h"
+#include "c_neo_ambient_generic.h"
+#include "networkstringtable_clientdll.h"
 
+#include "checksum_crc.h"
 #include "engine/IEngineSound.h"
+#include "engine/ivdebugoverlay.h"
 #include "filesystem.h"
 #include "soundchars.h"
+#include "soundinfo.h"
 #include "SoundEmitterSystem/isoundemittersystembase.h"
 #include "utlbuffer.h"
 #include "view.h"
 
 #include "miniaudio.h"
+#include "neo_gamerules.h"
 
 // memdbgon must be the last include file in a .cpp file!!!
 #include "tier0/memdbgon.h"
 
 extern ISoundEmitterSystemBase *soundemitterbase;
+extern IPhysicsSurfaceProps *physprops;
+extern IPhysicsCollision *physcollision;
 
 namespace
 {
@@ -21,7 +31,7 @@ namespace
 constexpr int kHrtfOutputChannels = 2;
 constexpr float kHrtfMetresPerUnit = 0.0254f; // 1 Source unit = 1 inch
 constexpr int kHrtfMaxCachedSeconds = 30; // longer sounds (music-like loops) stay with the engine
-constexpr int kHrtfMaxCachedFrames = kHrtfMaxCachedSeconds * CNeoHrtfSystem::kSampleRate;
+constexpr float kHrtfInt16ToFloat = 1.0f / 32768.0f;
 
 // The engine mixer (snd_dma.cpp) attenuates with an inverse-distance law normalised so a
 // sound at its scripted soundlevel is at unity gain snd_refdist units away:
@@ -32,6 +42,105 @@ constexpr float kHrtfEngineRefDistUnits = 36.0f;
 constexpr float kHrtfEngineGainMax = 1.0f;
 constexpr float kHrtfEngineGainMin = 0.01f;
 
+// Soundscripts with CompatibilityAttenuation store their level offset by this (soundflags.h:
+// 256-511 are GoldSrc-compatible levels). The distance law needs the level without the offset.
+constexpr int kHrtfCompatSoundLevelOffset = 256;
+
+// Entity sounds play from the entity origin, which for players is on the floor; occlusion is
+// traced from slightly above it so the floor itself does not hide half the source.
+constexpr float kHrtfOcclusionLiftUnits = 8.0f;
+
+// Where the local player's own marked sounds play from (NeoHrtfLocalSound), relative to the eyes.
+// The weapon point stays well inside the player's hull (16 units either side of the eyes), so it is
+// never through a wall the player is pressed against.
+constexpr float kHrtfLocalWeaponForwardUnits = 10.0f;
+constexpr float kHrtfLocalWeaponSideUnits = 5.0f;
+constexpr float kHrtfLocalWeaponDownUnits = 5.0f;
+constexpr float kHrtfLocalBodyDownUnits = 20.0f;
+
+// A mark whose sound never shows up in the engine's channel list (it failed to start) is dropped
+// after this long.
+constexpr double kHrtfLocalMarkSeconds = 1.0;
+
+// A path's omnidirectional coefficient for a source at unit gain: the order-0 spherical harmonic,
+// 1 / (2 sqrt(pi)), which is what Steam Audio returns for a source in plain view.
+constexpr float kHrtfFirstOrderOmniGain = 0.28209479f;
+
+// How far a sound (or the listener) may be from the nearest probe and still be pathed, from a point
+// pulled into that probe's sphere. Covers ambient emitters hung a few metres up and a jumping or
+// ledge-standing listener; beyond it the nearest probe likely describes another space.
+constexpr float kHrtfPathReachMetres = 8.0f;
+
+// The baked paths carry every out-of-sight sound around the walls, including the long tails of
+// distant gunfire and the map's ambient loops. At full level they bury the quiet between shots, so
+// they are played well under the direct sound: enough to place a sound behind a corner.
+constexpr float kHrtfPathLevel = 0.25f;
+
+// The baked reverb has one loudness everywhere, so open spaces echo like a closet. The wet level is
+// faded out by the size of the listener's room, read from rays cast around the listener: full in
+// rooms up to the first size, none from the second, linear between. A ray that escapes to the sky
+// or reaches its cap scores the cap.
+constexpr float kHrtfRoomRayMetres = 20.0f;
+constexpr float kHrtfRoomFullMetres = 4.0f;
+constexpr float kHrtfRoomNoneMetres = 8.0f;
+// Wet level at full room size, so a small room still sounds apart from open ground once the paths
+// are quieter.
+constexpr float kHrtfRoomReverbLevel = 2.0f;
+// Long enough not to click on a teleport, short enough to follow a walk through a doorway.
+constexpr float kHrtfRoomFadeSeconds = 0.5f;
+constexpr double kHrtfRoomProbeSeconds = 0.1;
+// Rays in world space, so turning the head changes nothing: a ring at each elevation, plus one
+// straight up. None point down: the floor is always near.
+constexpr int kHrtfRoomAzimuths = 8;
+constexpr float kHrtfRoomElevationsDeg[] = { 0.0f, 30.0f, 60.0f };
+constexpr int kHrtfRoomRays = kHrtfRoomAzimuths * ARRAYSIZE(kHrtfRoomElevationsDeg) + 1;
+
+
+// Baked probes are cached per map under the mod directory, keyed by geometry and probe layout.
+// Bump the version whenever the bake parameters in the backend or the file layout change.
+constexpr char kHrtfProbeCacheDir[] = "hrtf";
+constexpr uint32 kHrtfProbeCacheMagic = 0x4350484e; // "NHPC"
+constexpr uint32 kHrtfProbeCacheVersion = 3; // 2: pathing baked alongside reverb; 3: one batch
+
+struct HrtfProbeCacheHeader
+{
+	uint32 magic;
+	uint32 version;
+	uint32 key;
+	uint32 reserved;
+};
+
+// A reported engine volume this close to the one we set is taken to be ours read back, allowing
+// for the engine storing it as 0-255.
+constexpr float kHrtfVolumeReadbackTolerance = 1.0f / 255.0f;
+
+// The engine keeps channel volume in steps of 1/255, rounding down, so a volume we set is rounded
+// up to a whole step to stay at least as loud as asked.
+constexpr float kHrtfEngineVolumeStep = 1.0f / 255.0f;
+
+// Non-looping sounds up to this long (reloads and explosions included) are played without an
+// engine copy. It also bounds how long one plays on after a stop the client never sees.
+constexpr float kHrtfOwnedMaxSeconds = 7.5f;
+// Ends an owned sound whose end the audio thread never reported, e.g. while the device stalls.
+constexpr double kHrtfOwnedGraceSeconds = 1.0;
+
+// Leave most cores to the game while a bake runs in the background.
+constexpr int kHrtfBakeCoresPerThread = 4;
+// The most probes the game bakes itself. Bake memory grows with the probe pairs within path range,
+// so a large open map would need many gigabytes; such a map has to be baked with neo_soundbake.
+constexpr int kHrtfRuntimeBakeMaxProbes = 5000;
+// Occlusion and paths change slowly next to a fast client's frame rate, and every run costs the
+// simulation thread the same, so it runs at most this often.
+constexpr double kHrtfSimMinIntervalSeconds = 1.0 / 60.0;
+// New voices may run it sooner, but at most this often, so a stream of new sounds cannot bring
+// back a run every frame.
+constexpr double kHrtfSimMinEarlyIntervalSeconds = 0.004;
+
+constexpr float kHrtfProbeDrawRangeUnits = 1024.0f;
+constexpr float kHrtfProbeDrawSizeUnits = 4.0f;
+// Debug overlay: status, probes, reverb and game thread take the first lines, then one line per live voice.
+constexpr int kHrtfDebugFirstVoiceLine = 4;
+
 #ifdef _WIN32
 constexpr char kHrtfPhononLibrary[] = "bin/x64/phonon.dll";
 #else
@@ -39,6 +148,8 @@ constexpr char kHrtfPhononLibrary[] = "bin/linux64/libphonon.so";
 #endif
 
 constexpr char kHrtfSoundDir[] = "sound/";
+// The engine's network string table of precached sounds (engine/precache.h, SOUND_PRECACHE_TABLENAME).
+constexpr char kHrtfSoundPrecacheTable[] = "soundprecache";
 
 // RIFF layout (little endian): "RIFF" size "WAVE", then chunks of id(4) size(4) body, each
 // body padded to an even length.
@@ -48,6 +159,11 @@ constexpr int kWavFmtSampleRateOffset = 4;
 constexpr int kWavCueCountSize = 4;
 constexpr int kWavCuePointSize = 24;
 constexpr int kWavCueSampleOffsetOffset = 20;
+constexpr int kWavSmplHeaderSize = 36;
+constexpr int kWavSmplLoopCountOffset = 28;
+constexpr int kWavSmplLoopSize = 24;
+constexpr int kWavSmplLoopStartOffset = 8;
+constexpr int kWavSmplLoopEndOffset = 12;
 
 uint32 HrtfReadLE32(const uint8 *pData)
 {
@@ -55,16 +171,22 @@ uint32 HrtfReadLE32(const uint8 *pData)
 }
 
 // Source loops a wav from the sample offset of its first cue point (CAudioSourceWave::
-// ParseCueChunk), so do the same. Returns the loop start in output-rate frames, or -1.
-int HrtfParseWavLoopStart(const uint8 *pData, int size)
+// ParseCueChunk) or the start of its first sampler loop (ParseSamplerChunk), whichever chunk
+// comes last, so do the same. A sampler loop also ends the sound after its last sample.
+// Outputs are in the file's own frames: loopStart is -1 for one-shots, loopEnd (exclusive) is -1
+// when the sound plays to the end of its data.
+void HrtfParseWavLoop(const uint8 *pData, int size, int &loopStart, int &loopEnd)
 {
+	loopStart = -1;
+	loopEnd = -1;
 	if (size < kRiffHeaderSize || V_memcmp(pData, "RIFF", 4) != 0 || V_memcmp(pData + 8, "WAVE", 4) != 0)
 	{
-		return -1;
+		return;
 	}
 
 	uint32 sourceRate = 0;
-	int64 cueSampleOffset = -1;
+	int64 loopSampleOffset = -1;
+	int64 loopEndSampleOffset = -1;
 	for (int64 pos = kRiffHeaderSize; pos + kRiffChunkHeaderSize <= size;)
 	{
 		const uint8 *pChunk = pData + pos;
@@ -82,20 +204,48 @@ int HrtfParseWavLoopStart(const uint8 *pData, int size)
 		else if (V_memcmp(pChunk, "cue ", 4) == 0 && chunkSize >= kWavCueCountSize + kWavCuePointSize
 				 && HrtfReadLE32(pBody) > 0)
 		{
-			cueSampleOffset = HrtfReadLE32(pBody + kWavCueCountSize + kWavCueSampleOffsetOffset);
+			loopSampleOffset = HrtfReadLE32(pBody + kWavCueCountSize + kWavCueSampleOffsetOffset);
+		}
+		else if (V_memcmp(pChunk, "smpl", 4) == 0 && chunkSize >= kWavSmplHeaderSize + kWavSmplLoopSize
+				 && HrtfReadLE32(pBody + kWavSmplLoopCountOffset) > 0)
+		{
+			loopSampleOffset = HrtfReadLE32(pBody + kWavSmplHeaderSize + kWavSmplLoopStartOffset);
+			// The stored end is the loop's last sample, so one past it is the exclusive end.
+			loopEndSampleOffset = int64(HrtfReadLE32(pBody + kWavSmplHeaderSize + kWavSmplLoopEndOffset)) + 1;
 		}
 		pos += kRiffChunkHeaderSize + chunkSize + (chunkSize & 1);
 	}
 
-	if (sourceRate == 0 || cueSampleOffset < 0)
+	if (sourceRate == 0 || loopSampleOffset < 0)
 	{
-		return -1;
+		return;
 	}
-	return static_cast<int>(cueSampleOffset * CNeoHrtfSystem::kSampleRate / sourceRate);
+	loopStart = static_cast<int>(loopSampleOffset);
+	if (loopEndSampleOffset > loopSampleOffset)
+	{
+		loopEnd = static_cast<int>(loopEndSampleOffset);
+	}
+}
+
+// A sound level without the CompatibilityAttenuation offset.
+soundlevel_t HrtfPlainSoundLevel(int level)
+{
+	return static_cast<soundlevel_t>(level % kHrtfCompatSoundLevelOffset);
 }
 
 // Soundscripts and engine channels both reduce to this form: sound chars stripped,
 // lower case, forward slashes, relative to sound/.
+// The engine's dist_mult for a sound level (see kHrtfEngineRefDb); SNDLVL_NONE means "heard
+// everywhere": no distance falloff at all.
+float HrtfDistMultForLevel(soundlevel_t level)
+{
+	if (level == SNDLVL_NONE)
+	{
+		return 0.0f;
+	}
+	return powf(10.0f, (kHrtfEngineRefDb - static_cast<float>(level)) / 20.0f) / kHrtfEngineRefDistUnits;
+}
+
 void HrtfNormaliseSoundName(const char *pszName, char *pszOut, int outSize)
 {
 	V_strncpy(pszOut, PSkipSoundChars(pszName), outSize);
@@ -113,32 +263,34 @@ void HrtfNormaliseSoundName(const char *pszName, char *pszOut, int outSize)
 bool HrtfIsEngineOnlyName(const char *pszRawName)
 {
 	return TestSoundChar(pszRawName, CHAR_STREAM) || TestSoundChar(pszRawName, CHAR_OMNI)
-		|| TestSoundChar(pszRawName, CHAR_DOPPLER) || TestSoundChar(pszRawName, CHAR_DIRECTIONAL)
-		|| TestSoundChar(pszRawName, CHAR_DISTVARIANT);
+		|| TestSoundChar(pszRawName, CHAR_DOPPLER) || TestSoundChar(pszRawName, CHAR_DIRECTIONAL);
 }
 
-bool HrtfIsSpatialCandidate(const SndInfo_t &info, int localPlayerIndex)
+// The cache name of a sound as the engine names it, or false if it is one we leave to the engine.
+bool HrtfCacheName(const char *pszRawName, char *pszOut, int outSize)
 {
-	// Sentences, dry-mix and speaker sounds are not positional; the local player's own weapon and
-	// viewmodel sounds are non-positional by design; UI sounds have no source entity or position.
+	if (HrtfIsEngineOnlyName(pszRawName))
+	{
+		return false;
+	}
+	HrtfNormaliseSoundName(pszRawName, pszOut, outSize);
+	const char *pszExt = V_GetFileExtension(pszOut);
+	return pszExt && (V_strcmp(pszExt, "wav") == 0 || V_strcmp(pszExt, "mp3") == 0);
+}
+
+bool HrtfIsSpatialCandidate(const SndInfo_t &info, int localPlayerIndex, bool bMarkedLocal)
+{
+	// Sentences, dry-mix and speaker sounds are not positional; the local player's own sounds are
+	// non-positional unless the client marked them (neo_hrtf_local_sound.h); UI sounds have no
+	// source entity or position.
 	return !info.m_bIsSentence && !info.m_bDryMix && !info.m_bSpeaker && info.m_pOrigin
-		&& info.m_nSoundSource != localPlayerIndex && (info.m_nSoundSource > 0 || *info.m_pOrigin != vec3_origin);
+		&& (info.m_nSoundSource != localPlayerIndex || bMarkedLocal)
+		&& (info.m_nSoundSource > 0 || *info.m_pOrigin != vec3_origin);
 }
 
 NeoSpatial::Vec3 HrtfToVec3(const Vector &v, float scale = 1.0f)
 {
 	return { v.x * scale, v.y * scale, v.z * scale };
-}
-
-// Once the engine copy is muted its reported volume is our 0, not the sound's, so only a
-// non-zero report is a genuine (server) volume change worth remembering.
-void HrtfMuteEngineCopy(float &sourceVolume, const SndInfo_t &info)
-{
-	if (info.m_flVolume > 0.0f)
-	{
-		sourceVolume = info.m_flVolume;
-		enginesound->SetVolumeByGuid(info.m_nGuid, 0.0f);
-	}
 }
 
 void HrtfDataCallback(ma_device *pDevice, void *pOutput, const void *pInput, ma_uint32 frameCount)
@@ -151,26 +303,108 @@ void HrtfDataCallback(ma_device *pDevice, void *pOutput, const void *pInput, ma_
 
 // NEO HRTF: cheat-protected and not archived while the feature is under development, so only
 // developers and testers on an sv_cheats server can turn it on, and it is off on every start.
-ConVar cl_neo_hrtf("cl_neo_hrtf", "0", FCVAR_CLIENTDLL | FCVAR_CHEAT,
+ConVar cl_neo_hrtf("cl_neo_hrtf", "0", FCVAR_CLIENTDLL | FCVAR_ARCHIVE,
 	"Re-render positional sounds with HRTF (in development)", true, 0.0f, true, 1.0f);
 ConVar cl_neo_hrtf_volume("cl_neo_hrtf_volume", "1.0", FCVAR_CLIENTDLL | FCVAR_ARCHIVE,
 	"Volume of the HRTF output, on top of the master volume", true, 0.0f, true, 1.0f);
 ConVar cl_neo_hrtf_debug("cl_neo_hrtf_debug", "0", FCVAR_CLIENTDLL,
-	"Overlay the HRTF status and one line per voice: file, distance, gain, azimuth", true, 0.0f, true, 1.0f);
+	"Overlay the HRTF status and one line per voice: file, distance, gain, azimuth, occlusion", true, 0.0f, true, 1.0f);
+ConVar cl_neo_hrtf_occlusion("cl_neo_hrtf_occlusion", "1", FCVAR_CLIENTDLL | FCVAR_ARCHIVE,
+	"Muffle HRTF sounds by the map geometry between them and the listener", true, 0.0f, true, 1.0f);
+ConVar cl_neo_hrtf_dynamic_geometry("cl_neo_hrtf_dynamic_geometry", "1", FCVAR_CLIENTDLL | FCVAR_ARCHIVE,
+	"Moving geometry in the acoustic scene: 0 = none, 1 = doors, func_movelinear and func_tracktrain and what is parented to them, 2 = also every other solid brush entity and prop",
+	true, 0.0f, true, 2.0f);
+ConVar cl_neo_hrtf_pathing("cl_neo_hrtf_pathing", "1", FCVAR_CLIENTDLL | FCVAR_ARCHIVE,
+	"Let occluded HRTF sounds reach the listener around obstacles, along paths baked into the map's probes", true, 0.0f, true, 1.0f);
+ConVar cl_neo_hrtf_reverb("cl_neo_hrtf_reverb", "1.0", FCVAR_CLIENTDLL | FCVAR_ARCHIVE,
+	"Level of the room reverb baked into the map's acoustic probes, 0 = off", true, 0.0f, true, 2.0f);
+ConVar cl_neo_hrtf_reverb_inhead("cl_neo_hrtf_reverb_inhead", "0", FCVAR_CLIENTDLL | FCVAR_ARCHIVE,
+	"Play the room reverb identically in both ears (inside the head) instead of decorrelated around the listener", true, 0.0f, true, 1.0f);
+ConVar cl_neo_hrtf_bake_auto("cl_neo_hrtf_bake_auto", "1", FCVAR_CLIENTDLL | FCVAR_ARCHIVE,
+	"Bake the map's acoustic probes in the background when there is no cached bake for it", true, 0.0f, true, 1.0f);
+ConVar cl_neo_hrtf_bake_threads("cl_neo_hrtf_bake_threads", "0", FCVAR_CLIENTDLL | FCVAR_ARCHIVE,
+	"Threads for baking acoustic probes, 0 = a quarter of the logical cores", true, 0.0f, true, 64.0f);
+ConVar cl_neo_hrtf_precache("cl_neo_hrtf_precache", "1", FCVAR_CLIENTDLL | FCVAR_ARCHIVE,
+	"Decode the map's precached sounds for HRTF in the background, rather than each on its first play", true, 0.0f, true, 1.0f);
+ConVar cl_neo_hrtf_debug_probes("cl_neo_hrtf_debug_probes", "0", FCVAR_CLIENTDLL,
+	"Draw the acoustic probes near the view", true, 0.0f, true, 1.0f);
 
 static CNeoHrtfSystem s_neoHrtfSystem;
+
+extern ConVar sv_neo_hrtf;
+CNeoHrtfLocalSoundScope::CNeoHrtfLocalSoundScope(NeoHrtfLocalSound place)
+	: m_place(cl_neo_hrtf.GetBool() && sv_neo_hrtf.GetBool() ? place : NeoHrtfLocalSound::None)
+	, m_guidBefore(0)
+{
+	if (m_place != NeoHrtfLocalSound::None)
+	{
+		m_guidBefore = enginesound->GetGuidForLastSoundEmitted();
+	}
+}
+
+CNeoHrtfLocalSoundScope::~CNeoHrtfLocalSoundScope()
+{
+	if (m_place == NeoHrtfLocalSound::None)
+	{
+		return;
+	}
+	// Unchanged if nothing played: a predicted sound is only played the first time its command runs.
+	const int guid = enginesound->GetGuidForLastSoundEmitted();
+	if (guid != m_guidBefore)
+	{
+		s_neoHrtfSystem.MarkLocalSound(guid, m_place);
+	}
+}
+
+CON_COMMAND(cl_neo_hrtf_scene_obj, "Write the HRTF acoustic scene (the map's world geometry) to <game dir>/hrtf_scene_<map>.obj")
+{
+	s_neoHrtfSystem.SaveSceneObj();
+}
+
+CON_COMMAND(cl_neo_hrtf_bake, "Bake the current map's acoustic probes in the background, replacing its cached bake")
+{
+	s_neoHrtfSystem.StartBake();
+}
+
+CON_COMMAND(cl_neo_hrtf_bake_cancel, "Stop baking the current map's acoustic probes")
+{
+	s_neoHrtfSystem.CancelBake();
+}
 
 void CNeoHrtfSystem::Shutdown()
 {
 	StopDevice();
 	m_cache.PurgeAndDeleteElements();
+	m_cachedBytes = 0;
 	m_soundLevels.Purge();
+}
+
+void CNeoHrtfSystem::LevelInitPreEntity()
+{
+	// Built while the map loads when HRTF is already on; otherwise on the first in-game Update
+	// after it is enabled, so players without HRTF never read the BSP.
+	m_bSceneStale = true;
+	if (m_pSpatializer)
+	{
+		BuildScene();
+	}
 }
 
 void CNeoHrtfSystem::LevelInitPostEntity()
 {
 	// Maps can add level_sounds scripts, so the level map is rebuilt against this map's scripts.
 	m_soundLevels.Purge();
+	// Each map starts dry, probes at once and fades in if the spawn is a small room.
+	m_roomReverbGain = 0.0f;
+	m_roomReverbTarget = 0.0f;
+	m_roomProbeTime = 0.0;
+	m_roomUpdateTime = 0.0;
+	if (m_pDevice)
+	{
+		// Both during the load rather than on the first sounds: the level map walks every script.
+		LookupScriptLevel("");
+		PrecacheNewSounds();
+	}
 }
 
 void CNeoHrtfSystem::LevelShutdownPreEntity()
@@ -180,6 +414,7 @@ void CNeoHrtfSystem::LevelShutdownPreEntity()
 		ReleaseAllVoices();
 	}
 	m_ignoredGuids.RemoveAll();
+	m_localSoundMarks.RemoveAll();
 }
 
 void CNeoHrtfSystem::LevelShutdownPostEntity()
@@ -191,12 +426,18 @@ void CNeoHrtfSystem::LevelShutdownPostEntity()
 		Assert(!voice.m_bInUse);
 	}
 #endif
+	DrainLoader();
 	m_cache.PurgeAndDeleteElements();
+	m_cachedBytes = 0;
+	m_pSoundPrecacheTable = nullptr;
+	m_precacheTableCount = 0;
+	ReleaseScene();
+	m_bSceneStale = false;
 }
 
 void CNeoHrtfSystem::Update(float)
 {
-	if (!cl_neo_hrtf.GetBool())
+	if (!cl_neo_hrtf.GetBool() || !sv_neo_hrtf.GetBool())
 	{
 		// The disabled path is one cvar read: nothing was started, so there is nothing to undo.
 		// Disabling after a run (including sv_cheats reverting the cvar) tears down once here
@@ -218,7 +459,18 @@ void CNeoHrtfSystem::Update(float)
 	{
 		if (engine->IsInGame())
 		{
+			if (m_bSceneStale)
+			{
+				BuildScene();
+			}
+			PrecacheNewSounds();
 			PollEngineSounds();
+			UpdateRoomSize();
+			UpdateBake();
+			if (cl_neo_hrtf_debug_probes.GetBool())
+			{
+				DrawProbes();
+			}
 		}
 		else
 		{
@@ -234,17 +486,20 @@ void CNeoHrtfSystem::Update(float)
 
 void CNeoHrtfSystem::PollEngineSounds()
 {
+	const double pollStart = Plat_FloatTime();
 	static ConVarRef s_masterVolume("volume");
 	Assert(s_masterVolume.IsValid());
 	// Our device bypasses the engine mixer, so the master volume has to be applied here.
 	const float outputScale = cl_neo_hrtf_volume.GetFloat() * s_masterVolume.GetFloat();
 
-	Vector listenerUp;
 	m_listenerOrigin = MainViewOrigin();
-	AngleVectors(MainViewAngles(), &m_listenerForward, &m_listenerRight, &listenerUp);
+	AngleVectors(MainViewAngles(), &m_listenerForward, &m_listenerRight, &m_listenerUp);
+	m_listener = { HrtfToVec3(m_listenerOrigin, kHrtfMetresPerUnit), HrtfToVec3(m_listenerForward),
+				   HrtfToVec3(m_listenerRight), HrtfToVec3(m_listenerUp) };
 
 	m_activeSounds.RemoveAll();
 	enginesound->GetActiveSounds(m_activeSounds);
+	m_gameTimingSums.m_activeSoundsMs += static_cast<float>(Plat_FloatTime() - pollStart);
 
 	int liveVoices = 0;
 	for (Voice &voice : m_voices)
@@ -253,21 +508,36 @@ void CNeoHrtfSystem::PollEngineSounds()
 		liveVoices += voice.m_bInUse ? 1 : 0;
 	}
 
-	// Classify every engine channel. Existing voices only get new parameters; string work and
-	// decoding happen once per guid, outside the lock.
+	// Existing voices are matched by guid and refreshed; new candidates are collected first so
+	// decoding happens once per guid.
 	m_ignoredGuidsNext.RemoveAll();
+	m_seenGuidsNext.RemoveAll();
 	int pendingCount = 0;
+	int culledVoices = 0;
 	const int localPlayerIndex = engine->GetLocalPlayer();
 	for (int i = 0; i < m_activeSounds.Count(); ++i)
 	{
 		const SndInfo_t &info = m_activeSounds[i];
+		m_seenGuidsNext.AddToTail(info.m_nGuid);
+		if (!m_seenGuids.HasElement(info.m_nGuid))
+		{
+			EndReplacedVoices(info);
+		}
+
 		const int voiceIndex = FindVoice(info.m_nGuid);
 		if (voiceIndex >= 0)
 		{
 			Voice &voice = m_voices[voiceIndex];
 			voice.m_bSeenThisPoll = true;
-			HrtfMuteEngineCopy(voice.m_sourceVolume, info);
-			m_stagedParams[voiceIndex] = ComputeParams(info, voice.m_sourceVolume, *voice.m_pSound, outputScale);
+			// The engine may still list a stopped channel for a poll.
+			if (voice.m_bOwned)
+			{
+				continue;
+			}
+			MuteEngineCopy(voice, info);
+			// The engine refreshes the origin every frame for channels that follow their entity
+			// (GetSoundSpatialization), so it already tracks moving players.
+			voice.m_params = ComputeParams(*info.m_pOrigin, info.m_nPitch, voice.m_localSound, voice.m_sourceVolume, voice.m_distMult, outputScale);
 			continue;
 		}
 
@@ -277,88 +547,755 @@ void CNeoHrtfSystem::PollEngineSounds()
 			continue;
 		}
 
-		if (!HrtfIsSpatialCandidate(info, localPlayerIndex))
+		const NeoHrtfLocalSound localSound = TakeLocalSoundMark(info.m_nGuid);
+		if (!HrtfIsSpatialCandidate(info, localPlayerIndex, localSound != NeoHrtfLocalSound::None))
 		{
 			continue;
 		}
 
-		const bool bHasFreeVoice = liveVoices + pendingCount < kMaxVoices;
+		// A sound left to the engine would play unoccluded, so make room instead where possible.
+		bool bHasFreeVoice = liveVoices - culledVoices + pendingCount < kMaxVoices;
+		if (!bHasFreeVoice && CullQuietestOwnedVoice())
+		{
+			++culledVoices;
+			bHasFreeVoice = true;
+		}
+		const double loadStart = Plat_FloatTime();
 		const CachedSound *pSound = bHasFreeVoice ? FindOrLoadSound(info) : nullptr;
+		m_gameTimingSums.m_newVoicesMs += static_cast<float>(Plat_FloatTime() - loadStart);
 		if (!pSound)
 		{
 			m_ignoredGuidsNext.AddToTail(info.m_nGuid);
 			continue;
 		}
-		m_pending[pendingCount++] = { i, pSound, -1 };
+		m_pending[pendingCount++] = { i, pSound, -1, localSound };
 	}
 
+	for (int v = 0; v < kMaxVoices; ++v)
 	{
-		AUTO_LOCK(m_mutex);
-		m_listener = { HrtfToVec3(m_listenerOrigin, kHrtfMetresPerUnit), HrtfToVec3(m_listenerForward),
-					   HrtfToVec3(m_listenerRight), HrtfToVec3(listenerUp) };
-
-		for (int v = 0; v < kMaxVoices; ++v)
+		Voice &voice = m_voices[v];
+		if (!voice.m_bInUse)
 		{
-			Voice &voice = m_voices[v];
-			if (!voice.m_bInUse)
-			{
-				continue;
-			}
-			if (voice.m_bSeenThisPoll)
-			{
-				voice.m_params = m_stagedParams[v];
-			}
-			else
-			{
-				m_pSpatializer->ReleaseVoice(voice.m_hSpatial);
-				voice = Voice();
-			}
+			continue;
 		}
 
-		int freeSearch = 0;
-		for (int p = 0; p < pendingCount; ++p)
+		if (voice.m_bOwned)
 		{
-			PendingVoice &pending = m_pending[p];
-			while (m_voices[freeSearch].m_bInUse)
-			{
-				++freeSearch;
-				Assert(freeSearch < kMaxVoices);
-			}
+			UpdateOwnedVoice(v, outputScale);
+		}
+		else if (!voice.m_bSeenThisPoll)
+		{
+			// A silent loop keeps its channel, so a channel that is gone has finished or been
+			// stopped by the game.
+			voice.m_endRequest = EndReason::Engine;
+		}
 
-			const NeoSpatial::VoiceHandle hSpatial = m_pSpatializer->CreateVoice();
-			if (hSpatial == NeoSpatial::INVALID_VOICE)
-			{
-				continue;
-			}
-
-			const SndInfo_t &info = m_activeSounds[pending.m_soundIndex];
-			Voice &voice = m_voices[freeSearch];
-			voice.m_bInUse = true;
-			voice.m_guid = info.m_nGuid;
-			voice.m_sourceVolume = info.m_flVolume;
-			voice.m_bSeenThisPoll = true;
-			voice.m_pSound = pending.m_pSound;
-			voice.m_hSpatial = hSpatial;
-			voice.m_params = ComputeParams(info, info.m_flVolume, *pending.m_pSound, outputScale);
-			pending.m_voiceIndex = freeSearch;
+		// The audio thread may still be rendering it, so the backend voice is only retired here.
+		if (voice.m_endRequest != EndReason::None)
+		{
+			m_retiredVoices.AddToTail({ voice.m_hSpatial, m_renderNext.m_sequence + 1 });
+			voice = Voice();
 		}
 	}
+
+	const double startVoicesStart = Plat_FloatTime();
+	int freeSearch = 0;
+	for (int p = 0; p < pendingCount; ++p)
+	{
+		PendingVoice &pending = m_pending[p];
+		while (m_voices[freeSearch].m_bInUse)
+		{
+			++freeSearch;
+			Assert(freeSearch < kMaxVoices);
+		}
+
+		const NeoSpatial::VoiceHandle hSpatial = m_pSpatializer->CreateVoice();
+		if (hSpatial == NeoSpatial::INVALID_VOICE)
+		{
+			continue;
+		}
+
+		const SndInfo_t &info = m_activeSounds[pending.m_soundIndex];
+		Voice &voice = m_voices[freeSearch];
+		voice.m_bInUse = true;
+		voice.m_guid = info.m_nGuid;
+		voice.m_generation = m_nextGeneration;
+		m_nextGeneration = Max(m_nextGeneration + 1, 1u); // 0 is no sound
+		voice.m_sourceVolume = info.m_flVolume;
+		voice.m_bSeenThisPoll = true;
+		voice.m_pSound = pending.m_pSound;
+		voice.m_hSpatial = hSpatial;
+		voice.m_localSound = pending.m_localSound;
+		voice.m_soundSource = info.m_nSoundSource;
+		voice.m_channel = info.m_nChannel;
+		voice.m_origin = *info.m_pOrigin;
+		voice.m_pitch = info.m_nPitch;
+		if (info.m_nSoundSource > 0 && info.m_bUpdatePositions)
+		{
+			voice.m_hSource = cl_entitylist->GetBaseEntity(info.m_nSoundSource);
+		}
+		const CachedSound &sound = *pending.m_pSound;
+		const double seconds = static_cast<double>(sound.m_samples.Count()) / sound.m_sampleRate
+			/ (static_cast<double>(Max(info.m_nPitch, 1)) / PITCH_NORM);
+		voice.m_bOwned = sound.m_loopStart < 0 && seconds <= kHrtfOwnedMaxSeconds;
+		voice.m_endDeadline = Plat_FloatTime() + seconds + kHrtfOwnedGraceSeconds;
+		ResolveSoundLevel(voice, info, *pending.m_pSound);
+		voice.m_params = ComputeParams(*info.m_pOrigin, info.m_nPitch, voice.m_localSound, info.m_flVolume, voice.m_distMult, outputScale);
+		pending.m_voiceIndex = freeSearch;
+		m_gameTimingSums.m_newVoices += 1.0f;
+	}
+	// A sound and the one replacing it can both be new in this poll, as when a dying player's
+	// last shot is cut by a silent sound on the same channel.
+	for (int p = 0; p < pendingCount; ++p)
+	{
+		if (m_pending[p].m_voiceIndex >= 0)
+		{
+			EndReplacedVoices(m_activeSounds[m_pending[p].m_soundIndex]);
+		}
+	}
+	const double gatherStart = Plat_FloatTime();
+	m_gameTimingSums.m_newVoicesMs += static_cast<float>(gatherStart - startVoicesStart);
+
+	// The simulation runs on its own thread; it takes the newest frame whenever it finishes a run.
+	if (m_sceneTriangles > 0)
+	{
+		m_dynamicGeometry.Gather(static_cast<CNeoAudioDynamicGeometry::Scope>(cl_neo_hrtf_dynamic_geometry.GetInt()),
+								 m_simNext.m_placements);
+	}
+	else
+	{
+		m_simNext.m_placements.RemoveAll();
+	}
+	m_gameTimingSums.m_gatherMs += static_cast<float>(Plat_FloatTime() - gatherStart);
+	BuildSimFrame();
+	{
+		AUTO_LOCK(m_simInputMutex);
+		m_simShared.m_frame = m_simNext.m_frame;
+		m_simShared.m_placements.Swap(m_simNext.m_placements);
+		m_bSimInputFresh = true;
+	}
+	if (pendingCount > 0 || m_bDoorChecksDone)
+	{
+		m_bSimNewVoices = true;
+	}
+	m_simWake.Set();
 
 	// Muting is an engine call, so it stays out of the audio thread's lock.
 	for (int p = 0; p < pendingCount; ++p)
 	{
 		const PendingVoice &pending = m_pending[p];
 		const SndInfo_t &info = m_activeSounds[pending.m_soundIndex];
-		if (pending.m_voiceIndex >= 0)
+		if (pending.m_voiceIndex < 0)
 		{
-			HrtfMuteEngineCopy(m_voices[pending.m_voiceIndex].m_sourceVolume, info);
+			m_ignoredGuidsNext.AddToTail(info.m_nGuid);
+			continue;
+		}
+
+		Voice &voice = m_voices[pending.m_voiceIndex];
+		if (voice.m_bOwned)
+		{
+			// No engine copy is left to leak where the sound is, or to be cut off early.
+			enginesound->StopSoundByGuid(info.m_nGuid);
 		}
 		else
 		{
-			m_ignoredGuidsNext.AddToTail(info.m_nGuid);
+			MuteEngineCopy(voice, info);
 		}
 	}
 	m_ignoredGuids.Swap(m_ignoredGuidsNext);
+	m_seenGuids.Swap(m_seenGuidsNext);
+
+	PublishRenderFrame();
+	ReleaseRetiredVoices();
+
+	// Sums are kept in seconds and calls, and turned into per-frame milliseconds and per-second
+	// counts once a second.
+	const double pollEnd = Plat_FloatTime();
+	m_gameTimingSums.m_pollMs += static_cast<float>(pollEnd - pollStart);
+	++m_gameTimingFrames;
+	const double window = pollEnd - m_gameTimingStart;
+	if (window >= 1.0)
+	{
+		const float toFrameMs = 1000.0f / m_gameTimingFrames;
+		const GameTimings &sums = m_gameTimingSums;
+		m_gameTimings = { sums.m_pollMs * toFrameMs, sums.m_activeSoundsMs * toFrameMs, sums.m_setVolumeMs * toFrameMs,
+						  sums.m_newVoicesMs * toFrameMs, sums.m_gatherMs * toFrameMs, sums.m_pathReachMs * toFrameMs,
+						  static_cast<float>(sums.m_setVolumes / window), static_cast<float>(sums.m_newVoices / window) };
+		m_gameTimingSums = GameTimings();
+		m_gameTimingFrames = 0;
+		m_gameTimingStart = pollEnd;
+	}
+}
+
+// Our device bypasses the engine, so its copy of a followed sound has to be muted.
+void CNeoHrtfSystem::MuteEngineCopy(Voice &voice, const SndInfo_t &info)
+{
+	voice.m_lastReportedVolume = info.m_flVolume;
+	voice.m_lastSpatializedVolume = info.m_flLastSpatializedVolume;
+
+	// Once muted the engine reports our level back, not the sound's, so only a report that differs
+	// from what was set is a genuine (server) volume change worth remembering.
+	const bool bFirstSight = voice.m_engineVolume < 0.0f;
+	const bool bReadsBackOurs = !bFirstSight && fabsf(info.m_flVolume - voice.m_engineVolume) <= kHrtfVolumeReadbackTolerance;
+	if (!bReadsBackOurs)
+	{
+		voice.m_sourceVolume = info.m_flVolume;
+	}
+
+	// The spatialized volume is the channel volume times the engine's distance and pan gain, but it
+	// may have been computed before a volume set last poll, so the gain is only measured while the
+	// volume held.
+	if (!voice.m_bEngineVolumeJustSet && (bFirstSight || bReadsBackOurs) && info.m_flVolume >= kHrtfEngineVolumeStep
+		&& info.m_flLastSpatializedVolume > 0.0f)
+	{
+		voice.m_engineGain = info.m_flLastSpatializedVolume / info.m_flVolume;
+	}
+
+	voice.m_bEngineVolumeJustSet = bFirstSight || !bReadsBackOurs || voice.m_engineVolume > 0.0f;
+	if (voice.m_bEngineVolumeJustSet)
+	{
+		const double setStart = Plat_FloatTime();
+		enginesound->SetVolumeByGuid(info.m_nGuid, 0.0f);
+		m_gameTimingSums.m_setVolumeMs += static_cast<float>(Plat_FloatTime() - setStart);
+		m_gameTimingSums.m_setVolumes += 1.0f;
+		voice.m_engineVolume = 0.0f;
+	}
+}
+
+// The engine ends a sound when a new one starts on the same entity and channel, except on the
+// channels that never replace; owned voices have no engine channel, so the rule is applied here.
+void CNeoHrtfSystem::EndReplacedVoices(const SndInfo_t &info)
+{
+	if (info.m_nChannel == CHAN_AUTO || info.m_nChannel == CHAN_STATIC)
+	{
+		return;
+	}
+
+	for (Voice &voice : m_voices)
+	{
+		// Guids count up, so only an older sound is replaced: sounds that start in the same poll
+		// can be listed in either order.
+		if (voice.m_bInUse && voice.m_bOwned && voice.m_guid < info.m_nGuid
+			&& voice.m_soundSource == info.m_nSoundSource && voice.m_channel == info.m_nChannel)
+		{
+			voice.m_endRequest = EndReason::Replaced;
+		}
+	}
+}
+
+// Owned voices play to the end of their file, so they are the ones that can be ended early.
+// Gain leaves out occlusion, so a loud sound behind a wall may go before a quiet one in view.
+bool CNeoHrtfSystem::CullQuietestOwnedVoice()
+{
+	Voice *pQuietest = nullptr;
+	for (Voice &voice : m_voices)
+	{
+		if (!voice.m_bInUse || !voice.m_bOwned || voice.m_endRequest != EndReason::None
+			|| voice.m_localSound != NeoHrtfLocalSound::None)
+		{
+			continue;
+		}
+
+		if (!pQuietest || voice.m_params.m_gain < pQuietest->m_params.m_gain)
+		{
+			pQuietest = &voice;
+		}
+	}
+
+	if (!pQuietest)
+	{
+		return false;
+	}
+
+	pQuietest->m_endRequest = EndReason::Culled;
+	return true;
+}
+
+// Owned voices are no longer in the engine's list, so they follow their entity and end themselves.
+void CNeoHrtfSystem::UpdateOwnedVoice(int slot, float outputScale)
+{
+	Voice &voice = m_voices[slot];
+
+	// The entity is asked for its sound origin as the engine would; a dormant or deleted one leaves
+	// the sound where it was last heard.
+	C_BaseEntity *pSource = voice.m_hSource.Get();
+	if (pSource && !pSource->IsDormant())
+	{
+		Vector origin = voice.m_origin;
+		SpatializationInfo_t spatialization = {};
+		spatialization.type = SpatializationInfo_t::SI_INSPATIALIZATION;
+		spatialization.info.nEntityIndex = voice.m_soundSource;
+		spatialization.info.nChannel = voice.m_channel;
+		spatialization.info.pszName = voice.m_pSound->m_name.Get();
+		spatialization.info.vOrigin = voice.m_origin;
+		spatialization.info.nPitch = voice.m_pitch;
+		spatialization.info.fVolume = voice.m_sourceVolume;
+		spatialization.info.Soundlevel = voice.m_soundLevel;
+		spatialization.info.vListenerOrigin = m_listenerOrigin;
+		spatialization.pOrigin = &origin;
+		if (pSource->GetSoundSpatialization(spatialization))
+		{
+			voice.m_origin = origin;
+		}
+	}
+	voice.m_params = ComputeParams(voice.m_origin, voice.m_pitch, voice.m_localSound, voice.m_sourceVolume, voice.m_distMult,
+								   outputScale);
+
+	if (voice.m_endRequest != EndReason::None)
+	{
+		return;
+	}
+	if (m_finishedGeneration[slot].load(std::memory_order_acquire) == voice.m_generation)
+	{
+		voice.m_endRequest = EndReason::Wav;
+	}
+	else if (Plat_FloatTime() > voice.m_endDeadline)
+	{
+		voice.m_endRequest = EndReason::Deadline;
+	}
+}
+
+void CNeoHrtfSystem::BuildSimFrame()
+{
+	SimFrame &frame = m_simNext.m_frame;
+	frame.m_sceneEpoch = m_sceneEpoch;
+	frame.m_listener = m_listener;
+	frame.m_bOcclusion = cl_neo_hrtf_occlusion.GetBool();
+	frame.m_bReverb = cl_neo_hrtf_reverb.GetFloat() > 0.0f;
+	frame.m_count = 0;
+	m_bDoorChecksDone = false;
+	for (int v = 0; v < kMaxVoices; ++v)
+	{
+		const Voice &voice = m_voices[v];
+		if (!voice.m_bInUse)
+		{
+			continue;
+		}
+		NeoSpatial::Vec3 origin = voice.m_params.m_origin;
+		origin.z += kHrtfOcclusionLiftUnits * kHrtfMetresPerUnit;
+		// A door's own sounds come from inside it, and a train's from inside the train, so a voice is
+		// never occluded by the dynamic geometry of the entity playing it. A path is never shorter
+		// than the straight line, so it can never be louder than the voice would be in plain view:
+		// capped at that level, no path can stay audible as the listener walks away.
+		frame.m_voices[frame.m_count++] = { v, voice.m_generation, origin, CNeoAudioDynamicGeometry::SoundGroup(voice.m_soundSource),
+											voice.m_params.m_falloffPerMetre, false, origin,
+											kHrtfFirstOrderOmniGain * voice.m_params.m_distanceGain };
+	}
+
+	// Steam Audio only recomputes a voice's paths while both it and the listener are inside some
+	// probe's sphere of influence; otherwise it hands back the last ones unchanged (measured on
+	// ntre_oilstain_ctg: two of its three skylines.wav emitters hang 2-4.5 m from the nearest probe,
+	// and their paths froze at the last line-of-sight value). Played with the distance compensation
+	// below, a frozen path stayed at one level however far the listener went. So both ends are
+	// pulled just inside the nearest probe's sphere when they are outside every sphere, and paths
+	// are dropped when no probe is within reach at all.
+	const double reachStart = Plat_FloatTime();
+	const int listenerLeaf = m_bspTree.leaves.empty() ? -1 : m_bspTree.FindLeaf(m_listener.origin);
+	frame.m_pathListener = m_listener;
+	frame.m_bPathing = cl_neo_hrtf_pathing.GetBool() && frame.m_count > 0 && listenerLeaf >= 0
+		&& m_probeCoverage.PullInside(m_listener.origin, kHrtfPathReachMetres, frame.m_pathListener.origin);
+	if (frame.m_bPathing)
+	{
+		const bool bDoors = cl_neo_hrtf_dynamic_geometry.GetInt() != static_cast<int>(CNeoAudioDynamicGeometry::Scope::Off)
+			&& m_dynamicGeometry.HasMovers();
+		if (bDoors)
+		{
+			AUTO_LOCK(m_simResultsMutex);
+			for (int i = 0; i < frame.m_count; ++i)
+			{
+				m_lastPaths[i] = m_simResultsShared.m_voices[frame.m_voices[i].m_slot];
+			}
+		}
+		for (int i = 0; i < frame.m_count; ++i)
+		{
+			// Traced from the same raised origin as occlusion, which also keeps floor-level entity
+			// sounds within reach of the probes 1.5 m up. Looked up again only when the sound moves.
+			SimVoiceInput &input = frame.m_voices[i];
+			Voice &voice = m_voices[input.m_slot];
+			if (!voice.m_bPathQueried || V_memcmp(&voice.m_pathQueryOrigin, &input.m_origin, sizeof(input.m_origin)) != 0)
+			{
+				voice.m_bPathQueried = true;
+				voice.m_pathQueryOrigin = input.m_origin;
+				voice.m_bPathReachable = m_probeCoverage.PullInside(input.m_origin, kHrtfPathReachMetres, voice.m_pathOrigin);
+			}
+			input.m_bPathReachable = voice.m_bPathReachable;
+			input.m_pathOrigin = voice.m_pathOrigin;
+
+			voice.m_bPathThroughDoor = false;
+			input.m_bDoorChecked = !bDoors || m_lastPaths[i].m_generation == input.m_generation;
+			if (bDoors && m_lastPaths[i].m_generation == input.m_generation)
+			{
+				m_bDoorChecksDone |= m_lastPaths[i].m_bPathsHeld;
+				const NeoSpatial::Vec3 &from = m_listener.origin;
+				const Vector toSound(input.m_origin.x - from.x, input.m_origin.y - from.y, input.m_origin.z - from.z);
+				FindDoorOnPaths(voice, m_lastPaths[i].m_pathArrival, toSound.Length());
+			}
+			input.m_bPathThroughDoor = voice.m_bPathThroughDoor;
+			V_memcpy(input.m_pathDoorTransmission, voice.m_pathDoorTransmission, sizeof(input.m_pathDoorTransmission));
+		}
+	}
+	m_gameTimingSums.m_pathReachMs += static_cast<float>(Plat_FloatTime() - reachStart);
+}
+
+// The baked paths ignore doors, so a path can come through a shut one. Its last leg arrives from
+// the paths' mean direction: a door met first along that line, before any wall and nearer than the
+// sound, stands in the doorway the paths use.
+void CNeoHrtfSystem::FindDoorOnPaths(Voice &voice, const Vector &arrival, float reachMetres)
+{
+	if (arrival.IsZero())
+	{
+		return;
+	}
+
+	trace_t trace;
+	CTraceFilterNoNPCsOrPlayer filter(nullptr, COLLISION_GROUP_NONE);
+	const float reach = reachMetres / kHrtfMetresPerUnit;
+	UTIL_TraceLine(m_listenerOrigin, m_listenerOrigin + arrival * reach, MASK_SOLID, &filter, &trace);
+	if (trace.m_pEnt && !trace.m_pEnt->IsWorld())
+	{
+		voice.m_bPathThroughDoor = m_dynamicGeometry.MoverTransmission(trace.m_pEnt, voice.m_pathDoorTransmission);
+	}
+}
+
+namespace
+{
+
+struct HrtfRoomRays
+{
+	Vector m_dirs[kHrtfRoomRays];
+
+	HrtfRoomRays()
+	{
+		int ray = 0;
+		for (const float elevationDeg : kHrtfRoomElevationsDeg)
+		{
+			for (int a = 0; a < kHrtfRoomAzimuths; ++a)
+			{
+				AngleVectors(QAngle(-elevationDeg, a * 360.0f / kHrtfRoomAzimuths, 0.0f), &m_dirs[ray++]);
+			}
+		}
+		m_dirs[ray] = Vector(0.0f, 0.0f, 1.0f);
+	}
+};
+
+} // namespace
+
+// Mean distance to the nearest surface around `origin`, in metres; negative when `origin` is inside
+// a wall. Doors and props count as walls, so a shut door makes the room smaller.
+float CNeoHrtfSystem::ProbeRoomMetres(const Vector &origin, float *pSkyShare) const
+{
+	static const HrtfRoomRays s_rays;
+	CTraceFilterNoNPCsOrPlayer filter(nullptr, COLLISION_GROUP_NONE);
+	const float reach = kHrtfRoomRayMetres / kHrtfMetresPerUnit;
+	float totalMetres = 0.0f;
+	int skyRays = 0;
+	for (const Vector &dir : s_rays.m_dirs)
+	{
+		trace_t trace;
+		UTIL_TraceLine(origin, origin + dir * reach, MASK_SOLID, &filter, &trace);
+		if (trace.startsolid)
+		{
+			return -1.0f;
+		}
+
+		// The sky is far whatever its brush's distance.
+		const bool bSky = (trace.surface.flags & (SURF_SKY | SURF_SKY2D)) != 0;
+		skyRays += bSky ? 1 : 0;
+		totalMetres += bSky ? kHrtfRoomRayMetres : trace.fraction * kHrtfRoomRayMetres;
+	}
+
+	*pSkyShare = static_cast<float>(skyRays) / kHrtfRoomRays;
+	return totalMetres / kHrtfRoomRays;
+}
+
+void CNeoHrtfSystem::UpdateRoomSize()
+{
+	const double now = Plat_FloatTime();
+	if (now >= m_roomProbeTime)
+	{
+		m_roomProbeTime = now + kHrtfRoomProbeSeconds;
+		float skyShare = 0.0f;
+		const float roomMetres = ProbeRoomMetres(m_listenerOrigin, &skyShare);
+		// A spectator camera inside a wall says nothing about the room: keep the last reading.
+		if (roomMetres >= 0.0f)
+		{
+			m_roomMetres = roomMetres;
+			m_roomSkyShare = skyShare;
+			m_roomReverbTarget = RemapValClamped(roomMetres, kHrtfRoomFullMetres, kHrtfRoomNoneMetres, 1.0f, 0.0f);
+		}
+	}
+
+	// Eased, so a teleport or a step through a doorway fades the tail rather than cutting it.
+	const double last = (m_roomUpdateTime > 0.0) ? m_roomUpdateTime : now;
+	m_roomUpdateTime = now;
+	const float maxStep = static_cast<float>(now - last) / kHrtfRoomFadeSeconds;
+	m_roomReverbGain = Approach(m_roomReverbTarget, m_roomReverbGain, maxStep);
+}
+
+void CNeoHrtfSystem::PublishRenderFrame()
+{
+	RenderFrame &frame = m_renderNext;
+	frame.m_listener = m_listener;
+	frame.m_reverbGain = kHrtfRoomReverbLevel * cl_neo_hrtf_reverb.GetFloat() * m_roomReverbGain;
+	frame.m_bReverbDecorrelate = !cl_neo_hrtf_reverb_inhead.GetBool();
+	for (int v = 0; v < kMaxVoices; ++v)
+	{
+		const Voice &voice = m_voices[v];
+		frame.m_voices[v] = voice.m_bInUse ? RenderVoice{ voice.m_pSound, voice.m_hSpatial, voice.m_generation, voice.m_params }
+										   : RenderVoice();
+	}
+	++frame.m_sequence;
+
+	AUTO_LOCK(m_renderMutex);
+	m_renderShared = frame;
+}
+
+void CNeoHrtfSystem::ReleaseRetiredVoices()
+{
+	const uint32 acquired = m_renderAcquired.load();
+	for (int i = m_retiredVoices.Count() - 1; i >= 0; --i)
+	{
+		if (acquired >= m_retiredVoices[i].m_sequence)
+		{
+			m_pSpatializer->ReleaseVoice(m_retiredVoices[i].m_hSpatial);
+			m_retiredVoices.FastRemove(i);
+		}
+	}
+}
+
+void CNeoHrtfSystem::FenceAudio()
+{
+	// Outside a block the audio thread holds nothing of the frames, so its copy can be emptied here.
+	AUTO_LOCK(m_renderBlockMutex);
+	for (RenderVoice &voice : m_render.m_voices)
+	{
+		voice = RenderVoice();
+	}
+	for (const RetiredVoice &retired : m_retiredVoices)
+	{
+		m_pSpatializer->ReleaseVoice(retired.m_hSpatial);
+	}
+	m_retiredVoices.RemoveAll();
+}
+
+void CNeoHrtfSystem::StartSimulationThread()
+{
+	Assert(!m_simThread.joinable());
+	ResetSimulation();
+	m_bSimInputFresh = false;
+	m_bSimQuit = false;
+	m_simThread = std::thread(&CNeoHrtfSystem::SimulationThreadMain, this);
+}
+
+void CNeoHrtfSystem::StopSimulationThread()
+{
+	if (m_simThread.joinable())
+	{
+		m_bSimQuit = true;
+		m_simWake.Set();
+		m_simThread.join();
+	}
+}
+
+void CNeoHrtfSystem::ResetSimulation()
+{
+	++m_sceneEpoch;
+	for (int v = 0; v < kMaxVoices; ++v)
+	{
+		m_simSources[v] = NeoSpatial::INVALID_SOURCE;
+		m_simSourceGenerations[v] = 0;
+		m_voices[v].m_bPathQueried = false;
+	}
+}
+
+void CNeoHrtfSystem::SimulationThreadMain()
+{
+	double lastRunStart = 0.0;
+	double lastEarlyRun = 0.0;
+	for (;;)
+	{
+		m_simWake.Wait();
+		if (m_bSimQuit)
+		{
+			return;
+		}
+
+		// Waiting first means the run takes the newest frame. A new voice is silent until its first
+		// result, so it cuts the wait short, though not more often than the early interval allows.
+		for (;;)
+		{
+			const double now = Plat_FloatTime();
+			const double wait = lastRunStart + kHrtfSimMinIntervalSeconds - now;
+			if (wait <= 0.0)
+			{
+				break;
+			}
+			if (m_bSimNewVoices && now >= lastEarlyRun + kHrtfSimMinEarlyIntervalSeconds)
+			{
+				lastEarlyRun = now;
+				break;
+			}
+			m_simWake.Wait(Max(1u, static_cast<uint32>(wait * 1000.0)));
+			if (m_bSimQuit)
+			{
+				return;
+			}
+		}
+		m_bSimNewVoices = false;
+		lastRunStart = Plat_FloatTime();
+		{
+			AUTO_LOCK(m_simInputMutex);
+			if (!m_bSimInputFresh)
+			{
+				continue;
+			}
+			m_simRun.m_frame = m_simShared.m_frame;
+			m_simRun.m_placements.Swap(m_simShared.m_placements);
+			m_bSimInputFresh = false;
+		}
+		{
+			AUTO_LOCK(m_simRunMutex);
+			if (m_simRun.m_frame.m_sceneEpoch != m_sceneEpoch)
+			{
+				// Built before the scene changed, so its placements may point at freed meshes.
+				continue;
+			}
+			RunSimulation(m_simRun, m_simResults);
+		}
+		AUTO_LOCK(m_simResultsMutex);
+		m_simResults.m_sequence = m_simResultsShared.m_sequence + 1;
+		m_simResultsShared = m_simResults;
+	}
+}
+
+void CNeoHrtfSystem::RunSimulation(const SimInput &input, SimResults &results)
+{
+	const SimFrame &frame = input.m_frame;
+	const int count = frame.m_count;
+	const double startTime = Plat_FloatTime();
+
+	m_dynamicGeometry.Apply(m_pSpatializer, input.m_placements);
+	const double dynamicTime = Plat_FloatTime();
+
+	// Each slot's source follows the sound playing in it.
+	bool bListed[kMaxVoices] = {};
+	for (int i = 0; i < count; ++i)
+	{
+		const SimVoiceInput &voice = frame.m_voices[i];
+		const int slot = voice.m_slot;
+		bListed[slot] = true;
+		if (m_simSourceGenerations[slot] != voice.m_generation || m_simSources[slot] == NeoSpatial::INVALID_SOURCE)
+		{
+			// Without a scene there is no source to be had, and the voice simply stays unoccluded.
+			m_pSpatializer->ReleaseSource(m_simSources[slot]);
+			m_simSources[slot] = m_pSpatializer->CreateSource();
+			m_simSourceGenerations[slot] = voice.m_generation;
+		}
+		m_simHandles[i] = m_simSources[slot];
+		m_simOrigins[i] = voice.m_origin;
+		m_simIgnoreGroups[i] = voice.m_ignoreGroup;
+	}
+	for (int slot = 0; slot < kMaxVoices; ++slot)
+	{
+		if (!bListed[slot] && m_simSourceGenerations[slot] != 0)
+		{
+			m_pSpatializer->ReleaseSource(m_simSources[slot]);
+			m_simSources[slot] = NeoSpatial::INVALID_SOURCE;
+			m_simSourceGenerations[slot] = 0;
+		}
+	}
+
+	if (frame.m_bOcclusion)
+	{
+		m_pSpatializer->SimulateDirect(frame.m_listener, m_simHandles, m_simOrigins, m_simIgnoreGroups, m_simPaths, count);
+	}
+	else
+	{
+		std::fill_n(m_simPaths, count, NeoSpatial::DirectPath());
+	}
+	const double directTime = Plat_FloatTime();
+
+	std::fill_n(m_simPathing, count, NeoSpatial::PathParams());
+	if (frame.m_bPathing)
+	{
+		for (int i = 0; i < count; ++i)
+		{
+			const SimVoiceInput &voice = frame.m_voices[i];
+			m_simPathingVoices[i] = { voice.m_bPathReachable ? m_simHandles[i] : NeoSpatial::INVALID_SOURCE, voice.m_pathOrigin,
+									  voice.m_falloffPerMetre };
+		}
+		m_pSpatializer->SimulatePathing(frame.m_pathListener, NeoSpatial::PROBE_BATCH_ID, kHrtfEngineGainMin, m_simPathingVoices,
+										m_simPathing, count);
+		for (int i = 0; i < count; ++i)
+		{
+			NeoSpatial::PathParams &paths = m_simPathing[i];
+			const float maxLevel = frame.m_voices[i].m_maxPathLevel;
+			if (paths.valid && paths.sh[0] > maxLevel)
+			{
+				const float scale = (paths.sh[0] > 0.0f) ? maxLevel / paths.sh[0] : 0.0f;
+				for (float &coeff : paths.sh)
+				{
+					coeff *= scale;
+				}
+			}
+
+			// The first-order field's direction in game axes (fitted on sources in plain view).
+			m_simArrivals[i] = paths.valid ? Vector(-paths.sh[1], paths.sh[3], paths.sh[2]) : vec3_origin;
+			VectorNormalize(m_simArrivals[i]);
+
+			// A new sound's first paths would play through a shut door before the check that needs them.
+			if (!frame.m_voices[i].m_bDoorChecked)
+			{
+				paths.valid = false;
+			}
+
+			// Through a shut door the paths are heard as through any wall: muffled, from no direction.
+			if (paths.valid && frame.m_voices[i].m_bPathThroughDoor)
+			{
+				std::fill(paths.sh + 1, paths.sh + NeoSpatial::PATHING_AMBISONIC_COEFFS, 0.0f);
+				for (int b = 0; b < NeoSpatial::NUM_ACOUSTIC_BANDS; ++b)
+				{
+					paths.eq[b] *= frame.m_voices[i].m_pathDoorTransmission[b];
+				}
+			}
+		}
+	}
+	const double pathingTime = Plat_FloatTime();
+
+	// A lookup in the baked probes around the listener, no rays.
+	results.m_reverb = NeoSpatial::ReverbParams();
+	if (frame.m_bReverb)
+	{
+		m_pSpatializer->SimulateReverb(frame.m_listener, &results.m_reverb);
+	}
+	const double endTime = Plat_FloatTime();
+
+	for (SimVoiceResult &result : results.m_voices)
+	{
+		result = SimVoiceResult();
+	}
+	for (int i = 0; i < count; ++i)
+	{
+		const bool bPathsHeld = frame.m_bPathing && !frame.m_voices[i].m_bDoorChecked;
+		results.m_voices[frame.m_voices[i].m_slot] = { frame.m_voices[i].m_generation, m_simPaths[i], m_simPathing[i],
+														frame.m_bPathing ? m_simArrivals[i] : vec3_origin, bPathsHeld };
+	}
+	results.m_dynamicInstances = m_dynamicGeometry.NumInstances();
+
+	++m_simRateRuns;
+	if (endTime - m_simRateWindowStart >= 1.0)
+	{
+		m_simRunsPerSecond = static_cast<float>(m_simRateRuns / (endTime - m_simRateWindowStart));
+		m_simRateRuns = 0;
+		m_simRateWindowStart = endTime;
+	}
+	SimTimings &timings = results.m_timings;
+	timings.m_totalMs = static_cast<float>((endTime - startTime) * 1000.0);
+	timings.m_dynamicMs = static_cast<float>((dynamicTime - startTime) * 1000.0);
+	timings.m_directMs = static_cast<float>((directTime - dynamicTime) * 1000.0);
+	timings.m_pathingMs = static_cast<float>((pathingTime - directTime) * 1000.0);
+	timings.m_reverbMs = static_cast<float>((endTime - pathingTime) * 1000.0);
+	timings.m_runsPerSecond = m_simRunsPerSecond;
 }
 
 void CNeoHrtfSystem::StartDevice()
@@ -378,8 +1315,19 @@ void CNeoHrtfSystem::StartDevice()
 		config.dataCallback = HrtfDataCallback;
 		config.pUserData = this;
 
+		// A new spatializer starts without a scene; Update builds it once in game.
+		m_bSceneStale = true;
 		m_carryRead = 0;
 		m_carryAvailable = 0;
+		// Neither thread is running yet, so their state is reset directly.
+		m_render = RenderFrame();
+		m_renderShared = RenderFrame();
+		m_renderNext.m_sequence = 0;
+		m_renderAcquired = 0;
+		m_renderSim = SimResults();
+		m_simResultsShared = SimResults();
+		StartSimulationThread();
+		StartLoaderThread();
 		m_pDevice = new ma_device;
 		if (ma_device_init(nullptr, &config, m_pDevice) != MA_SUCCESS)
 		{
@@ -411,73 +1359,421 @@ void CNeoHrtfSystem::StopDevice()
 		delete m_pDevice;
 		m_pDevice = nullptr;
 	}
+	StopSimulationThread();
+	StopLoaderThread();
 	if (m_pSpatializer)
 	{
 		ReleaseAllVoices();
 		delete m_pSpatializer;
 		m_pSpatializer = nullptr;
+		m_dynamicGeometry.Clear();
+		m_sceneTriangles = 0;
+	}
+}
+
+void CNeoHrtfSystem::BuildScene()
+{
+	Assert(m_pSpatializer);
+	m_bSceneStale = false;
+	const char *pszMapName = MapName();
+	if (!pszMapName || !pszMapName[0])
+	{
+		return;
+	}
+
+	// Scene calls share no state with Process (neo_spatializer.h), so the audio thread keeps
+	// rendering while the BSP is read and the scene committed. The simulation thread only waits
+	// while the scene is replaced.
+	const double startTime = Plat_FloatTime();
+	char path[MAX_PATH];
+	V_snprintf(path, sizeof(path), "maps/%s.bsp", pszMapName);
+	char error[kMaxErrorLen];
+	CNeoAudioGeometry geometry;
+	const CNeoAudioGeometry::Services services = { filesystem, physprops, physcollision };
+	CNeoAcousticMaterials materials;
+	materials.Load(filesystem);
+	const bool bLoaded = geometry.LoadFromBsp(services, materials, path, error, sizeof(error));
+
+	AUTO_LOCK(m_simRunMutex);
+	ResetSimulation(); // the backend drops every source with the old scene
+	if (!bLoaded || !m_pSpatializer->SetSceneGeometry(geometry.GetSceneGeometry(), error, sizeof(error)))
+	{
+		// Without a scene sounds are simply unoccluded, as they were before scenes existed.
+		Warning("NEO HRTF: no acoustic scene for %s, %s\n", pszMapName, error);
+		ReleaseScene();
+		return;
+	}
+
+	m_sceneTriangles = geometry.NumTriangles();
+	DevMsg("NEO HRTF: acoustic scene for %s, %d triangles (%d audio blocker brushes), built in %.0f ms\n", pszMapName,
+		   m_sceneTriangles, geometry.NumAudioBlockerBrushes(), (Plat_FloatTime() - startTime) * 1000.0);
+
+	V_snprintf(m_szProbeCachePath, sizeof(m_szProbeCachePath), "%s/%s.probes", kHrtfProbeCacheDir, pszMapName);
+	SetupProbes(geometry);
+	m_dynamicGeometry.Init(geometry, services);
+}
+
+void CNeoHrtfSystem::ReleaseScene()
+{
+	// The backend drops sources and probe batches (cancelling any bake) together with the scene.
+	// The reverb it held goes with the batches, so the next simulation reports none.
+	AUTO_LOCK(m_simRunMutex);
+	ResetSimulation();
+	if (m_pSpatializer)
+	{
+		char error[kMaxErrorLen];
+		m_pSpatializer->SetSceneGeometry(NeoSpatial::SceneGeometry(), error, sizeof(error));
+	}
+	m_dynamicGeometry.Clear(); // the backend dropped its models and instances with the scene
+	m_sceneTriangles = 0;
+	m_probes = NeoSpatial::ProbeSet();
+	m_bspTree = NeoSpatial::BspTree();
+	m_probeCoverage = NeoSpatial::ProbeCoverage();
+	m_probeCacheKey = 0;
+	m_szProbeCachePath[0] = '\0';
+	m_lastBakeState = NeoSpatial::BakeState::Idle;
+}
+
+void CNeoHrtfSystem::SetupProbes(const CNeoAudioGeometry &geometry)
+{
+	m_bspTree = geometry.GetBspTree();
+
+	// A map compiled with utils/neo_soundbake carries its probes baked; nothing to do at runtime.
+	if (LoadBakedProbeLump(geometry))
+	{
+		return;
+	}
+
+	// Generation is quick and deterministic, so it always runs: the cache only has to hold the
+	// baked data, and the probes are known here for the debug view either way.
+	const double startTime = Plat_FloatTime();
+	NeoSpatial::BuildProbes(geometry.GetProbeGeometry(), geometry.GetBspTree(), NeoSpatial::DEFAULT_PROBE_SETTINGS, m_probes,
+							geometry.GetBlockerVolumes());
+	m_probeCoverage.Build(m_probes, kHrtfPathReachMetres);
+	const double generateMs = (Plat_FloatTime() - startTime) * 1000.0;
+
+	const int numProbes = static_cast<int>(m_probes.centres.size());
+	if (numProbes > kHrtfRuntimeBakeMaxProbes)
+	{
+		Warning("NEO HRTF: %d acoustic probes, over the %d the game bakes; bake the map with neo_soundbake. "
+				"No baked reverb or sound paths on this map.\n", numProbes, kHrtfRuntimeBakeMaxProbes);
+		m_probes = NeoSpatial::ProbeSet();
+		m_probeCoverage = NeoSpatial::ProbeCoverage();
+		return;
+	}
+
+	CRC32_t key;
+	CRC32_Init(&key);
+	const uint32 geometryCrc = geometry.GetGeometryCrc();
+	CRC32_ProcessBuffer(&key, &geometryCrc, sizeof(geometryCrc));
+	CRC32_ProcessBuffer(&key, &kHrtfProbeCacheVersion, sizeof(kHrtfProbeCacheVersion));
+	CRC32_ProcessBuffer(&key, m_probes.centres.data(), static_cast<int>(m_probes.centres.size() * sizeof(NeoSpatial::Vec3)));
+	CRC32_ProcessBuffer(&key, m_probes.batchStarts.data(), static_cast<int>(m_probes.batchStarts.size() * sizeof(int32_t)));
+	CRC32_ProcessBuffer(&key, m_probes.batchAreas.data(), static_cast<int>(m_probes.batchAreas.size() * sizeof(int32_t)));
+	CRC32_ProcessBuffer(&key, &m_probes.radius, sizeof(m_probes.radius));
+	CRC32_Final(&key);
+	m_probeCacheKey = key;
+
+	DevMsg("NEO HRTF: %d acoustic probes in %d batches, generated in %.0f ms\n",
+		   static_cast<int>(m_probes.centres.size()), m_probes.NumBatches(), generateMs);
+	if (m_probes.centres.empty() || LoadProbeCache())
+	{
+		return;
+	}
+
+	char error[kMaxErrorLen];
+	if (!m_pSpatializer->SetProbeBatches(m_probes.Layout(), error, sizeof(error)))
+	{
+		Warning("NEO HRTF: no acoustic probes, %s\n", error);
+		return;
+	}
+	if (cl_neo_hrtf_bake_auto.GetBool())
+	{
+		StartBake();
+	}
+}
+
+bool CNeoHrtfSystem::LoadBakedProbeLump(const CNeoAudioGeometry &geometry)
+{
+	char error[kMaxErrorLen];
+	NeoSpatial::ProbeLumpHeader header;
+	NeoSpatial::ProbeSet probes;
+	CUtlVector<uint8> storage;
+	const uint8 *pBatches = nullptr;
+	if (!geometry.ReadBakedProbes(header, probes, storage, pBatches, error, sizeof(error)))
+	{
+		// No message for a map simply compiled without the baker.
+		if (error[0])
+		{
+			Warning("NEO HRTF: %s; baking at runtime\n", error);
+		}
+		return false;
+	}
+
+	if (!m_pSpatializer->LoadProbeBatches(pBatches, header.batchesSize, error, sizeof(error))
+		|| m_pSpatializer->GetBakeState(nullptr) != NeoSpatial::BakeState::Done)
+	{
+		// E.g. baked with a Steam Audio whose format this one cannot read.
+		DevWarning("NEO HRTF: cannot use the map's baked probes (%s, baked with Steam Audio %u.%u.%u); baking at runtime\n",
+				   error[0] ? error : "incomplete bake", (header.libraryVersion >> 16) & 0xff, (header.libraryVersion >> 8) & 0xff,
+				   header.libraryVersion & 0xff);
+		return false;
+	}
+
+	m_probes = std::move(probes);
+	m_probeCoverage.Build(m_probes, kHrtfPathReachMetres);
+	m_lastBakeState = NeoSpatial::BakeState::Done;
+	DevMsg("NEO HRTF: loaded %d acoustic probes in %d batches baked into the map\n", static_cast<int>(m_probes.centres.size()),
+		   m_probes.NumBatches());
+	return true;
+}
+
+bool CNeoHrtfSystem::LoadProbeCache()
+{
+	CUtlBuffer file;
+	if (!filesystem->ReadFile(m_szProbeCachePath, "MOD", file))
+	{
+		return false;
+	}
+
+	HrtfProbeCacheHeader header;
+	if (file.TellPut() < static_cast<int>(sizeof(header)))
+	{
+		return false;
+	}
+	V_memcpy(&header, file.Base(), sizeof(header));
+	if (header.magic != kHrtfProbeCacheMagic || header.version != kHrtfProbeCacheVersion || header.key != m_probeCacheKey)
+	{
+		DevMsg("NEO HRTF: %s is for a different map build or bake version, rebaking\n", m_szProbeCachePath);
+		return false;
+	}
+
+	char error[kMaxErrorLen];
+	const uint8 *pBlob = static_cast<const uint8 *>(file.Base()) + sizeof(header);
+	if (!m_pSpatializer->LoadProbeBatches(pBlob, file.TellPut() - sizeof(header), error, sizeof(error))
+		|| m_pSpatializer->GetBakeState(nullptr) != NeoSpatial::BakeState::Done)
+	{
+		DevWarning("NEO HRTF: cannot use %s (%s), rebaking\n", m_szProbeCachePath, error[0] ? error : "incomplete bake");
+		return false;
+	}
+	m_lastBakeState = NeoSpatial::BakeState::Done;
+	DevMsg("NEO HRTF: loaded baked probes from %s\n", m_szProbeCachePath);
+	return true;
+}
+
+void CNeoHrtfSystem::StartBake()
+{
+	if (!m_pSpatializer || m_probes.centres.empty())
+	{
+		Msg("NEO HRTF: no acoustic probes to bake (needs cl_neo_hrtf 1 and a loaded map)\n");
+		return;
+	}
+
+	// The batches are about to change under the simulation.
+	AUTO_LOCK(m_simRunMutex);
+
+	// A cached bake may be loaded, so the batches are rebuilt from the generated probes first.
+	char error[kMaxErrorLen];
+	if (m_pSpatializer->GetBakeState(nullptr) != NeoSpatial::BakeState::Idle
+		&& !m_pSpatializer->SetProbeBatches(m_probes.Layout(), error, sizeof(error)))
+	{
+		Warning("NEO HRTF: cannot bake, %s\n", error);
+		return;
+	}
+
+	int threads = cl_neo_hrtf_bake_threads.GetInt();
+	if (threads <= 0)
+	{
+		threads = Max(1, GetCPUInformation()->m_nLogicalProcessors / kHrtfBakeCoresPerThread);
+	}
+	if (m_pSpatializer->StartBake(threads))
+	{
+		m_lastBakeState = NeoSpatial::BakeState::Running;
+		DevMsg("NEO HRTF: baking %d acoustic probes on %d threads\n", static_cast<int>(m_probes.centres.size()), threads);
+	}
+}
+
+void CNeoHrtfSystem::CancelBake()
+{
+	if (m_pSpatializer)
+	{
+		AUTO_LOCK(m_simRunMutex);
+		m_pSpatializer->CancelBake();
+	}
+}
+
+void CNeoHrtfSystem::UpdateBake()
+{
+	const NeoSpatial::BakeState state = m_pSpatializer->GetBakeState(nullptr);
+	if (state == m_lastBakeState)
+	{
+		return;
+	}
+	m_lastBakeState = state;
+	if (state == NeoSpatial::BakeState::Done)
+	{
+		SaveProbeCache();
+	}
+	else if (state == NeoSpatial::BakeState::Failed)
+	{
+		DevMsg("NEO HRTF: acoustic probe bake stopped before finishing; cl_neo_hrtf_bake restarts it\n");
+	}
+}
+
+void CNeoHrtfSystem::SaveProbeCache()
+{
+	AUTO_LOCK(m_simRunMutex); // the simulation may be reading the batches
+	int64_t size = 0;
+	const uint8_t *pBlob = m_pSpatializer->SerializeProbeBatches(&size);
+	if (!pBlob || !m_szProbeCachePath[0])
+	{
+		return;
+	}
+
+	const HrtfProbeCacheHeader header = { kHrtfProbeCacheMagic, kHrtfProbeCacheVersion, m_probeCacheKey, 0 };
+	CUtlBuffer file;
+	file.Put(&header, sizeof(header));
+	file.Put(pBlob, static_cast<int>(size));
+	filesystem->CreateDirHierarchy(kHrtfProbeCacheDir, "MOD");
+	if (filesystem->WriteFile(m_szProbeCachePath, "MOD", file))
+	{
+		DevMsg("NEO HRTF: baked acoustic probes saved to %s (%lld bytes)\n", m_szProbeCachePath, static_cast<long long>(size));
+	}
+	else
+	{
+		Warning("NEO HRTF: could not write %s\n", m_szProbeCachePath);
+	}
+}
+
+void CNeoHrtfSystem::DrawProbes() const
+{
+	const Vector boxMins(-kHrtfProbeDrawSizeUnits, -kHrtfProbeDrawSizeUnits, -kHrtfProbeDrawSizeUnits);
+	const Vector boxMaxs = -boxMins;
+	for (int b = 0; b < m_probes.NumBatches(); ++b)
+	{
+		// Neighbouring batches get visibly different colours.
+		const uint32 hash = static_cast<uint32>(m_probes.batchAreas[b]) * 2654435761u;
+		const int r = 128 + (hash & 127), g = 128 + ((hash >> 8) & 127), blue = (hash >> 16) & 255;
+		for (int p = m_probes.batchStarts[b]; p < m_probes.batchStarts[b + 1]; ++p)
+		{
+			const NeoSpatial::Vec3 &centre = m_probes.centres[p];
+			const Vector position(centre.x, centre.y, centre.z);
+			const Vector origin = position / kHrtfMetresPerUnit;
+			if (origin.DistToSqr(m_listenerOrigin) < kHrtfProbeDrawRangeUnits * kHrtfProbeDrawRangeUnits)
+			{
+				debugoverlay->AddBoxOverlay(origin, boxMins, boxMaxs, vec3_angle, r, g, blue, 160, 0.0f);
+			}
+		}
+	}
+}
+
+void CNeoHrtfSystem::SaveSceneObj()
+{
+	const char *pszMapName = MapName();
+	if (!m_pSpatializer || !pszMapName)
+	{
+		Msg("NEO HRTF: no acoustic scene (needs cl_neo_hrtf 1 and a loaded map)\n");
+		return;
+	}
+
+	AUTO_LOCK(m_simRunMutex);
+	char fileBaseName[MAX_PATH];
+	V_snprintf(fileBaseName, sizeof(fileBaseName), "%s/hrtf_scene_%s", engine->GetGameDirectory(), pszMapName);
+	V_FixSlashes(fileBaseName);
+	if (m_pSpatializer->SaveSceneObj(fileBaseName))
+	{
+		Msg("NEO HRTF: wrote %s.obj\n", fileBaseName);
+	}
+	else
+	{
+		Msg("NEO HRTF: no acoustic scene for %s\n", pszMapName);
 	}
 }
 
 void CNeoHrtfSystem::ReleaseAllVoices()
 {
-	// Hand still-playing sounds back to the engine; a no-op for guids that already ended.
-	for (const Voice &voice : m_voices)
+	m_seenGuids.RemoveAll();
+	bool bAny = m_retiredVoices.Count() > 0;
+	for (Voice &voice : m_voices)
 	{
-		if (voice.m_bInUse && enginesound->IsSoundStillPlaying(voice.m_guid))
+		if (!voice.m_bInUse)
+		{
+			continue;
+		}
+		// Hand still-playing followed sounds back to the engine; a no-op for guids that already
+		// ended. Owned sounds in progress are cut.
+		if (!voice.m_bOwned && enginesound->IsSoundStillPlaying(voice.m_guid))
 		{
 			enginesound->SetVolumeByGuid(voice.m_guid, voice.m_sourceVolume);
 		}
+		m_retiredVoices.AddToTail({ voice.m_hSpatial, m_renderNext.m_sequence + 1 });
+		voice = Voice();
+		bAny = true;
 	}
 
-	AUTO_LOCK(m_mutex);
-	for (Voice &voice : m_voices)
+	// Called every frame out of game, so the audio thread is only waited for when there was
+	// something to stop.
+	if (bAny)
 	{
-		if (voice.m_bInUse)
-		{
-			m_pSpatializer->ReleaseVoice(voice.m_hSpatial);
-			voice = Voice();
-		}
+		PublishRenderFrame();
+		FenceAudio();
 	}
 }
 
 const CNeoHrtfSystem::CachedSound *CNeoHrtfSystem::FindOrLoadSound(const SndInfo_t &info)
 {
 	char rawName[MAX_PATH];
-	if (!filesystem->String(info.m_filenameHandle, rawName, sizeof(rawName)) || HrtfIsEngineOnlyName(rawName))
-	{
-		return nullptr;
-	}
-
 	char name[MAX_PATH];
-	HrtfNormaliseSoundName(rawName, name, sizeof(name));
-	const char *pszExt = V_GetFileExtension(name);
-	if (!pszExt || (V_strcmp(pszExt, "wav") != 0 && V_strcmp(pszExt, "mp3") != 0))
+	if (!filesystem->String(info.m_filenameHandle, rawName, sizeof(rawName)) || !HrtfCacheName(rawName, name, sizeof(name)))
 	{
 		return nullptr;
 	}
 
-	int index = m_cache.Find(name);
-	if (index == m_cache.InvalidIndex())
-	{
-		// Failures are cached too (empty samples), so a bad file is only read once per level.
-		CachedSound *pSound = new CachedSound;
-		pSound->m_name = name;
-		LoadSound(*pSound);
-		index = m_cache.Insert(name, pSound);
-	}
-
-	const CachedSound *pSound = m_cache[index];
+	// Failures are cached too (no samples), so a bad file is only read once per level.
+	CachedSound *pSound = GetCachedSound(name);
+	EnsureDecoded(*pSound);
 	return pSound->m_samples.IsEmpty() ? nullptr : pSound;
 }
 
-void CNeoHrtfSystem::LoadSound(CachedSound &sound)
+CNeoHrtfSystem::CachedSound *CNeoHrtfSystem::GetCachedSound(const char *pszNormalisedName)
+{
+	const int index = m_cache.Find(pszNormalisedName);
+	if (index != m_cache.InvalidIndex())
+	{
+		return m_cache[index];
+	}
+	CachedSound *pSound = new CachedSound;
+	pSound->m_name = pszNormalisedName;
+	pSound->m_scriptLevel = LookupScriptLevel(pszNormalisedName);
+	m_cache.Insert(pszNormalisedName, pSound);
+	return pSound;
+}
+
+void CNeoHrtfSystem::EnsureDecoded(CachedSound &sound)
+{
+	int expected = CachedSound::Queued;
+	if (sound.m_state.compare_exchange_strong(expected, CachedSound::Loading))
+	{
+		DecodeSound(sound);
+		m_cachedBytes += sound.m_samples.Count() * static_cast<int64>(sizeof(int16));
+		sound.m_state = CachedSound::Ready;
+		return;
+	}
+	// The loader thread is decoding it right now: one file, no longer than decoding it here.
+	while (sound.m_state.load() == CachedSound::Loading)
+	{
+		ThreadSleep(0);
+	}
+}
+
+void CNeoHrtfSystem::DecodeSound(CachedSound &sound)
 {
 	char path[MAX_PATH];
 	V_snprintf(path, sizeof(path), "%s%s", kHrtfSoundDir, sound.m_name.Get());
 	CUtlBuffer file;
 	ma_decoder decoder;
-	const ma_decoder_config config = ma_decoder_config_init(ma_format_f32, 1, kSampleRate);
+	// Mono 16-bit at the file's own rate (0); playback steps through it at that rate.
+	const ma_decoder_config config = ma_decoder_config_init(ma_format_s16, 1, 0);
 	if (!filesystem->ReadFile(path, "GAME", file) || file.TellPut() <= 0
 		|| ma_decoder_init_memory(file.Base(), file.TellPut(), &config, &decoder) != MA_SUCCESS)
 	{
@@ -486,9 +1782,11 @@ void CNeoHrtfSystem::LoadSound(CachedSound &sound)
 	}
 
 	ma_uint64 length = 0;
-	if (ma_decoder_get_length_in_pcm_frames(&decoder, &length) == MA_SUCCESS
-		&& length > 0 && length <= static_cast<ma_uint64>(kHrtfMaxCachedFrames))
+	const ma_uint32 sampleRate = decoder.outputSampleRate;
+	if (sampleRate > 0 && ma_decoder_get_length_in_pcm_frames(&decoder, &length) == MA_SUCCESS && length > 0
+		&& length <= static_cast<ma_uint64>(kHrtfMaxCachedSeconds) * sampleRate)
 	{
+		sound.m_sampleRate = static_cast<int>(sampleRate);
 		sound.m_samples.SetCount(static_cast<int>(length));
 		ma_uint64 framesRead = 0;
 		ma_decoder_read_pcm_frames(&decoder, sound.m_samples.Base(), length, &framesRead);
@@ -502,16 +1800,190 @@ void CNeoHrtfSystem::LoadSound(CachedSound &sound)
 
 	if (V_strcmp(V_GetFileExtension(path), "wav") == 0)
 	{
-		const int loopStart = HrtfParseWavLoopStart(static_cast<const uint8 *>(file.Base()), file.TellPut());
+		int loopStart;
+		int loopEnd;
+		HrtfParseWavLoop(static_cast<const uint8 *>(file.Base()), file.TellPut(), loopStart, loopEnd);
 		sound.m_loopStart = (loopStart < sound.m_samples.Count()) ? loopStart : -1;
+		// Nothing past the loop end is ever heard while looping, so drop it rather than teach playback a second end.
+		if (sound.m_loopStart >= 0 && loopEnd > sound.m_loopStart && loopEnd < sound.m_samples.Count())
+		{
+			sound.m_samples.SetCountNonDestructively(loopEnd);
+		}
 	}
-	sound.m_distMult = LookupDistMult(sound.m_name.Get());
 }
 
-float CNeoHrtfSystem::LookupDistMult(const char *pszNormalisedName)
+void CNeoHrtfSystem::PrecacheNewSounds()
+{
+	const bool bPrecache = cl_neo_hrtf_precache.GetBool();
+	if (bPrecache != m_bPrecaching)
+	{
+		// Turned on: everything precached so far is queued. Turned off: what is still queued is
+		// dropped, to decode on first play.
+		m_bPrecaching = bPrecache;
+		m_precacheTableCount = 0;
+		if (!bPrecache)
+		{
+			AUTO_LOCK(m_loadQueueMutex);
+			m_loadQueue.RemoveAll();
+			m_loadQueueHead = 0;
+		}
+	}
+	if (!bPrecache)
+	{
+		return;
+	}
+
+	// Every sound the server precaches, script sounds' waves and map sounds alike, is in this table,
+	// and the server can only ask the client to play precached sounds. Read every frame, since the
+	// server may precache more after the map has loaded.
+	if (!m_pSoundPrecacheTable)
+	{
+		m_pSoundPrecacheTable = networkstringtable->FindTable(kHrtfSoundPrecacheTable);
+		if (!m_pSoundPrecacheTable)
+		{
+			return;
+		}
+	}
+	const int count = m_pSoundPrecacheTable->GetNumStrings();
+	if (count <= m_precacheTableCount)
+	{
+		return;
+	}
+
+	CUtlVector<CachedSound *> queued;
+	char name[MAX_PATH];
+	for (int i = m_precacheTableCount; i < count; ++i)
+	{
+		const char *pszRawName = m_pSoundPrecacheTable->GetString(i);
+		if (pszRawName && HrtfCacheName(pszRawName, name, sizeof(name)))
+		{
+			CachedSound *pSound = GetCachedSound(name);
+			if (pSound->m_state.load() == CachedSound::Queued)
+			{
+				queued.AddToTail(pSound);
+			}
+		}
+	}
+	m_precacheTableCount = count;
+	if (!queued.IsEmpty())
+	{
+		AUTO_LOCK(m_loadQueueMutex);
+		m_loadQueue.AddVectorToTail(queued);
+	}
+	m_loadWake.Set();
+}
+
+void CNeoHrtfSystem::StartLoaderThread()
+{
+	Assert(!m_loadThread.joinable());
+	m_bLoadQuit = false;
+	m_loadThread = std::thread(&CNeoHrtfSystem::LoaderThreadMain, this);
+}
+
+void CNeoHrtfSystem::StopLoaderThread()
+{
+	DrainLoader();
+	if (m_loadThread.joinable())
+	{
+		m_bLoadQuit = true;
+		m_loadWake.Set();
+		m_loadThread.join();
+	}
+	// A sound queued again later is precached again.
+	m_precacheTableCount = 0;
+}
+
+void CNeoHrtfSystem::DrainLoader()
+{
+	{
+		AUTO_LOCK(m_loadQueueMutex);
+		m_loadQueue.RemoveAll();
+		m_loadQueueHead = 0;
+	}
+	// The loader takes this before it takes a sound off the queue, so once it is ours no sound is
+	// being decoded, and the queue is empty for when it is released.
+	AUTO_LOCK(m_loadRunMutex);
+}
+
+void CNeoHrtfSystem::LoaderThreadMain()
+{
+	for (;;)
+	{
+		m_loadWake.Wait();
+		for (;;)
+		{
+			if (m_bLoadQuit)
+			{
+				return;
+			}
+			AUTO_LOCK(m_loadRunMutex);
+			CachedSound *pSound = nullptr;
+			{
+				AUTO_LOCK(m_loadQueueMutex);
+				if (m_loadQueueHead < m_loadQueue.Count())
+				{
+					pSound = m_loadQueue[m_loadQueueHead++];
+				}
+				if (m_loadQueueHead >= m_loadQueue.Count())
+				{
+					m_loadQueue.RemoveAll();
+					m_loadQueueHead = 0;
+				}
+			}
+			if (!pSound)
+			{
+				break;
+			}
+			// The game thread may have claimed it for a first play since it was queued.
+			int expected = CachedSound::Queued;
+			if (pSound->m_state.compare_exchange_strong(expected, CachedSound::Loading))
+			{
+				DecodeSound(*pSound);
+				m_cachedBytes += pSound->m_samples.Count() * static_cast<int64>(sizeof(int16));
+				pSound->m_state = CachedSound::Ready;
+			}
+		}
+	}
+}
+
+void CNeoHrtfSystem::ResolveSoundLevel(Voice &voice, const SndInfo_t &info, const CachedSound &sound) const
+{
+	// An ambient_generic playing a raw file emits it at the level its radius gives, which no script
+	// knows about; the server networks it with the entity index the channel is emitted from. Several
+	// emitters can share a source entity (SourceEntityName), so the file has to match as well.
+	voice.m_soundLevel = sound.m_scriptLevel;
+	voice.m_bLevelFromEmitter = false;
+	char name[MAX_PATH];
+	for (int i = 0; i < C_AmbientGeneric::Count(); ++i)
+	{
+		const C_AmbientGeneric *pAmbient = C_AmbientGeneric::Get(i);
+		if (pAmbient->GetEmitterIndex() != info.m_nSoundSource || pAmbient->GetNetSoundLevel() < 0)
+		{
+			continue;
+		}
+		HrtfNormaliseSoundName(pAmbient->GetSoundFile(), name, sizeof(name));
+		if (V_strcmp(name, sound.m_name.Get()) == 0)
+		{
+			voice.m_soundLevel = HrtfPlainSoundLevel(pAmbient->GetNetSoundLevel());
+			voice.m_bLevelFromEmitter = true;
+			break;
+		}
+	}
+
+	// Other long or looping sounds are mostly doors and trains, which play their raw files at the
+	// engine's default level; a script naming the same file may be far louder.
+	if (!voice.m_bLevelFromEmitter && !voice.m_bOwned)
+	{
+		voice.m_soundLevel = Min(voice.m_soundLevel, SNDLVL_NORM);
+	}
+	voice.m_distMult = HrtfDistMultForLevel(voice.m_soundLevel);
+}
+
+soundlevel_t CNeoHrtfSystem::LookupScriptLevel(const char *pszNormalisedName)
 {
 	// Built on first use rather than at level load, so players without HRTF never pay for it.
-	// Channels only carry the wave file, so map every scripted wave back to its loudest level.
+	// Channels only carry the wave file. When scripts disagree on a file's level, there is no way to
+	// tell which one played it, or whether code played the file directly at the default level.
 	if (m_soundLevels.Count() == 0)
 	{
 		Assert(soundemitterbase);
@@ -523,7 +1995,7 @@ float CNeoHrtfSystem::LookupDistMult(const char *pszNormalisedName)
 			{
 				continue;
 			}
-			const soundlevel_t level = static_cast<soundlevel_t>(pParams->GetSoundLevel().start);
+			const soundlevel_t level = HrtfPlainSoundLevel(static_cast<int>(pParams->GetSoundLevel().start));
 			for (int w = 0; w < pParams->NumSoundNames(); ++w)
 			{
 				CUtlSymbol waveSymbol = pParams->GetSoundNames()[w].symbol; // GetWaveName takes a non-const ref
@@ -533,44 +2005,107 @@ float CNeoHrtfSystem::LookupDistMult(const char *pszNormalisedName)
 				{
 					m_soundLevels.Insert(name, level);
 				}
-				else
+				else if (m_soundLevels[index] != level)
 				{
-					m_soundLevels[index] = Max(m_soundLevels[index], level);
+					m_soundLevels[index] = SNDLVL_NORM;
 				}
 			}
 		}
 	}
 
 	const int index = m_soundLevels.Find(pszNormalisedName);
-	const soundlevel_t level = (index != m_soundLevels.InvalidIndex()) ? m_soundLevels[index] : SNDLVL_NORM;
-	// SNDLVL_NONE means "heard everywhere": no distance falloff at all.
-	if (level == SNDLVL_NONE)
-	{
-		return 0.0f;
-	}
-	return powf(10.0f, (kHrtfEngineRefDb - static_cast<float>(level)) / 20.0f) / kHrtfEngineRefDistUnits;
+	return (index != m_soundLevels.InvalidIndex()) ? m_soundLevels[index] : SNDLVL_NORM;
 }
 
-CNeoHrtfSystem::VoiceParams CNeoHrtfSystem::ComputeParams(const SndInfo_t &info, float sourceVolume,
-														  const CachedSound &sound, float outputScale) const
+void NeoHrtfStopSound(int entIndex, int channel, const char *pszWave)
 {
-	// The engine refreshes this every frame for channels that follow their entity
-	// (GetSoundSpatialization), so it already tracks moving players.
-	Assert(info.m_pOrigin);
-	const Vector &position = *info.m_pOrigin;
+	s_neoHrtfSystem.StopSound(entIndex, channel, pszWave);
+}
+
+void CNeoHrtfSystem::StopSound(int entIndex, int channel, const char *pszWave)
+{
+	char name[MAX_PATH];
+	if (!pszWave || !HrtfCacheName(pszWave, name, sizeof(name)))
+	{
+		return;
+	}
+
+	for (Voice &voice : m_voices)
+	{
+		if (voice.m_bInUse && voice.m_bOwned && voice.m_soundSource == entIndex && voice.m_channel == channel
+			&& !V_stricmp(voice.m_pSound->m_name.Get(), name))
+		{
+			voice.m_endRequest = EndReason::Stopped;
+		}
+	}
+}
+
+void CNeoHrtfSystem::MarkLocalSound(int guid, NeoHrtfLocalSound place)
+{
+	const double now = Plat_FloatTime();
+	for (int i = m_localSoundMarks.Count() - 1; i >= 0; --i)
+	{
+		if (now - m_localSoundMarks[i].m_time > kHrtfLocalMarkSeconds)
+		{
+			m_localSoundMarks.FastRemove(i);
+		}
+	}
+	m_localSoundMarks.AddToTail({ guid, place, now });
+}
+
+NeoHrtfLocalSound CNeoHrtfSystem::TakeLocalSoundMark(int guid)
+{
+	for (int i = 0; i < m_localSoundMarks.Count(); ++i)
+	{
+		if (m_localSoundMarks[i].m_guid == guid)
+		{
+			const NeoHrtfLocalSound place = m_localSoundMarks[i].m_place;
+			m_localSoundMarks.FastRemove(i);
+			return place;
+		}
+	}
+	return NeoHrtfLocalSound::None;
+}
+
+Vector CNeoHrtfSystem::SoundPosition(const Vector &enginePosition, NeoHrtfLocalSound localSound) const
+{
+	// The engine plays all of the local player's sounds from their origin on the floor, whatever
+	// made them, so sounds made with the hands or the body are placed from the view instead.
+	switch (localSound)
+	{
+	case NeoHrtfLocalSound::Weapon:
+	{
+		static ConVarRef s_rightHand("cl_righthand");
+		const float side = (!s_rightHand.IsValid() || s_rightHand.GetBool()) ? kHrtfLocalWeaponSideUnits : -kHrtfLocalWeaponSideUnits;
+		return m_listenerOrigin + m_listenerForward * kHrtfLocalWeaponForwardUnits + m_listenerRight * side
+			   - m_listenerUp * kHrtfLocalWeaponDownUnits;
+	}
+	case NeoHrtfLocalSound::Body:
+		return m_listenerOrigin - Vector(0.0f, 0.0f, kHrtfLocalBodyDownUnits);
+	default:
+		return enginePosition;
+	}
+}
+
+CNeoHrtfSystem::VoiceParams CNeoHrtfSystem::ComputeParams(const Vector &enginePosition, int pitch, NeoHrtfLocalSound localSound,
+														  float sourceVolume, float distMult, float outputScale) const
+{
+	const Vector position = SoundPosition(enginePosition, localSound);
 
 	// The engine's inverse-distance model (see kHrtfEngineRefDb), so audible ranges match
 	// the engine's own copy. Below snd_gain_min the engine stops mixing the channel.
-	const float relativeDistance = position.DistTo(m_listenerOrigin) * sound.m_distMult;
+	const float relativeDistance = position.DistTo(m_listenerOrigin) * distMult;
 	float distanceGain = (relativeDistance > 1.0f) ? (1.0f / relativeDistance) : kHrtfEngineGainMax;
 	if (distanceGain < kHrtfEngineGainMin)
 	{
 		distanceGain = 0.0f;
 	}
 
-	Assert(info.m_nPitch > 0);
+	Assert(pitch > 0);
+	// The same law per metre, for the pathing simulation to evaluate along paths around obstacles.
+	const float falloffPerMetre = distMult / kHrtfMetresPerUnit;
 	return { HrtfToVec3(position, kHrtfMetresPerUnit), sourceVolume * distanceGain * outputScale,
-			 static_cast<float>(Max(info.m_nPitch, 1)) / PITCH_NORM };
+			 static_cast<float>(Max(pitch, 1)) / PITCH_NORM, distanceGain, falloffPerMetre };
 }
 
 int CNeoHrtfSystem::FindVoice(int guid) const
@@ -585,12 +2120,17 @@ int CNeoHrtfSystem::FindVoice(int guid) const
 	return -1;
 }
 
-void CNeoHrtfSystem::PrintDebug() const
+void CNeoHrtfSystem::PrintDebug()
 {
 	if (!m_pDevice)
 	{
 		engine->Con_NPrintf(0, "hrtf: disabled, %s", m_szStartError);
 		return;
+	}
+
+	{
+		AUTO_LOCK(m_simResultsMutex);
+		m_debugResults = m_simResultsShared;
 	}
 
 	int liveVoices = 0;
@@ -606,11 +2146,66 @@ void CNeoHrtfSystem::PrintDebug() const
 		const NeoSpatial::Vec3 &origin = voice.m_params.m_origin;
 		const Vector toSource = Vector(origin.x, origin.y, origin.z) - listenerMetres;
 		const float azimuthDeg = RAD2DEG(atan2f(DotProduct(toSource, m_listenerRight), DotProduct(toSource, m_listenerForward)));
-		engine->Con_NPrintf(v + 1, "hrtf %s  %.1f m  gain %.2f  az %+.0f", voice.m_pSound->m_name.Get(),
-			toSource.Length(), voice.m_params.m_gain, azimuthDeg);
+		// A voice is silent until the simulation has run for it.
+		const SimVoiceResult &sim = m_debugResults.m_voices[v];
+		const bool bSimulated = sim.m_generation == voice.m_generation;
+		char simText[96] = "not simulated yet";
+		if (bSimulated)
+		{
+			// The paths' omnidirectional component is their overall level along the path.
+			char pathText[32] = "paths -";
+			if (sim.m_paths.valid)
+			{
+				V_snprintf(pathText, sizeof(pathText), "paths %.2f", sim.m_paths.sh[0]);
+			}
+			V_snprintf(simText, sizeof(simText), "occ %.2f  trans %.2f/%.2f/%.2f  %s", sim.m_path.occlusion, sim.m_path.transmission[0],
+					   sim.m_path.transmission[1], sim.m_path.transmission[2], pathText);
+		}
+		// "map" when the level came from the networked ambient_generic, "script" otherwise.
+		// The local player's own sounds are tagged with where they play from.
+		static const char *const s_localSoundTags[] = { "", " (own, feet)", " (own, weapon)", " (own, body)" };
+		// Voices are listed packed below the status lines; the engine drops lines past its last
+		// notify slot, so with many voices the tail of the list is not shown.
+		engine->Con_NPrintf(kHrtfDebugFirstVoiceLine + liveVoices - 1, "hrtf %s%s  %.1f m  %d dB %s  gain %.2f  az %+.0f  %s  engine vol %.4f spat %.4f gain %.3f",
+			voice.m_pSound->m_name.Get(), s_localSoundTags[static_cast<int>(voice.m_localSound)], toSource.Length(), static_cast<int>(voice.m_soundLevel),
+			voice.m_bLevelFromEmitter ? "map" : "script", voice.m_params.m_gain, azimuthDeg, simText, voice.m_lastReportedVolume,
+			voice.m_lastSpatializedVolume, voice.m_engineGain);
 	}
-	engine->Con_NPrintf(0, "hrtf: Steam Audio, voices %d/%d, cached sounds %d, scripted wave levels %d",
-		liveVoices, kMaxVoices, m_cache.Count(), m_soundLevels.Count());
+	// The simulation runs on its own thread, so its time is no longer part of the frame.
+	const SimTimings &timings = m_debugResults.m_timings;
+	int waitingToDecode = 0;
+	{
+		AUTO_LOCK(m_loadQueueMutex);
+		waitingToDecode = m_loadQueue.Count() - m_loadQueueHead;
+	}
+	engine->Con_NPrintf(0, "hrtf: Steam Audio, voices %d/%d, cached sounds %d (%.1f MB, %d waiting to decode), scripted wave levels %d, scene triangles %d, "
+		"dynamic objects %d, sim thread %.2f ms (dynamic %.2f, occlusion %.2f, paths %.2f, reverb %.2f), %.0f runs/s",
+		liveVoices, kMaxVoices, m_cache.Count(), m_cachedBytes.load() / (1024.0 * 1024.0), waitingToDecode, m_soundLevels.Count(),
+		m_sceneTriangles, m_debugResults.m_dynamicInstances, timings.m_totalMs, timings.m_dynamicMs, timings.m_directMs,
+		timings.m_pathingMs, timings.m_reverbMs, timings.m_runsPerSecond);
+	// Not counting this overlay itself.
+	const GameTimings &game = m_gameTimings;
+	engine->Con_NPrintf(3, "hrtf game thread: %.2f ms a frame (GetActiveSounds %.2f, SetVolumeByGuid %.2f, new voices %.2f, dynamic geometry %.2f, "
+		"path reach %.2f); %.0f volume sets/s, %.0f voices started/s",
+		game.m_pollMs, game.m_activeSoundsMs, game.m_setVolumeMs, game.m_newVoicesMs, game.m_gatherMs, game.m_pathReachMs,
+		game.m_setVolumes, game.m_newVoices);
+
+	static const char *const s_pszBakeStates[] = { "not baked", "baking", "baked", "bake stopped" };
+	float bakeProgress = 0.0f;
+	const NeoSpatial::BakeState bakeState = m_pSpatializer->GetBakeState(&bakeProgress);
+	engine->Con_NPrintf(1, "hrtf probes: %d in %d batches, %s %.0f%%", static_cast<int>(m_probes.centres.size()),
+		m_probes.NumBatches(), s_pszBakeStates[static_cast<int>(bakeState)], bakeProgress * 100.0f);
+	const NeoSpatial::ReverbParams &reverb = m_debugResults.m_reverb;
+	if (reverb.valid)
+	{
+		engine->Con_NPrintf(2, "hrtf reverb: RT60 %.2f / %.2f / %.2f s (low / mid / high), level %.2f, room %.1f m, echo %.2f",
+			reverb.reverbTimes[0], reverb.reverbTimes[1], reverb.reverbTimes[2], cl_neo_hrtf_reverb.GetFloat(), m_roomMetres,
+			m_roomReverbGain);
+	}
+	else
+	{
+		engine->Con_NPrintf(2, "hrtf reverb: none (probes not baked, or not near one yet)");
+	}
 }
 
 void CNeoHrtfSystem::Render(float *pOutInterleaved, int frameCount)
@@ -638,20 +2233,79 @@ void CNeoHrtfSystem::RenderBlock()
 {
 	V_memset(m_carry, 0, sizeof(m_carry));
 	{
-		AUTO_LOCK(m_mutex);
-		m_pSpatializer->SetListener(m_listener);
-		for (Voice &voice : m_voices)
+		// Uncontended except while the game thread fences (FenceAudio).
+		AUTO_LOCK(m_renderBlockMutex);
+
+		// The newest frame and results, unless their writer is copying one in right now: then the
+		// last ones serve another block rather than the audio thread waiting.
+		if (m_renderMutex.TryLock())
 		{
-			if (!voice.m_bInUse || voice.m_bFinished)
+			if (m_renderShared.m_sequence != m_render.m_sequence)
+			{
+				m_render = m_renderShared;
+			}
+			m_renderMutex.Unlock();
+			m_renderAcquired = m_render.m_sequence;
+		}
+		if (m_simResultsMutex.TryLock())
+		{
+			if (m_simResultsShared.m_sequence != m_renderSim.m_sequence)
+			{
+				m_renderSim = m_simResultsShared;
+			}
+			m_simResultsMutex.Unlock();
+		}
+
+		m_pSpatializer->SetListener(m_render.m_listener);
+		for (int v = 0; v < kMaxVoices; ++v)
+		{
+			const RenderVoice &voice = m_render.m_voices[v];
+			if (!voice.m_pSound)
 			{
 				continue;
 			}
-			voice.m_bFinished = !ReadVoiceSamples(voice);
+			if (m_renderGenerations[v] != voice.m_generation)
+			{
+				// A new sound in the slot.
+				m_renderGenerations[v] = voice.m_generation;
+				m_cursors[v] = 0.0;
+				m_finished[v] = false;
+			}
+			// Not rendered until the simulation has run for it, so a sound behind a wall never
+			// starts with one unoccluded block.
+			const SimVoiceResult &sim = m_renderSim.m_voices[v];
+			if (m_finished[v] || sim.m_generation != voice.m_generation)
+			{
+				continue;
+			}
+
+			// Out of sight the paths are most of what is heard, so the sound waits for them
+			// rather than losing its start.
+			if (sim.m_bPathsHeld && sim.m_path.occlusion <= 0.0f)
+			{
+				continue;
+			}
+			m_finished[v] = !ReadVoiceSamples(v, voice);
+			if (m_finished[v])
+			{
+				m_finishedGeneration[v].store(voice.m_generation, std::memory_order_release);
+			}
 
 			// Process even inaudible voices: skipping would freeze the backend's filter
 			// history and click when the voice becomes audible again.
-			m_pSpatializer->Process(voice.m_hSpatial, voice.m_params.m_origin, m_scratchMono, m_scratchLeft, m_scratchRight);
+			// The voice's own gain is also its reverb send, so a far sound excites the room as
+			// faintly as it is heard directly.
 			const float gain = voice.m_params.m_gain;
+			NeoSpatial::VoiceRender render;
+			render.direct = sim.m_path;
+			render.paths = sim.m_paths;
+			render.reverbSend = gain;
+			// Paths carry the distance law along their own length, so the straight-line part of
+			// gain (applied to the whole output below) is divided back out of them.
+			const float distanceGain = voice.m_params.m_distanceGain;
+			render.pathGain = (distanceGain > 0.0f) ? kHrtfPathLevel / distanceGain : 0.0f;
+			m_pSpatializer->Process(voice.m_hSpatial, voice.m_params.m_origin, render, m_scratchMono, m_scratchLeft,
+									m_scratchRight);
 			if (gain <= 0.0f)
 			{
 				continue;
@@ -662,6 +2316,24 @@ void CNeoHrtfSystem::RenderBlock()
 				m_carry[f * kHrtfOutputChannels + 1] += gain * m_scratchRight[f];
 			}
 		}
+
+		// Every block, voices or not, so tails ring out after the sounds that started them.
+		const NeoSpatial::ReverbParams &reverb = m_renderSim.m_reverb;
+		// The level is ramped across the block: the game thread moves it in frame-sized steps.
+		const float startGain = m_lastBlockReverbGain;
+		const float endGain = m_render.m_reverbGain;
+		m_lastBlockReverbGain = endGain;
+		m_pSpatializer->ProcessReverb(reverb, m_render.m_bReverbDecorrelate, m_scratchLeft, m_scratchRight);
+		if (reverb.valid && (startGain > 0.0f || endGain > 0.0f))
+		{
+			const float gainStep = (endGain - startGain) / kFrameSize;
+			for (int f = 0; f < kFrameSize; ++f)
+			{
+				const float reverbGain = startGain + gainStep * (f + 1);
+				m_carry[f * kHrtfOutputChannels] += reverbGain * m_scratchLeft[f];
+				m_carry[f * kHrtfOutputChannels + 1] += reverbGain * m_scratchRight[f];
+			}
+		}
 	}
 
 	for (float &sample : m_carry)
@@ -670,14 +2342,15 @@ void CNeoHrtfSystem::RenderBlock()
 	}
 }
 
-bool CNeoHrtfSystem::ReadVoiceSamples(Voice &voice)
+bool CNeoHrtfSystem::ReadVoiceSamples(int slot, const RenderVoice &voice)
 {
 	const CachedSound &sound = *voice.m_pSound;
-	const float *pSamples = sound.m_samples.Base();
+	const int16 *pSamples = sound.m_samples.Base();
 	const int count = sound.m_samples.Count();
 	const int loopStart = sound.m_loopStart;
-	const double rate = voice.m_params.m_rate;
-	double cursor = voice.m_cursor;
+	// Sounds are stored at their own rate, so this also resamples them to the output's.
+	const double rate = static_cast<double>(voice.m_params.m_rate) * sound.m_sampleRate / kSampleRate;
+	double cursor = m_cursors[slot];
 
 	for (int f = 0; f < kFrameSize; ++f)
 	{
@@ -686,13 +2359,13 @@ bool CNeoHrtfSystem::ReadVoiceSamples(Voice &voice)
 			if (loopStart < 0)
 			{
 				V_memset(m_scratchMono + f, 0, (kFrameSize - f) * sizeof(float));
-				voice.m_cursor = cursor;
+				m_cursors[slot] = cursor;
 				return false;
 			}
 			cursor = loopStart + fmod(cursor - loopStart, static_cast<double>(count - loopStart));
 		}
 
-		// Linear interpolation is enough for engine pitch shifts, which stay within an octave or so.
+		// Linear interpolation, as the engine's own mixer resamples and pitch shifts.
 		const int index = static_cast<int>(cursor);
 		int nextIndex = index + 1;
 		if (nextIndex >= count)
@@ -700,9 +2373,10 @@ bool CNeoHrtfSystem::ReadVoiceSamples(Voice &voice)
 			nextIndex = (loopStart >= 0) ? loopStart : index;
 		}
 		const float frac = static_cast<float>(cursor - index);
-		m_scratchMono[f] = pSamples[index] + (pSamples[nextIndex] - pSamples[index]) * frac;
+		const float sample = pSamples[index] + (pSamples[nextIndex] - pSamples[index]) * frac;
+		m_scratchMono[f] = sample * kHrtfInt16ToFloat;
 		cursor += rate;
 	}
-	voice.m_cursor = cursor;
+	m_cursors[slot] = cursor;
 	return true;
 }

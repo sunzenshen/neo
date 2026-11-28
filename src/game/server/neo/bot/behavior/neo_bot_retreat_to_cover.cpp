@@ -9,6 +9,7 @@
 #include "bot/behavior/neo_bot_retreat_to_cover.h"
 #include "bot/neo_bot_path_compute.h"
 #include "bot/neo_bot_path_reservation.h"
+#include "NextBotUtil.h"
 
 extern ConVar neo_bot_path_lookahead_range;
 ConVar neo_bot_retreat_to_cover_range( "neo_bot_retreat_to_cover_range", "1000", FCVAR_CHEAT );
